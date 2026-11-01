@@ -14383,14 +14383,26 @@ static const char *WORLD_FS =
   // Negative metalness flags the viewmodel sleeves. The pattern is anchored to
   // the weapon's frame, so it rides with the arms instead of crawling over them.
   "  if (metal < -0.5) {\n"
-  "    bool isgl = metal < -1.5;\n"
+  "    float mf = metal;\n"
   "    metal = 0.0;\n"
   "    vec3 cq = vWorld - uMdlO;\n"
   "    vec2 cp = vec2(dot(cq, uMdlX) + cq.y * 0.8, dot(cq, uMdlZ)) * 24.0;\n"
   "    float knit = vnoise2(cp * 30.0);\n"
-  "    if (isgl) {\n"                    // stitched panels over a fine knit
+  "    if (mf < -3.5) {\n"               // cerakote: fine grain, edges worn bright
+  "      float gr = vnoise2(cp * 42.0) * 0.6 + vnoise2(cp * 7.0) * 0.4;\n"
+  "      float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
+  "      alb *= 0.88 + 0.24 * gr;\n"
+  "      alb = mix(alb, alb * 1.7 + vec3(0.016), ew * (0.45 + 0.55 * knit));\n"
+  "      rough = clamp(rough + (gr - 0.5) * 0.22 - 0.16 * ew, 0.08, 1.0);\n"
+  "    } else if (mf < -2.5) {\n"        // lit inlay: ignores the scene's light
+  "      oCol = vec4(tonemap(alb * vec3(1.0, 0.86, 0.72) * 1.05 / EXPOSURE), 1.0);\n"
+  "      return;\n"
+  "    } else if (mf < -1.5) {\n"        // glove: open mesh with solid panels
+  "      vec2 mg = cp * 11.0; mg.x += floor(mg.y) * 0.5;\n"
+  "      vec2 mc = abs(fract(mg) - 0.5);\n"
+  "      float hole = 1.0 - smoothstep(0.24, 0.34, length(mc));\n"
   "      float panel = smoothstep(0.47, 0.53, vnoise2(cp * 1.3 + 5.0));\n"
-  "      alb *= mix(1.0, 0.56, panel) * (0.82 + 0.36 * knit);\n"
+  "      alb *= mix(1.0 - 0.62 * hole, 0.42, panel) * (0.84 + 0.32 * knit);\n"
   "    } else {\n"                       // sleeve: plain ripstop
   "      vec2 rg = abs(fract(cp * 1.5) - 0.5);\n"
   "      alb *= (0.86 + 0.28 * knit) * (1.0 - 0.14 * step(0.47, max(rg.x, rg.y)));\n"
@@ -22603,7 +22615,7 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
     if (P[i].group != group) continue;
     // Only bare steel is metal. Painted parts stay dielectric, or the shader's
     // sky reflection turns the whole weapon to chrome.
-    mat_set(P[i].rough, P[i].flag == 2 ? -2.0f : P[i].flag == 1 ? -1.0f
+    mat_set(P[i].rough, P[i].flag ? -(float)P[i].flag
                        : P[i].metal >= 0.8f ? P[i].metal : 0.0f);
     v3 c = {{P[i].r, P[i].g, P[i].b}};
     for (int k = P[i].start; k < P[i].start + P[i].count; k++) {

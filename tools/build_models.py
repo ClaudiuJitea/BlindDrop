@@ -8,9 +8,9 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(sys.argv[sys.argv.index('-P') + 1])), '..', 'code', 'models.h')
-TAN=(.63,.53,.39); GRAPH=(.36,.37,.39); DARK=(.30,.305,.32); BLACK=(.20,.203,.21)
-STEEL=(.46,.46,.47); AMBER=(1.02,.62,.13); ORANGE=(1.0,.52,.08); SLATE=(.20,.225,.285); PAD=(.185,.19,.205); HOLO=(.19,.195,.205); SAND=(.60,.50,.37)
-SLEEVE=(.165,.18,.215); HARD=(.19,.215,.275)
+TAN=(.63,.53,.39); GRAPH=(.185,.188,.197); DARK=(.30,.305,.32); BLACK=(.20,.203,.21)
+STEEL=(.46,.46,.47); AMBER=(1.0,.60,.10); DECAL=(.95,.78,.16); ORANGE=(1.0,.52,.08); SLATE=(.145,.17,.24); PAD=(.115,.118,.128); HOLO=(.19,.195,.205); SAND=(.60,.50,.37)
+SLEEVE=(.165,.18,.215); HARD=(.235,.285,.375)
 
 def clear():
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -155,6 +155,10 @@ def rifle():
         cut(hg, box(( .0255,.0200,.200+i*.041), (.0080,.0038,.0145)))
         cut(hg, box((0,-.0060,.200+i*.041), (.0038,.0080,.0145)))
     finish(hg, TAN, .60, bevel=.0012, seg=2)
+    for s_ in (-1, 1):
+        finish(box((s_*.0262,.0200,.3660), (.0024,.0068,.0280)), BLACK, .5, 0, .0005)
+        for i in range(6):
+            finish(box((s_*.0288,.0200,.3400+i*.0104), (.0018,.0074,.0029)), BLACK, .5, 0, .0004, 1)
     finish(lathe([(.158,.0250),(.170,.0268),(.176,.0268),(.179,.0240)], 0, .0200, 24), GRAPH, .5, 0, .0006)   # barrel nut
     # --- short exposed barrel and birdcage
     finish(lathe([(.396,.0085),(.418,.0080)], 0, .0220, 20), BLACK, .42, 0, 0)
@@ -200,6 +204,8 @@ def rifle():
         cut(st, box((-.0185,-.0030,-.150-.019*i+OFS), (.0040,.0050,.0072)))
         cut(st, box(( .0185,-.0030,-.150-.019*i+OFS), (.0040,.0050,.0072)))
     finish(st, TAN, .62, 0, .0024, 3, group=2)
+    for s_ in (-1, 1):
+        finish(lathe([(-.178,.0078),(-.172,.0120),(-.076,.0120),(-.068,.0084)], s_*.0198, .0300, 18), TAN, .62, 0, .0010, 2, group=2)
     finish(box((0,-.0020,-.2455+OFS), (.0178,.0500,.0065)), BLACK, .9, 0, .0024, 2, group=2)
     finish(box((0,-.0090,-.132+OFS), (.0080,.0050,.012)), DARK, .5, 0, .0008, group=2)
     # --- holographic sight: bulky hood, rear electronics, side controls
@@ -207,13 +213,12 @@ def rifle():
     hous = prof_front([(-.0300,.0478),(.0300,.0478),(.0345,.0525),(.0345,.0890),(.0285,.0965),(-.0285,.0965),(-.0345,.0890),(-.0345,.0525)], hz-.014, hz+.046, 'holo')
     cut(hous, box((0,.0640,hz+.016), (.0250,.0170,.06)))
     finish(hous, HOLO, .58, 0, .0024, 3)
-    finish(box((0,.0498,hz-.032), (.0300,.0030,.0200)), HOLO, .55, 0, .0016)                # rear electronics
-    side = prof([(hz-.054,.0478),(hz-.012,.0478),(hz-.012,.0790),(hz-.020,.0830),(hz-.054,.0720)], -.0460, -.0318, 'side')
-    finish(side, HOLO, .55, 0, .0020, 3)
-    finish(box((-.0472,.0620,hz-.032), (.0012,.0118,.0156)), BLACK, .6, 0, .0007)           # control face
-    finish(box((-.0490,.0680,hz-.024), (.0008,.0030,.0052)), AMBER, .35, 0, .0002, 1)
-    for k, (yy, zz) in enumerate(((.0586,hz-.024),(.0586,hz-.040),(.0680,hz-.040))):
-        finish(pin(-.0494,-.0474,yy,zz,.0032,14), DARK if k else STEEL, .45, 0, .0003)
+    finish(box((0,.0498,hz-.032), (.0300,.0030,.0200)), HOLO, .55, 0, .0016)                # rear deck
+    for s_ in (-1, 1):                                                                      # rear control blocks
+        finish(prof([(hz-.052,.0478),(hz-.012,.0478),(hz-.012,.0700),(hz-.022,.0730),(hz-.052,.0640)], s_*.0225-.0095, s_*.0225+.0095), HOLO, .55, 0, .0016, 2)
+        for yy in (.0520,.0585):
+            finish(prof([(hz-.0536,yy+.0024),(hz-.0536,yy-.0024),(hz-.0510,yy-.0024),(hz-.0510,yy+.0024)], s_*.0225-.0048, s_*.0225+.0048), PAD, .4, 0, .0003)
+    finish(box((-.0348,.0660,hz+.016), (.0006,.0052,.0100)), DECAL, .45, 0, .0002, 1)       # the yellow decal
     finish(box((.0360,.0640,hz+.006), (.0024,.0100,.0200)), BLACK, .6, 0, .0010)            # right panel
     finish(prof([(hz-.060,.0460),(hz+.058,.0460),(hz+.058,.0486),(hz-.060,.0486)], -.0165, .0165), BLACK, .55, 0, .0008)   # mount
     finish(pin(-.0262,-.0150,.0462,hz+.020,.0058), STEEL, .42, .8, .0005)                   # cross bolt
@@ -349,7 +354,7 @@ def bracer():
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         return finish(from_bm(bm, 'arm'), col, rough, 0, 0, flag=flag)
     arm([(-.030,.0345,.0420),(.040,.0360,.0440),(.110,.0378,.0470),(.190,.0405,.0505),(.290,.0435,.0535),(.420,.0450,.0550)], SLEEVE, .85, flag=1)
-    def plate(x0, x1, hw, y, col, rough=.5, th=.0030, b=.0012):
+    def plate(x0, x1, hw, y, col, rough=.5, th=.0030, b=.0012, flag=0):
         # a fitted panel: follows the arm's curve across, flat along it
         n = 10; pts = []
         ry, rz = y, y*1.16
@@ -363,19 +368,22 @@ def bracer():
         for i in range(len(pts)):
             j = (i+1) % len(pts); bm.faces.new((A[j], A[i], B[i], B[j]))
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        finish(from_bm(bm, 'plate'), col, rough, 0, b, 2)
+        finish(from_bm(bm, 'plate'), col, rough, 0, b, 2, flag=flag)
     plate(.060,.128,.86,.0392,HARD)                     # screen housing
     plate(.136,.206,.88,.0414,HARD)                     # middle plate
     plate(.214,.310,.90,.0446,HARD)                     # rear plate
     plate(.146,.196,.54,.0442,SAND,.56,.0024,.0008)     # tan inset
-    plate(.226,.298,.13,.0476,ORANGE,.5,.0018,.0005)    # accent stripe
+    plate(.226,.298,.13,.0476,ORANGE,.5,.0018,.0005,3)  # glowing inlay
     finish(box((.094,.0418,0), (.0165,.0030,.0165)), BLACK, .45, 0, .0008)
-    finish(box((.094,.0446,0), (.0118,.0012,.0118)), AMBER, .30, 0, .0004)
+    finish(box((.094,.0446,0), (.0118,.0012,.0118)), AMBER, .30, 0, .0004, flag=3)
     for x in (.132,.210):
         arm([(x-.0035,.0395+(x-.132)*.05,.0482+(x-.132)*.055),(x+.0035,.0395+(x-.132)*.05,.0482+(x-.132)*.055)], DARK, .8)
 
 store = {}
-rifle(); emit(store, 'RIFLE')
+rifle()
+for o in bpy.context.collection.objects:
+    if 'col' in o and o['flag'] == 0 and o['metal'] < .8: o['flag'] = 4
+emit(store, 'RIFLE')
 hand_r(); emit(store, 'HAND_R')
 hand_l(); emit(store, 'HAND_L')
 bracer(); emit(store, 'BRACER')
