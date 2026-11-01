@@ -101,7 +101,10 @@ done
 # across, so a trouser and a boot cuff that used to pass through each other now
 # graze instead — a crossing became a near-parallel pair, which is the trade
 # this whole pass is about and the direction it should go.
-WANT_NEAR="40 40 46 36"
+# +1 +1 +3 0 with the field kit (pack, plates, pouches, shoulder armour, night
+# vision): the boxes sit against the torso, helmet and arms by design. zfight is 0
+# at every tier, and the kit is skipped at the far tier.
+WANT_NEAR="41 41 49 36"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -313,7 +316,8 @@ WANT_NEAR="40 40 46 36"
 # grazes (pairs MOVED, not appeared), `near` did not move at any tier
 # (40 40 46 36), `zfight` is 0 at all four, every hard invariant is 0, and
 # every non-sliding pose is byte-identical (4 A/B screenshots, md5-equal).
-WANT_CROSS="76 76 73 47"
+# +18 +18 +11 0 with the field kit: same cause as the near change above.
+WANT_CROSS="94 94 84 47"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

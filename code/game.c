@@ -14217,8 +14217,8 @@ static const atm_t ATM[] = {
    {0.06f, 0.18f, 0.48f}, {0.40f, 0.35f, 0.28f}, {0.10f, 0.08f, 0.05f},
    0.36f, 1.05f, 7.0e-5f, 0.30f, 0.34f, 1.12f, 0.34f, 0.24f,
    {1.01f, 1.00f, 0.98f}, {0.000f, 0.002f, 0.006f}},
-  {"GOLDEN HOUR", {0.80f, 0.31f, 0.52f}, {3.55f, 2.42f, 1.32f}, {0.96f, 0.78f, 0.68f},
-   {0.10f, 0.20f, 0.46f}, {0.42f, 0.33f, 0.26f}, {0.95f, 0.46f, 0.18f},
+  {"GOLDEN HOUR", {0.80f, 0.31f, 0.52f}, {3.55f, 2.42f, 1.32f}, {1.34f, 1.12f, 0.84f},
+   {0.56f, 0.50f, 0.54f}, {0.42f, 0.33f, 0.26f}, {0.95f, 0.46f, 0.18f},
    0.36f, 1.35f, 8.0e-5f, 0.34f, 0.42f, 1.10f, 0.34f, 0.26f,
    {1.02f, 0.99f, 0.96f}, {0.006f, 0.003f, 0.006f}},
   {"EMBER DUSK",  {-0.72f, 0.24f, 0.66f}, {3.50f, 1.85f, 0.95f}, {0.82f, 0.50f, 0.46f},
@@ -14383,16 +14383,29 @@ static const char *WORLD_FS =
   // Negative metalness flags the viewmodel sleeves. The pattern is anchored to
   // the weapon's frame, so it rides with the arms instead of crawling over them.
   "  if (metal < -0.5) {\n"
+  "    bool isgl = metal < -1.5;\n"
   "    metal = 0.0;\n"
   "    vec3 cq = vWorld - uMdlO;\n"
   "    vec2 cp = vec2(dot(cq, uMdlX) + cq.y * 0.8, dot(cq, uMdlZ)) * 24.0;\n"
-  "    float c1 = vnoise2(cp + vnoise2(cp * 0.6) * 1.4);\n"
-  "    float c2 = vnoise2(cp * 0.55 + 17.0);\n"
-  "    vec3 cc = vec3(0.040, 0.046, 0.058);\n"
-  "    cc = mix(cc, vec3(0.190, 0.160, 0.115), smoothstep(0.46, 0.50, c2));\n"
-  "    cc = mix(cc, vec3(0.012, 0.014, 0.018), smoothstep(0.55, 0.59, c1));\n"
-  "    cc = mix(cc, vec3(0.095, 0.112, 0.140), smoothstep(0.42, 0.38, c1));\n"
-  "    alb = cc * clamp(dot(vCol, vec3(0.3333)) * 2.0, 0.0, 1.2);\n"
+  "    if (isgl) {\n"                    // quilted padding over a fine knit
+  "      vec2 gp = (cp + vec2(cq.y * 14.0)) * 1.9;\n"
+  "      float qd = abs(fract(gp.x) - 0.5) + abs(fract(gp.y) - 0.5);\n"
+  "      float seam = smoothstep(0.44, 0.49, qd);\n"
+  "      float knit = vnoise2(cp * 26.0);\n"
+  "      float panel = smoothstep(0.50, 0.56, vnoise2(cp * 1.1 + 5.0));\n"
+  "      vec3 gc = mix(vec3(0.016, 0.024, 0.052), vec3(0.052, 0.058, 0.074), panel);\n"
+  "      alb = gc * (1.0 - 0.46 * seam) * (0.80 + 0.40 * knit)\n"
+  "          * clamp(dot(vCol, vec3(0.3333)) * 2.4, 0.5, 1.3);\n"
+  "    } else {\n"                       // tactical sleeve
+  "      float c1 = vnoise2(cp + vnoise2(cp * 0.6) * 1.4);\n"
+  "      float c2 = vnoise2(cp * 0.55 + 17.0);\n"
+  "      vec3 cc = vec3(0.022, 0.030, 0.056);\n"
+  "      cc = mix(cc, vec3(0.056, 0.066, 0.094), smoothstep(0.46, 0.50, c2));\n"
+  "      cc = mix(cc, vec3(0.010, 0.014, 0.026), smoothstep(0.55, 0.59, c1));\n"
+  "      cc = mix(cc, vec3(0.090, 0.102, 0.130), smoothstep(0.42, 0.38, c1));\n"
+  "      alb = cc * (0.84 + 0.32 * vnoise2(cp * 19.0))\n"
+  "          * clamp(dot(vCol, vec3(0.3333)) * 2.0, 0.0, 1.2);\n"
+  "    }\n"
   "  }\n"
   // --- WEAPON MICRO-STRUCTURE, IN THE WEAPON'S OWN FRAME --------------------
   // A finish is what separates steel from a moulding, and there was none of it
@@ -22587,6 +22600,8 @@ static float g_gun_sight_r;   // its smaller half-extent (the tighter constraint
 // blade behind it. The AR's own bow is unchanged and only its blade moved.
 #define SRTRIG_Z 0.0180f
 #define ARTRIG_Z 0.0400f
+// First-person build of the weapon: the extra parts only ever seen at arm's length.
+static int g_gun_hires;
 static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
                     float trig01, float bolt01) {
   float sight_y = gun_sight_y(cur);
@@ -22646,6 +22661,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
   // keeping the thing the borrowed one was for: ONE VALUE STEP lighter than the
   // magwell it hangs out of, so a reload has a silhouette, in the furniture's
   // own cool family rather than the receiver's warm one.
+  if (g_gun_hires && cur == WPN_AR) upper = (v3){{0.610f, 0.515f, 0.385f}};  // tan upper
   v3 mag   = {{0.130f, 0.135f, 0.145f}};  // magazine body: polymer, one step up
   v3 chas  = {{0.655f, 0.545f, 0.395f}};  // SR chassis polymer: the AWM's
                                           // olive-drab — the one color that
@@ -23144,6 +23160,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // the new height: bottoms buried 1 mm into the rail (whose teeth no
     // longer reach this station), tops still 1.5 mm ABOVE the window's inner
     // lower edge in open air, outer faces 1.07 mm inside the frame's wall.
+    if (!g_gun_hires) {
     GBOX(0, 0.0424f, 0.1834f, 0.0136f, 0.0060f, 0.0100f, black);  // rail clamp
     GBOX( 0.0148f, 0.04635f, 0.1834f, 0.0028f, 0.00665f, 0.0050f, black);  // R post
     GBOX(-0.0148f, 0.04635f, 0.1834f, 0.0028f, 0.00665f, 0.0050f, black);  // L post
@@ -23174,8 +23191,44 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     fig_tube(GUNP(0, sight_y, AR_APERTURE_Z - 0.0017f),
              GUNP(0, sight_y, AR_APERTURE_Z + 0.0017f),
              0.0121f * gg, 0.02027f * gg, 0.0105f * gg, 0.01867f * gg, 4, steel, gy);
+    }
     g_gun_sight_p = GUNP(0, sight_y, gun_sight_z(cur));   // one copy; see figm weld
-    g_gun_sight_r = 0.0105f;      // the window's inner HALF-HEIGHT, the tighter one
+    g_gun_sight_r = g_gun_hires ? 0.0120f : 0.0105f;  // the window's inner HALF-HEIGHT
+    if (g_gun_hires) {
+      // The first-person rifle. Sight line y = VM_SIGHT_AR runs through the middle
+      // of the holographic window, so aiming down sights stays on the same axis.
+      v3 dk = {{0.105f, 0.110f, 0.122f}}, gm = {{0.230f, 0.240f, 0.258f}};
+      v3 ret = {{3.200f, 0.420f, 0.220f}};
+      const float hz = 0.150f;
+      mat_set(0.40f, 0.0f);
+      GBOX(0, 0.0452f, hz, 0.0128f, 0.0038f, 0.0380f, dk);            // rail mount
+      GBOX(0, 0.0502f, hz + 0.004f, 0.0232f, 0.0034f, 0.0340f, gm);   // deck
+      GBOX( 0.0262f, 0.0640f, hz + 0.012f, 0.0048f, 0.0175f, 0.0215f, gm);  // walls
+      GBOX(-0.0262f, 0.0640f, hz + 0.012f, 0.0048f, 0.0175f, 0.0215f, gm);
+      GBOX(0, 0.0830f, hz + 0.012f, 0.0312f, 0.0042f, 0.0232f, gm);   // hood
+      GBOX(0, 0.0545f, hz - 0.034f, 0.0210f, 0.0066f, 0.0120f, dk);   // battery block
+      GBOX(-0.0300f, 0.0540f, hz - 0.016f, 0.0048f, 0.0066f, 0.0150f, dk);  // side box
+      GBOX(-0.0352f, 0.0560f, hz - 0.022f, 0.0012f, 0.0022f, 0.0030f, acc); // buttons
+      GBOX(-0.0352f, 0.0520f, hz - 0.022f, 0.0012f, 0.0022f, 0.0030f, steel);
+      GBOX( 0.0300f, 0.0480f, hz + 0.022f, 0.0060f, 0.0034f, 0.0090f, steel); // clamp lever
+      GBOX( 0.0360f, 0.0480f, hz + 0.022f, 0.0032f, 0.0060f, 0.0170f, dk);
+      mat_set(0.22f, 0.0f);
+      GBOX(0, sight_y, hz + 0.030f, 0.00075f, 0.00075f, 0.0004f, ret);  // the dot
+      mat_set(MAT_PARK_R, MAT_PARK_M);
+      for (int t = 0; t < 10; t++)       // the rail runs on down the handguard
+        GBOX(0, 0.0414f, 0.2080f + (float)t * 0.0132f, 0.0090f, 0.0024f, 0.0034f, black);
+      for (int t = 0; t < 4; t++) {      // M-LOK slots
+        float mz = 0.2230f + (float)t * 0.0290f;
+        GBOX( 0.0186f, 0.0190f, mz, 0.0014f, 0.0024f, 0.0100f, dk);
+        GBOX(-0.0186f, 0.0190f, mz, 0.0014f, 0.0024f, 0.0100f, dk);
+      }
+      GBOX(-0.0164f, 0.0235f, 0.1020f, 0.0014f, 0.0078f, 0.0340f, gm);  // dust cover
+      GBOX(-0.0160f, -0.0060f, 0.0180f, 0.0018f, 0.0032f, 0.0032f, steel);  // pins
+      GBOX(-0.0160f, -0.0060f, 0.1000f, 0.0018f, 0.0032f, 0.0032f, steel);
+      GBOX(-0.0160f, 0.0040f, 0.0820f, 0.0018f, 0.0042f, 0.0100f, acc);     // selector
+      GBOX(0, 0.0342f, -0.0280f, 0.0126f, 0.0030f, 0.0068f, dk);        // charging handle
+      GBOX(-0.0134f, 0.0342f, -0.0280f, 0.0034f, 0.0034f, 0.0052f, acc);
+    }
     mat_set(MAT_POLY_R, 0.0f);
   } else {
     // ---- bolt-action precision rifle ----
@@ -24828,6 +24881,51 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     }
     #undef HP
   }
+  // Field kit. Hard-edged plates over the soft body are what make the outline
+  // read as a soldier in armour rather than a mannequin in a colour.
+  if (g_fig_k >= 8 && !fig_diss_cut(P.chest)) {
+    v3 kfw = v3_norm(v3_cross(spine, prt));
+    v3 pack = v3_scale(kt.gear, 0.70f), plate = v3_scale(kt.gear, 0.88f);
+    v3 dk2 = v3_scale(kt.web, 0.90f);
+    #define KP(a, b, c) v3_add(P.chest, v3_add(v3_scale(prt, a), \
+                        v3_add(v3_scale(spine, b), v3_scale(kfw, c))))
+    #define KBOX(a, b, c, hx, hy, hz, col) scene_box(KP(a, b, c), v3_scale(prt, hx), \
+                        v3_scale(spine, hy), v3_scale(kfw, hz), col)
+    mat_set(MAT_CLOTH_R, 0.0f);
+    KBOX(0, -0.030f, -0.150f, 0.128f, 0.175f, 0.062f, pack);      // pack
+    KBOX(0, 0.134f, -0.163f, 0.114f, 0.034f, 0.064f, dk2);        // bedroll
+    KBOX(-0.150f, -0.070f, -0.145f, 0.024f, 0.095f, 0.046f, plate);  // side pouches
+    KBOX( 0.150f, -0.070f, -0.145f, 0.024f, 0.095f, 0.046f, plate);
+    KBOX(0, 0.010f, 0.128f, 0.104f, 0.124f, 0.016f, plate);       // front plate
+    KBOX(-0.070f, -0.165f, 0.122f, 0.032f, 0.052f, 0.032f, dk2);  // mag pouches
+    KBOX( 0.000f, -0.161f, 0.126f, 0.031f, 0.056f, 0.036f, dk2);
+    KBOX( 0.070f, -0.168f, 0.119f, 0.030f, 0.049f, 0.029f, dk2);
+    #undef KBOX
+    #undef KP
+    for (int i = 0; i < 2; i++) {                                 // shoulder armour
+      float sd = i ? 1.0f : -1.0f;
+      v3 c = v3_add(P.sho[i], v3_add(v3_scale(spine, 0.050f), v3_scale(prt, sd * 0.030f)));
+      v3 ou = v3_norm(v3_add(v3_scale(spine, 0.82f), v3_scale(prt, sd * 0.58f)));
+      v3 ac = v3_norm(v3_cross(ou, kfw));
+      scene_box(c, v3_scale(ac, 0.074f), v3_scale(ou, 0.022f), v3_scale(kfw, 0.082f), kt.helm);
+    }
+    v3 hd = v3_norm(P.head_f), hrr = v3_norm(P.right);
+    v3 hup = v3_norm(v3_cross(hrr, hd));
+    if (v3_dot(hup, spine) < 0.0f) hup = v3_scale(hup, -1.0f);
+    #define NP(a, b, c) v3_add(P.head, v3_add(v3_scale(hrr, a), \
+                        v3_add(v3_scale(hup, b), v3_scale(hd, c))))
+    scene_box(NP(0, 0.062f, 0.122f), v3_scale(hrr, 0.028f), v3_scale(hup, 0.022f),
+              v3_scale(hd, 0.020f), dk2);                         // night vision mount
+    scene_box(NP(-0.024f, 0.034f, 0.146f), v3_scale(hrr, 0.017f), v3_scale(hup, 0.017f),
+              v3_scale(hd, 0.030f), dk2);
+    scene_box(NP( 0.024f, 0.034f, 0.146f), v3_scale(hrr, 0.017f), v3_scale(hup, 0.017f),
+              v3_scale(hd, 0.030f), dk2);
+    scene_box(NP(-0.024f, 0.034f, 0.178f), v3_scale(hrr, 0.011f), v3_scale(hup, 0.011f),
+              v3_scale(hd, 0.003f), kt.gm2);                      // the lit lenses
+    scene_box(NP( 0.024f, 0.034f, 0.178f), v3_scale(hrr, 0.011f), v3_scale(hup, 0.011f),
+              v3_scale(hd, 0.003f), kt.gm2);
+    #undef NP
+  }
   // Legs: the chain starts INSIDE the pelvis, so the thigh's end cap can never
   // peek out of the hip, and the knee bevel lands as a faceted pad.
   // Still inline rather than a fig_legs builder — see the FIG_INLINE note above.
@@ -26057,7 +26155,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // view; filmed at 78 and 88 percent with the AR's numbers, the whole receiver
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
-  float px = 0.158f * hip + VLERP(bob_x) + VLERP(lag_x) - rl * 0.072f
+  float px = 0.118f * hip + VLERP(bob_x) + VLERP(lag_x) - rl * 0.072f
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
            + (lean_d * 0.16f - lean * 0.028f) * hip;
   // DOWN a little and NOT toward the eye. The comment used to call this a "dip
@@ -26066,7 +26164,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // one part of the gun a magazine change is about — off the bottom of the
   // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
   // below frame, so the old failure is not being re-created.
-  float py = -0.120f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
+  float py = -0.078f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
            // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
            // which is the identical failure the reload dip above was already fixed
            // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
@@ -26100,7 +26198,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // own 9.1 mm peak on the same axis, so recoil still dominates either way.
   float tkick = cur == WPN_SR ? hip : 0.45f + 0.55f * hip;
   float pz = 0.30f - 0.0015f * trig * tkick
-           - 0.022f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
+           - 0.092f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
            + VLERP(lag_z) - sw * 0.03f - rl * 0.020f
            - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f;
 
@@ -26120,7 +26218,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                  + rl * 0.055f - rch * 0.045f
                  - rk * 0.075f + sw * 0.42f) + 0.045f * hip);              // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (-0.075f + lean_d * 0.22f) * hip);                     // yaw
+                 + (-0.190f + lean_d * 0.22f) * hip);                     // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
   // (the weapon sits right of centre at the hip, so the camera is on its left);
@@ -26155,8 +26253,10 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // once; at arm's length it is the difference between a machined receiver and a
   // slab. The one gun_build stays the one gun_build — this changes how its boxes
   // are TESSELLATED, not what it builds.
-  g_cham = 0.0007f;
+  g_cham = 0.0013f;
+  g_gun_hires = 1;
   g_vm_muzzle = gun_build(cur, org, gx, gy, gz, mdrop, trig, ga_.bolt);
+  g_gun_hires = 0;
   g_cham = 0.0f;
   // The tracer re-anchor publish does NOT happen here: vm_build is also the
   // engine of the harness probes (vmcheck/vmsight/vmhand), which build forced
@@ -26330,7 +26430,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       g_vm_hdbg[h].off_mm = (v3_len(r) - hd[h].gr) * 1000.0f;
     }
     for (int h = 0; h < 2; h++) {
-      mat_set(MAT_GLOVE_R, 0.0f);
+      mat_set(MAT_GLOVE_R, -2.0f);   // padded glove, see the world shader
       v3 pd;
       // A hand that has left the grip for the bolt is not on the trigger, and
       // routing its index at a blade 60 mm away would stretch the digit across
