@@ -26133,7 +26133,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // view; filmed at 78 and 88 percent with the AR's numbers, the whole receiver
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
-  float px = 0.168f * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
+  float px = 0.178f * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
            + (lean_d * 0.16f - lean * 0.028f) * hip;
   // DOWN a little and NOT toward the eye. The comment used to call this a "dip
@@ -26142,7 +26142,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // one part of the gun a magazine change is about — off the bottom of the
   // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
   // below frame, so the old failure is not being re-created.
-  float py = -0.088f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
+  float py = -0.082f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
            // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
            // which is the identical failure the reload dip above was already fixed
            // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
@@ -26194,9 +26194,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
   rot2(&gz, &gy, -(VLERP(sway_p) + kick * (6.0f + 3.2f * hip)
                  + rl * 0.055f - rch * 0.045f
-                 - rk * 0.075f + sw * 0.42f) + 0.045f * hip);              // pitch
+                 - rk * 0.075f + sw * 0.42f) + 0.105f * hip);              // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (0.210f + lean_d * 0.22f) * hip);                     // yaw
+                 + (0.150f + lean_d * 0.22f) * hip);                     // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
   // (the weapon sits right of centre at the hip, so the camera is on its left);
@@ -26216,7 +26216,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // AR's 19: the AR's charging handle is already on the camera's side.
   float cyroll = cur == WPN_SR ? 0.86f : 0.34f;
   rot2(&gx, &gy, VLERP(roll) + rl * -0.46f + rch * cyroll - rk * 0.16f +
-                 (-0.150f - lean * 0.10f + lean_d * 0.30f) * hip);          // roll
+                 (0.030f - lean * 0.10f + lean_d * 0.30f) * hip);          // roll
   v3 org = v3_add(eye, v3_add(v3_scale(rgt, px),
            v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
 
@@ -26436,15 +26436,6 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       fig_hand(hd[h].wrist, hd[h].gc, hd[h].ga, hd[h].gr, hd[h].side, glove,
                style, style == 1 ? &g_gun_trig_p : NULL, &pd);
       g_scene_floats = hand_mark;   // the sculpted glove replaces the geometry
-      {
-        v3 hg = hd[h].ga;
-        v3 hw = v3_sub(hd[h].wrist, hd[h].gc);
-        v3 he = v3_norm(v3_sub(hw, v3_scale(hg, v3_dot(hw, hg))));
-        v3 hz = v3_cross(hg, he);
-        if (h == 0) model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, hd[h].gc, hg, he, hz);
-        else        model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0,
-                               v3_add(hd[h].gc, v3_scale(gy, -0.012f * ads)), hg, he, hz);
-      }
       g_vm_hdbg[h].palm_mm = g_fig_palm_mm;
       mat_set(MAT_CLOTH_R, 0.0f);
       // THE FOREARM'S DIRECTION IS DERIVED FROM THE PALM'S, and that is the
@@ -26568,22 +26559,30 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       // fig_forearm. `back` above is this view's contribution: the wrist's own
       // two rotations off the palm axis. NULL elbow, because a viewmodel arm
       // simply leaves the frame at its authored length.
-      // The sculpted forearm. Its direction comes from where the elbow really
-      // hangs in camera space, not from the wrist's own bend, so the arm rises from
-      // the bottom of the frame instead of lying across it.
-      {
-        v3 elbow = v3_add(eye, v3_add(v3_scale(rgt, h == 0 ? 0.34f : -0.22f),
-                   v3_add(v3_scale(upv, -0.62f), v3_scale(fwd, -0.02f))));
-        // ...blended with the line the wrist already leaves the hand on, so the
-        // forearm continues out of the glove instead of kinking at the cuff.
-        v3 hw2 = v3_sub(hd[h].wrist, hd[h].gc);
-        v3 he2 = v3_norm(v3_sub(hw2, v3_scale(hd[h].ga, v3_dot(hw2, hd[h].ga))));
-        v3 ax = v3_norm(v3_add(v3_scale(he2, 0.75f), v3_norm(v3_sub(elbow, hd[h].wrist))));
-        // The armour panels turn toward the eye, which is what a raised arm shows.
-        v3 te = v3_sub(eye, hd[h].wrist);
+    }
+    // Hands and arms are sculpted around the rifle, in its frame. Each follows the
+    // grip point the hold logic worked out, so reloads, the bolt and the sniper's
+    // different holds carry them along as one rigid piece.
+    {
+      #define VP(a, b, c) v3_add(org, v3_add(v3_scale(gx, a), \
+                          v3_add(v3_scale(gy, b), v3_scale(gz, c))))
+      #define VD(a, b, c) v3_add(v3_scale(gx, a), v3_add(v3_scale(gy, b), v3_scale(gz, c)))
+      v3 ro = v3_sub(hd[0].gc, VP(0.0f, -0.0500f, -0.0078f));
+      v3 lo = v3_sub(hd[1].gc, VP(0.0f,  0.0190f,  0.3050f));
+      model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
+      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
+      for (int h = 0; h < 2; h++) {
+        v3 w = h == 0 ? v3_add(VP(0.058f, -0.100f, -0.098f), ro)
+                      : v3_add(VP(-0.052f, -0.104f, 0.216f), lo);
+        v3 ax = v3_norm(h == 0 ? VD(0.40f, -0.62f, -0.68f) : VD(-0.48f, -0.80f, -0.34f));
+        v3 te = v3_sub(eye, w);                  // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
-        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, hd[h].wrist, ax, on, v3_cross(ax, on));
+        // Pulled up over the cuff: the gauntlet runs right to the hand.
+        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, v3_sub(w, v3_scale(ax, 0.060f)),
+                   ax, on, v3_cross(ax, on));
       }
+      #undef VP
+      #undef VD
     }
     mat_set(MAT_PARK_R, MAT_PARK_M);
     probe(NULL);

@@ -9,7 +9,7 @@ from mathutils.bvhtree import BVHTree
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(sys.argv[sys.argv.index('-P') + 1])), '..', 'code', 'models.h')
 TAN=(.63,.53,.39); GRAPH=(.36,.37,.39); DARK=(.30,.305,.32); BLACK=(.20,.203,.21)
-STEEL=(.46,.46,.47); AMBER=(1.25,.78,.18); ORANGE=(1.0,.52,.08); SLATE=(.215,.24,.295); PAD=(.31,.315,.335); SAND=(.60,.50,.37)
+STEEL=(.46,.46,.47); AMBER=(1.02,.62,.13); ORANGE=(1.0,.52,.08); SLATE=(.20,.225,.285); PAD=(.185,.19,.205); HOLO=(.19,.195,.205); SAND=(.60,.50,.37)
 SLEEVE=(.165,.18,.215); HARD=(.19,.215,.275)
 
 def clear():
@@ -131,17 +131,17 @@ def emit(store, tag):
 def rifle():
     clear()
     # --- lower receiver: tan, flared magwell, pocketed side
-    low = prof([(-.030,.012),(.150,.012),(.150,-.004),(.146,-.030),(.140,-.036),(.086,-.040),(.080,-.014),(.046,-.018),(.010,-.018),(-.012,-.012),(-.030,-.002)], -.0140, .0140, 'lower')
+    low = prof([(-.030,.012),(.150,.012),(.150,-.004),(.146,-.030),(.140,-.036),(.086,-.040),(.080,-.014),(.046,-.018),(.010,-.018),(-.012,-.012),(-.030,-.002)], -.0158, .0158, 'lower')
     cut(low, box((0,-.018,.113), (.0118,.034,.0250)))
     cut(low, prof([(.096,.004),(.136,.004),(.132,-.022),(.098,-.026)], -.0200, -.0134))
     finish(low, TAN, .60, bevel=.0013, seg=3)
     finish(prof([(-.022,.009),(.070,.009),(.070,.004),(-.022,-.002)], -.0146, -.0132), SAND, .6, bevel=.0005)
     # --- upper receiver: graphite, right-side ejection port, a long relief on the left
-    up = prof([(-.030,.012),(.172,.012),(.172,.0345),(.166,.0370),(-.022,.0370),(-.030,.0315)], -.0150, .0150, 'upper')
-    cut(up, box((.0170,.0225,.070), (.0040,.0070,.0270)))
-    cut(up, box((-.0170,.0245,.086), (.0030,.0048,.0600)))
+    up = prof([(-.030,.012),(.172,.012),(.172,.0345),(.166,.0370),(-.022,.0370),(-.030,.0315)], -.0168, .0168, 'upper')
+    cut(up, box((.0188,.0225,.070), (.0040,.0070,.0270)))
+    cut(up, box((-.0188,.0245,.086), (.0030,.0048,.0600)))
     finish(up, GRAPH, .52, bevel=.0015, seg=3)
-    finish(box((.0118,.0225,.070), (.0020,.0068,.0265)), STEEL, .35, .9, .0003, 1)
+    finish(box((.0136,.0225,.070), (.0020,.0068,.0265)), STEEL, .35, .9, .0003, 1)
     finish(pin(-.0170,-.0100,.0225,.022,.0072), DARK, .5, bevel=.0005)                  # forward assist boss
     finish(pin(-.0186,-.0150,.0225,.022,.0046), BLACK, .5, bevel=.0004)
     # --- rail: base plus real teeth, receiver to muzzle end of the handguard
@@ -149,13 +149,13 @@ def rifle():
     for i in range(44):
         finish(box((0,.0432,-.024+.00985*i), (.0106,.0019,.0028)), BLACK, .5, 0, .0005, 1)
     # --- handguard: short octagonal tube with cut slots
-    hg = prof_front([(.0216*cos(math.pi/8+i*math.pi/4), .0200+.0216*sin(math.pi/8+i*math.pi/4)) for i in range(8)], .170, .398, 'hg')
+    hg = prof_front([(.0245*cos(math.pi/8+i*math.pi/4), .0200+.0245*sin(math.pi/8+i*math.pi/4)) for i in range(8)], .170, .398, 'hg')
     for i in range(5):
-        cut(hg, box((-.022,.0200,.200+i*.041), (.0070,.0034,.0145)))
-        cut(hg, box(( .022,.0200,.200+i*.041), (.0070,.0034,.0145)))
-        cut(hg, box((0,-.0020,.200+i*.041), (.0034,.0070,.0145)))
-    finish(hg, DARK, .55, bevel=.0010, seg=2)
-    finish(lathe([(.160,.0220),(.172,.0235),(.178,.0235),(.181,.0205)], 0, .0200, 24), BLACK, .5, 0, .0006)   # barrel nut
+        cut(hg, box((-.0255,.0200,.200+i*.041), (.0080,.0038,.0145)))
+        cut(hg, box(( .0255,.0200,.200+i*.041), (.0080,.0038,.0145)))
+        cut(hg, box((0,-.0060,.200+i*.041), (.0038,.0080,.0145)))
+    finish(hg, TAN, .60, bevel=.0012, seg=2)
+    finish(lathe([(.158,.0250),(.170,.0268),(.176,.0268),(.179,.0240)], 0, .0200, 24), GRAPH, .5, 0, .0006)   # barrel nut
     # --- short exposed barrel and birdcage
     finish(lathe([(.396,.0085),(.418,.0080)], 0, .0220, 20), BLACK, .42, 0, 0)
     mz = lathe([(.412,.0084),(.416,.0108),(.452,.0108),(.462,.0094),(.462,.0060)], 0, .0220, 22)
@@ -167,8 +167,8 @@ def rifle():
         cut(mz, c_)
     finish(mz, BLACK, .45, 0, .0004)
     # --- wide charging handle, its latch reaching out to the left
-    finish(prof([(-.058,.0318),(-.016,.0318),(-.016,.0378),(-.052,.0378),(-.058,.0360)], -.0118, .0118), BLACK, .5, 0, .0008)
-    finish(prof([(-.060,.0326),(-.030,.0326),(-.036,.0376),(-.060,.0376)], -.0250, -.0100), DARK, .5, 0, .0010)
+    finish(prof([(-.070,.0330),(-.016,.0330),(-.016,.0418),(-.060,.0418),(-.070,.0392)], -.0140, .0140), BLACK, .5, 0, .0012)
+    finish(prof([(-.072,.0336),(-.034,.0336),(-.040,.0412),(-.072,.0412)], -.0340, -.0120), DARK, .5, 0, .0014)
     # --- left-side controls
     finish(prof([(.066,.0090),(.094,.0090),(.094,.0005),(.072,.0005)], -.0172, -.0132), BLACK, .55, 0, .0006)  # bolt catch
     finish(pin(-.0172,-.0132,.0005,.030,.0078), DARK, .5, bevel=.0005)                  # selector drum
@@ -181,8 +181,8 @@ def rifle():
     finish(prof([(.012,-.018),(.016,-.018),(.016,-.0465),(.068,-.0465),(.080,-.018),(.084,-.018),(.071,-.0505),(.012,-.0505)], -.0036, .0036), BLACK, .6, bevel=.0007)
     finish(prof([(.040,-.016),(.046,-.016),(.040,-.040),(.035,-.040)], -.0030, .0030), STEEL, .4, .8, .0004)
     # --- buffer tube, castle nut, carbine stock
-    finish(lathe([(-.132,.0150),(-.040,.0150)], 0, .0210, 26), GRAPH, .46, 0, .0005)
-    nut = lathe([(-.052,.0232),(-.036,.0232),(-.032,.0200)], 0, .0210, 28)
+    finish(lathe([(-.182,.0172),(-.040,.0172)], 0, .0210, 28), GRAPH, .46, 0, .0005)
+    nut = lathe([(-.056,.0240),(-.036,.0240),(-.032,.0205)], 0, .0210, 28)
     for i in range(6):
         c_ = box((0,.0210+.0232,-.0456), (.0026,.0030,.0074))
         c_.rotation_euler = (0,0,0)
@@ -195,7 +195,6 @@ def rifle():
     finish(prof([(-.040,-.012),(-.024,-.012),(-.024,.012),(-.040,.012)], -.0185, .0185), DARK, .55, 0, .0012)  # receiver end plate
     OFS = .052
     st = prof([(-.114+OFS,.0425),(-.226+OFS,.0425),(-.236+OFS,.036),(-.240+OFS,-.040),(-.226+OFS,-.050),(-.196+OFS,-.034),(-.160+OFS,-.006),(-.114+OFS,-.004)], -.0170, .0170, 'stock')
-    cut(st, box((0,.0210,-.150+OFS), (.0156,.0156,.09)))
     cut(st, prof([(-.222+OFS,.036),(-.212+OFS,.036),(-.212+OFS,-.030),(-.222+OFS,-.036)], -.03, .03))
     for i in range(3):
         cut(st, box((-.0185,-.0030,-.150-.019*i+OFS), (.0040,.0050,.0072)))
@@ -207,10 +206,10 @@ def rifle():
     hz = .142
     hous = prof_front([(-.0300,.0478),(.0300,.0478),(.0345,.0525),(.0345,.0890),(.0285,.0965),(-.0285,.0965),(-.0345,.0890),(-.0345,.0525)], hz-.014, hz+.046, 'holo')
     cut(hous, box((0,.0640,hz+.016), (.0250,.0170,.06)))
-    finish(hous, DARK, .58, 0, .0024, 3)
-    finish(box((0,.0498,hz-.032), (.0300,.0030,.0200)), DARK, .55, 0, .0016)                # rear electronics
+    finish(hous, HOLO, .58, 0, .0024, 3)
+    finish(box((0,.0498,hz-.032), (.0300,.0030,.0200)), HOLO, .55, 0, .0016)                # rear electronics
     side = prof([(hz-.054,.0478),(hz-.012,.0478),(hz-.012,.0790),(hz-.020,.0830),(hz-.054,.0720)], -.0460, -.0318, 'side')
-    finish(side, DARK, .55, 0, .0020, 3)
+    finish(side, HOLO, .55, 0, .0020, 3)
     finish(box((-.0472,.0620,hz-.032), (.0012,.0118,.0156)), BLACK, .6, 0, .0007)           # control face
     finish(box((-.0490,.0680,hz-.024), (.0008,.0030,.0052)), AMBER, .35, 0, .0002, 1)
     for k, (yy, zz) in enumerate(((.0586,hz-.024),(.0586,hz-.040),(.0680,hz-.040))):
@@ -245,94 +244,100 @@ def soft(o, lv=2):
     bpy.ops.object.modifier_apply(modifier='ss')
     return o
 
-def hp(ax, ph, rad):
-    # hand frame: x = grip axis, y = toward the wrist, z = completes the frame
-    return (ax, cos(ph)*rad, sin(ph)*rad)
+def V3(*a): return Vector(a)
 
-def hand(side, gr, style):
-    clear()
-    FAX = (-.0300, -.0100, .0100, .0295); FGR = (.0100, .0112, .0120, .0113)
-    FSW = (2.71, 3.07, 3.20, 3.32); FKN = (-.22, -.08, .01, .06)
-    lift = .070 if style == 1 else .066; axo = -.048 if style == 1 else -.046
-    wrist = (axo, gr+lift, 0.0)
-    KN = side*1.52
-    pk = hp(0.0, KN, gr+.0113-.003)
-    L = lambda a, b, t: tuple(a[i]+(b[i]-a[i])*t for i in range(3))
-    parts = []
-    parts.append(path_skin([(L(wrist,pk,-.10),.026,.0165),(L(wrist,pk,.22),.0335,.0205),(L(wrist,pk,.55),.0400,.0210),(L(wrist,pk,.86),.0470,.0170),(L(wrist,pk,1.0),.0440,.0115)],'palm'))
-    pads = []
-    for f in range(4):
-        r = FGR[f]; rr = gr + r - .0034
-        sw = FSW[f]*(.66 if style == 2 else 1.0)
-        ph0 = KN + side*FKN[f]
-        if style == 1 and f == 3:   # the trigger finger lies along the receiver
-            k0 = L(wrist, pk, .94); k0 = (FAX[f]*.95, k0[1], k0[2])
-            p1 = hp(FAX[f], ph0+side*.42, rr+.0030)
-            p2 = (p1[0]+.0030, p1[1]-.0060*0, p1[2]+side*.0)
-            pts = [(k0, r*.98, r*.9), (p1, r*1.08, r), (hp(FAX[f]+.006, ph0+side*.86, rr+.0100), r*.96, r*.9), (hp(FAX[f]+.010, ph0+side*1.25, rr+.0140), r*.86, r*.8)]
-            parts.append(path_skin(pts, 'trig'))
-            joints = [pts[1][0], pts[2][0], pts[3][0]]
-        else:
-            T = (0.0, .10, .46, .76, 1.0); RS = (1.10, 1.14, 1.02, .93, .78)
-            pts = []
-            for t, rs in zip(T, RS):
-                rad = (gr+.0113-.003) if t == 0.0 else rr + .0016 - .0074*t*t
-                pts.append((hp(FAX[f], ph0+side*sw*t, rad), r*rs, r*rs*.92))
-            parts.append(path_skin(pts, 'finger'))
-            joints = [pts[1][0], pts[2][0], pts[3][0]]
-        pads.append(joints)
-    # thumb
-    if style == 2:
-        tp = [hp(.0420,-side*1.10,gr+.0050), hp(.0560,-side*1.14,gr+.0030), hp(.0660,-side*1.18,gr+.0015)]
-    else:
-        tp = [hp(.0455,-side*.62*.68,gr+.0092), hp(.0430,-side*1.28*.68,gr+.0079), hp(.0395,-side*1.76*.68,gr+.0040)]
-    t0 = L(wrist, pk, .42); t0 = (t0[0]+.015, t0[1], t0[2]); t1 = L(wrist, pk, .62); t1 = (t1[0]+.038, t1[1], t1[2])
-    parts.append(path_skin([(t0,.0130,.0145),(t1,.0145,.0160),(tp[0],.0132,.0146),(tp[1],.0118,.0130),(tp[2],.0080,.0086)],'thumb'))
-    # one continuous glove skin
-    bpy.context.view_layer.objects.active = parts[0]
+def tube(pts):
+    """pts = [(point, radius), ...]"""
+    return path_skin([(tuple(p), r, r) for p, r in pts], 'digit')
+
+def merge_glove(parts):
+    """Fuse the bones into one skin, as a stuffed glove is one surface."""
     for p in parts: p.select_set(True)
     for p in parts:
         bpy.context.view_layer.objects.active = p
         bpy.ops.object.modifier_apply(modifier='s')
     bpy.context.view_layer.objects.active = parts[0]
     bpy.ops.object.join(); g = bpy.context.view_layer.objects.active
-    r = g.modifiers.new('r', 'REMESH'); r.mode = 'VOXEL'; r.voxel_size = .0016; r.use_smooth_shade = True
+    r = g.modifiers.new('r', 'REMESH'); r.mode = 'VOXEL'; r.voxel_size = .0017; r.use_smooth_shade = True
     bpy.ops.object.modifier_apply(modifier='r')
-    s = g.modifiers.new('sm', 'SMOOTH'); s.iterations = 18; s.factor = .7
+    s = g.modifiers.new('sm', 'SMOOTH'); s.iterations = 26; s.factor = .75
     bpy.ops.object.modifier_apply(modifier='sm')
-    d = g.modifiers.new('d', 'DECIMATE'); d.ratio = .10
-    finish(g, SLATE, .78, 0, 0, flag=2)
-    # hard padding over the soft glove
-    vecs = lambda a, b: tuple(b[i]-a[i] for i in range(3))
-    for f, j in enumerate(pads):
-        for k in range(2):
-            a, b = j[k], j[k+1]; c = L(a, b, .5)
-            l = math.dist(a, b)*.42
-            o = path_skin([(L(a,b,.5-.34),.0072,.0056),(L(a,b,.5+.34),.0072,.0056)], 'pad')
-            # lift the pad out through the back of the finger
-            n = (0.0, c[1], c[2]); nl = math.hypot(n[1], n[2]) or 1.0
-            o.location = (0.0, n[1]/nl*.0052, n[2]/nl*.0052)
-            soft(o); finish(o, PAD, .52, 0, 0)
-    # knuckle guard row, back-of-hand plate, wrist cuff
-    for f in range(4):
-        k = hp(FAX[f], KN+side*FKN[f]+side*.05, gr+.0300)
-        o = path_skin([((k[0]-.0058,k[1],k[2]),.0060,.0062),((k[0]+.0058,k[1],k[2]),.0060,.0062)], 'kn')
-        soft(o); finish(o, PAD, .46, 0, 0)
-    m0 = L(wrist, pk, .52)
-    o = path_skin([((m0[0]-.024,m0[1],m0[2]),.0080,.0075),((m0[0]+.024,m0[1],m0[2]),.0080,.0075)], 'back')
-    o.location = (0.0, 0.0, side*.0185)
-    soft(o); finish(o, PAD, .55, 0, 0)
-    c0 = L(wrist, pk, -.18); c1 = L(wrist, pk, .06)
-    o = path_skin([(c0,.0300,.0240),(L(c0,c1,.5),.0325,.0250),(c1,.0335,.0235)], 'cuff')
-    soft(o); finish(o, DARK, .66, 0, 0)
-    ct = L(wrist, pk, -.05)
-    o = box((ct[0], ct[1], ct[2]+side*.0262), (.0190,.0085,.0022)); finish(o, PAD, .6, 0, .0010)
+    d = g.modifiers.new('d', 'DECIMATE'); d.ratio = .14
+    finish(g, SLATE, .80, 0, 0, flag=2)
+
+def pad(a, b, out, r=.0088, lift=.0086, col=None):
+    """A stitched hard pad lying along a-b, raised on `out`."""
+    a = Vector(a); b = Vector(b); o_ = Vector(out).normalized() * lift
+    o = tube([(a + o_, r), (b + o_, r)])
+    soft(o); finish(o, col or PAD, .56, 0, 0)
+
+def hand_l():
+    """Support hand: palm under the handguard, thumb up the near side."""
+    clear()
+    Z = (.262, .283, .304, .325)          # little finger back, index forward
+    W = V3(-.046, -.098, .226)
+    parts = []
+    for i, z in enumerate(Z):
+        mcp = V3(.0335, -.0125, z)
+        base = W + V3(.012*i - .006, 0, -.026 + .018*i)
+        mid = V3(-.002 + .004*i, -.0500, (z + base.z)/2 + .006)
+        parts.append(tube([(base, .0200), (mid, .0200), (mcp, .0172)]))
+        r = (.0130, .0138, .0142, .0138)[i]
+        l = (.84, .94, 1.0, .96)[i]
+        pip = mcp + V3(.0072, .0320*l, .001)
+        dip = pip + V3(-.0040, .0240*l, .001)
+        tip = dip + V3(-.0120, .0130*l, .001)
+        parts.append(tube([(mcp, r*1.12), (pip, r*1.06), (dip, r*.98), (tip, r*.84)]))
+    th = [(V3(-.044,-.0720,.236), .0245), (V3(-.0470,-.0350,.270), .0205), (V3(-.0410,-.0020,.3040), .0162), (V3(-.0355,.0190,.3290), .0138)]
+    parts.append(tube(th))
+    parts.append(tube([(W + V3(-.016,0,0), .0270), (W + V3(.016,.004,.004), .0270), (W + V3(.004,.024,.022), .0260)]))
+    merge_glove(parts)
+    # the visible face: thumb pads, a heel pad and a cuff as wide as the arm
+    pad(th[1][0], th[2][0] + (th[1][0]-th[2][0])*.14, (-1,.2,-.25), .0102, .0150)
+    pad(th[2][0] + (th[3][0]-th[2][0])*.14, th[3][0] + (th[2][0]-th[3][0])*.14, (-1,.25,-.25), .0090, .0112)
+    pad((-.058,-.078,.222), (-.050,-.044,.244), (-1,0,-.35), .0120, .0185)
+    for z in Z:                           # knuckles, seen over the top of the rail
+        pad((.0300,.0040,z-.0060), (.0300,.0040,z+.0060), (.8,.6,0), .0084, .0098)
+
+def hand_r():
+    """Firing hand: fingers round the grip's front, thumb across the near side."""
+    clear()
+    G0 = V3(0, -.020, .014)
+    u = V3(0, -.897, -.443); n = V3(0, -.443, .897); x = V3(1, 0, 0)
+    W = V3(.058, -.100, -.098)
+    parts = []
+    finger = []
+    for i, (s, r) in enumerate(((.040, .0136), (.0635, .0134), (.0860, .0124))):
+        c = G0 + u*s
+        mcp = c + x*.0360 + n*.0080
+        pip = c + x*.0250 + n*.0400
+        dip = c + x*-.0105 + n*.0400
+        tip = c + x*-.0290 + n*.0140
+        parts.append(tube([(mcp, r*1.12), (pip, r*1.08), (dip, r*1.0), (tip, r*.86)]))
+        base = W + V3(-.006*i, -.014 + .016*i, 0)
+        parts.append(tube([(base, .0205), (mcp, .0190)]))
+        finger.append((pip, dip, tip))
+    c = G0 + u*.012
+    m = c + x*.0360 + n*.0120
+    parts.append(tube([(m, .0150), (V3(.0250,-.0290,.0520), .0132), (V3(.0120,-.0300,.0600), .0118), (V3(.0005,-.0320,.0440), .0100)]))
+    parts.append(tube([(W + V3(.000,.022,.000), .0205), (m, .0190)]))
+    th = [(V3(.0300,-.0480,-.0660), .0240), (V3(.0120,-.0140,-.0420), .0200), (V3(-.0230,-.0130,-.0090), .0158), (V3(-.0290,-.0100,.0240), .0132)]
+    parts.append(tube(th))
+    parts.append(tube([(W + V3(0,-.018,0), .0280), (W + V3(0,.018,0), .0280), (V3(.022,-.066,-.056), .0280)]))
+    merge_glove(parts)
+    for pip, dip, tip in finger:          # segment pads wrapping the grip's front
+        o_ = (dip - (G0 + u*((dip-G0).dot(u)))).normalized()
+        pad(pip*.32 + dip*.68, dip*.84 + tip*.16, o_, .0078, .0108)
+        pad(dip*.40 + tip*.60, tip, (-1,0,.25), .0068, .0088)
+    pad(th[1][0]*.84 + th[2][0]*.16, th[2][0]*.86 + th[1][0]*.14, (-.55,.75,-.2), .0120, .0150)
+    pad(th[2][0]*.86 + th[3][0]*.14, th[3][0]*.86 + th[2][0]*.14, (-.8,.55,0), .0098, .0118)
+    pad((.018,-.060,-.086), (.040,-.088,-.104), (-.8,.0,-.6), .0150, .0245)
 
 # ------------------------------------------------------------------ forearm armour
 def bracer():
     clear()
     # frame: x = wrist to elbow, y = the arm's visible face, z = across the arm
-    def tube(rings, col, rough, flag=0):
+    def arm(rings, col, rough, flag=0):
         seg = 32; bm = bmesh.new(); rv = []
         for x, ry, rz in rings:
             rv.append([bm.verts.new((x, ry*cos(2*math.pi*i/seg), rz*sin(2*math.pi*i/seg))) for i in range(seg)])
@@ -342,8 +347,8 @@ def bracer():
                 bm.faces.new((rv[k][i], rv[k][j], rv[k+1][j], rv[k+1][i]))
         bm.faces.new(rv[0][::-1]); bm.faces.new(rv[-1])
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        return finish(from_bm(bm, 'tube'), col, rough, 0, 0, flag=flag)
-    tube([(.010,.0262,.0300),(.050,.0292,.0345),(.110,.0330,.0395),(.190,.0370,.0445),(.290,.0395,.0470),(.400,.0400,.0480)], SLEEVE, .85, flag=1)
+        return finish(from_bm(bm, 'arm'), col, rough, 0, 0, flag=flag)
+    arm([(-.030,.0345,.0420),(.040,.0360,.0440),(.110,.0378,.0470),(.190,.0405,.0505),(.290,.0435,.0535),(.420,.0450,.0550)], SLEEVE, .85, flag=1)
     def plate(x0, x1, hw, y, col, rough=.5, th=.0030, b=.0012):
         # a fitted panel: follows the arm's curve across, flat along it
         n = 10; pts = []
@@ -359,20 +364,20 @@ def bracer():
             j = (i+1) % len(pts); bm.faces.new((A[j], A[i], B[i], B[j]))
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         finish(from_bm(bm, 'plate'), col, rough, 0, b, 2)
-    plate(.068,.128,.82,.0348,HARD)                     # screen housing
-    plate(.136,.208,.86,.0376,HARD)                     # middle plate
-    plate(.216,.300,.88,.0410,HARD)                     # rear plate
-    plate(.145,.199,.56,.0404,SAND,.56,.0024,.0008)     # tan inset
-    plate(.226,.290,.15,.0438,ORANGE,.5,.0018,.0005)    # accent stripe
-    finish(box((.098,.0384,0), (.0178,.0020,.0170)), BLACK, .45, 0, .0006)
-    finish(box((.098,.0404,0), (.0140,.0012,.0132)), AMBER, .30, 0, .0004)
-    for x in (.132,.212):
-        tube([(x-.003,.0362+(x-.132)*.045,.0420+(x-.132)*.05),(x+.003,.0362+(x-.132)*.045,.0420+(x-.132)*.05)], DARK, .8)
+    plate(.060,.128,.86,.0392,HARD)                     # screen housing
+    plate(.136,.206,.88,.0414,HARD)                     # middle plate
+    plate(.214,.310,.90,.0446,HARD)                     # rear plate
+    plate(.146,.196,.54,.0442,SAND,.56,.0024,.0008)     # tan inset
+    plate(.226,.298,.13,.0476,ORANGE,.5,.0018,.0005)    # accent stripe
+    finish(box((.094,.0418,0), (.0165,.0030,.0165)), BLACK, .45, 0, .0008)
+    finish(box((.094,.0446,0), (.0118,.0012,.0118)), AMBER, .30, 0, .0004)
+    for x in (.132,.210):
+        arm([(x-.0035,.0395+(x-.132)*.05,.0482+(x-.132)*.055),(x+.0035,.0395+(x-.132)*.05,.0482+(x-.132)*.055)], DARK, .8)
 
 store = {}
 rifle(); emit(store, 'RIFLE')
-hand(1.0, .0130, 1); emit(store, 'HAND_R')
-hand(-1.0, .0200, 2); emit(store, 'HAND_L')
+hand_r(); emit(store, 'HAND_R')
+hand_l(); emit(store, 'HAND_L')
 bracer(); emit(store, 'BRACER')
 
 with open(OUT, 'w') as f:
