@@ -26094,7 +26094,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   float dip = p->prev_land_dip + (p->land_dip - p->prev_land_dip) * alpha;
 
   int cur = w->cur;
-  float sight_y = cur == WPN_SR ? VM_SIGHT_SR : VM_SIGHT_AR;
+  // The holographic sight sits higher than the iron sight the shared builder knows.
+  float sight_y = cur == WPN_SR ? VM_SIGHT_SR : 0.0850f;
 
   // Reload, trigger and bolt all come from ONE solver shared with the
   // third-person figure (`gun_anim`) — see the note there. `rl` is the body
@@ -26247,23 +26248,29 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   int gun_mark = g_scene_floats;
   g_vm_muzzle = gun_build(cur, org, gx, gy, gz, mdrop, trig, ga_.bolt);
   g_cham = 0.0f;
-  if (cur == WPN_AR) {
-    // gun_build has published the muzzle, sight and trigger; the mesh replaces
-    // only what it drew.
+  {
+    // gun_build has published the muzzle, sight and trigger; the sculpted mesh
+    // replaces only what it drew. The stock sits under the cheek when aiming and
+    // swings past the lens during a reload, so it is left out for both.
     g_scene_floats = gun_mark;
-    g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.022f), v3_scale(gz, 0.462f)));
-    model_draw(RIFLE_V, RIFLE_P, RIFLE_NP, 0, org, gx, gy, gz);
-    // The stock sits under the cheek when aiming, and swings past the lens during a
-    // reload. Either way it would fill the frame.
-    if (ads < 0.5f && rl < 0.2f)
-      model_draw(RIFLE_V, RIFLE_P, RIFLE_NP, 2, org, gx, gy, gz);
-    float md = mdrop * GUN_MAG_TRAVEL[WPN_AR][0], mx = mdrop * -GUN_MAG_TRAVEL[WPN_AR][1];
-    model_draw(RIFLE_V, RIFLE_P, RIFLE_NP, 1,
-               v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(gz, mx))), gx, gy, gz);
-    mat_set(0.22f, 0.0f);
-    scene_box(v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, 0.188f))),
-              v3_scale(gx, 0.0008f), v3_scale(gy, 0.0008f), v3_scale(gz, 0.0004f),
-              (v3){{3.200f, 0.420f, 0.220f}});   // the holographic dot
+    int ar = cur == WPN_AR;
+    const int16_t (*mv)[7] = ar ? RIFLE_V : SNIPER_V;
+    const model_part_t *mp = ar ? RIFLE_P : SNIPER_P;
+    int mn = ar ? RIFLE_NP : SNIPER_NP;
+    model_draw(mv, mp, mn, 0, org, gx, gy, gz);
+    if (ads < 0.5f && rl < 0.2f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
+    float md = mdrop * GUN_MAG_TRAVEL[cur][0], mx = mdrop * -GUN_MAG_TRAVEL[cur][1];
+    model_draw(mv, mp, mn, 1, v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(gz, mx))),
+               gx, gy, gz);
+    if (ar) {
+      g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.022f), v3_scale(gz, 0.462f)));
+      g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, 0.1835f)));
+      g_gun_sight_r = 0.0185f;
+      mat_set(0.22f, 0.0f);
+      scene_box(v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, 0.172f))),
+                v3_scale(gx, 0.0008f), v3_scale(gy, 0.0008f), v3_scale(gz, 0.0004f),
+                (v3){{3.200f, 0.420f, 0.220f}});   // the holographic dot
+    }
   }
   // The tracer re-anchor publish does NOT happen here: vm_build is also the
   // engine of the harness probes (vmcheck/vmsight/vmhand), which build forced
@@ -26582,16 +26589,22 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       v3 ro = v3_sub(hd[0].gc, VP(0.0f, -0.0500f, -0.0078f));
       v3 lo = v3_sub(hd[1].gc, VP(0.0f,  0.0190f,  0.3050f));
       model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
-      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
+      // The back of the support hand turns to face the eye. Built along the gun it
+      // would be foreshortened to a strip, since the gun points away from the view.
+      v3 lx = VD(0.42f, 0.0f, 0.907f), lz = VD(-0.907f, 0.0f, 0.42f);
+      v3 lpiv = v3_add(VP(-0.0080f, -0.0060f, 0.2820f), lo);
+      v3 lo2 = v3_sub(lpiv, v3_add(v3_scale(lx, -0.0420f), v3_add(v3_scale(gy, -0.0060f),
+                                                                  v3_scale(lz, 0.2950f))));
+      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, lo2, lx, gy, lz);
       for (int h = 0; h < 2; h++) {
         v3 wr = h == 0 ? v3_add(VP(0.058f, -0.100f, -0.098f), ro)
-                       : v3_add(VP(-0.052f, -0.104f, 0.216f), lo);
+                       : v3_add(lo2, v3_add(v3_scale(lx, -0.060f), v3_add(v3_scale(gy, -0.112f),
+                                                                          v3_scale(lz, 0.262f))));
         v3 ax = v3_norm(h == 0 ? VD(0.40f, -0.62f, -0.68f) : VD(-0.48f, -0.80f, -0.34f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
-        // Pulled up over the cuff: the gauntlet runs right to the hand.
-        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, v3_sub(wr, v3_scale(ax, 0.060f)),
-                   ax, on, v3_cross(ax, on));
+        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, wr, ax, v3_scale(on, 1.24f),
+                   v3_scale(v3_cross(ax, on), 1.24f));
       }
       #undef VP
       #undef VD
