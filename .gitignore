@@ -10,6 +10,7 @@ screenshots/
 post/
 tools/*
 !tools/ci-proofs.sh
+!tools/build_models.py
 CLAUDE.md
 AGENTS.md
 docs/

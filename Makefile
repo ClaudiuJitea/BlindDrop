@@ -102,15 +102,15 @@ build/game.res.o: code/game.rc code/icon.ico
 	mkdir -p build
 	$(WIN_RES) $< -o $@
 
-build/game.exe: code/game.c build/game.res.o
+build/game.exe: code/game.c code/models.h build/game.res.o
 	mkdir -p build
 	$(WIN_CC) $(WIN_CFLAGS) $(VERFLAG) code/game.c build/game.res.o -o $@ $(WIN_LIBS)
 
-build/game: code/game.c
+build/game: code/game.c code/models.h
 	mkdir -p build
 	$(LIN_CC) $(LIN_CFLAGS) $(VERFLAG) $< -o $@ $(LIN_LIBS)
 
-build/game-x86_64: code/game.c
+build/game-x86_64: code/game.c code/models.h
 	mkdir -p build
 	$(X86_CC) $(LIN_CFLAGS) $(VERFLAG) $< -o $@ $(LIN_LIBS)
 
@@ -118,7 +118,7 @@ build/game-x86_64: code/game.c
 # float-cast-overflow and float-divide-by-zero are NOT in -fsanitize=undefined
 # and are exactly the classes -ffast-math makes most likely (a NaN reaching an
 # (int) cast, a zero-length normalize), so they are named explicitly.
-build/game-asan: code/game.c
+build/game-asan: code/game.c code/models.h
 	mkdir -p build
 	$(LIN_CC) -std=c23 -O1 -g -fsanitize=address,undefined,float-cast-overflow,float-divide-by-zero -Wall -Wextra $< -o $@ $(LIN_LIBS)
 

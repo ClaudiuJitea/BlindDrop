@@ -23,7 +23,7 @@
 - **Dropped in blind.** Every match generates a new arena, along with its weapons, characters and sounds, so nobody starts with map knowledge.
 - **Five skies.** Every arena drops into High Noon, Golden Hour, Ember Dusk, Cold Dawn or Stormfront, with its own light, clouds and color grade. Everyone in a match sees the same one.
 - **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts, unlocks or attachments.
-- **Built to be seen.** Enemies wear charcoal with crimson helmets, players wear slate with blaze orange, and everyone carries field kit. In first person you get a detailed rifle with a holographic sight, padded gloves and forearm armor.
+- **Built to be seen.** Enemies wear charcoal with crimson helmets, players wear slate with blaze orange, and everyone carries field kit. In first person you get a sculpted rifle with a holographic sight, molded gloves and forearm armor.
 - **Movement you can get good at.** Air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots that make solo worthwhile.** They hear you, remember you and push.
 - **One small executable.** Plain C with no engine and no asset files.
@@ -98,6 +98,14 @@ To build the same redistributable binary as a release, which needs Docker:
 
 ```sh
 make dist-linux RELEASE_VERSION=v0.1.0
+```
+
+The first-person rifle, gloves and forearm armor are sculpted by `tools/build_models.py` and
+compiled in through `code/models.h`. To change them, edit that script and regenerate the header
+with Blender:
+
+```sh
+blender -b --factory-startup -P tools/build_models.py
 ```
 
 ## Credits and license
