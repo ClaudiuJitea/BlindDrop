@@ -14386,23 +14386,44 @@ static const char *WORLD_FS =
   "    float mf = metal;\n"
   "    metal = 0.0;\n"
   "    vec3 cq = vWorld - uMdlO;\n"
-  "    vec2 cp = vec2(dot(cq, uMdlX) + cq.y * 0.8, dot(cq, uMdlZ)) * 24.0;\n"
+  "    vec3 mx = uMdlX, mz = uMdlZ, my = cross(mz, mx);\n"
+  "    vec3 lp = vec3(dot(cq, mx), dot(cq, my), dot(cq, mz));\n"
+  "    vec2 cp = vec2(lp.x + lp.y * 0.8, lp.z) * 24.0;\n"
   "    float knit = vnoise2(cp * 30.0);\n"
-  "    if (mf < -3.5) {\n"               // cerakote: fine grain, edges worn bright
+  "    float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
+  "    if (mf < -3.5) {\n"
   "      float gr = vnoise2(cp * 42.0) * 0.6 + vnoise2(cp * 7.0) * 0.4;\n"
-  "      float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
-  "      alb *= 0.88 + 0.24 * gr;\n"
-  "      alb = mix(alb, alb * 1.7 + vec3(0.016), ew * (0.45 + 0.55 * knit));\n"
-  "      rough = clamp(rough + (gr - 0.5) * 0.22 - 0.16 * ew, 0.08, 1.0);\n"
+  "      float blot = vnoise2(cp * 1.6);\n"
+  "      if (mf < -5.5) {\n"             // painted alloy: wear opens to bare metal
+  "        float wear = smoothstep(0.42, 0.74, ew * (0.55 + 0.75 * blot) + (gr - 0.5) * 0.30);\n"
+  "        alb *= 0.90 + 0.20 * gr;\n"
+  "        alb = mix(alb, vec3(0.20, 0.19, 0.18), wear);\n"
+  "        metal = 0.85 * wear;\n"
+  "        rough = clamp(rough + (blot - 0.5) * 0.26 - 0.20 * wear, 0.14, 1.0);\n"
+  "      } else if (mf < -4.5) {\n"      // anodised alloy: a brushed metallic sheen
+  "        float brush = vnoise2(vec2(lp.z * 34.0, (lp.x + lp.y) * 900.0));\n"
+  "        alb = alb * (1.25 + 0.10 * brush) + vec3(0.010) * ew;\n"
+  "        metal = 0.30;\n"
+  "        rough = clamp(rough - 0.06 + (brush - 0.5) * 0.10 + (blot - 0.5) * 0.08, 0.20, 1.0);\n"
+  "      } else {\n"                     // moulded polymer: matte, fine grain
+  "        alb *= 0.90 + 0.20 * gr;\n"
+  "        rough = clamp(rough + 0.10 + (gr - 0.5) * 0.16, 0.2, 1.0);\n"
+  "      }\n"
   "    } else if (mf < -2.5) {\n"        // lit inlay: ignores the scene's light
   "      oCol = vec4(tonemap(alb * vec3(1.0, 0.86, 0.72) * 1.05 / EXPOSURE), 1.0);\n"
   "      return;\n"
-  "    } else if (mf < -1.5) {\n"        // glove: open mesh with solid panels
-  "      vec2 mg = cp * 11.0; mg.x += floor(mg.y) * 0.5;\n"
-  "      vec2 mc = abs(fract(mg) - 0.5);\n"
-  "      float hole = 1.0 - smoothstep(0.24, 0.34, length(mc));\n"
-  "      float panel = smoothstep(0.47, 0.53, vnoise2(cp * 1.3 + 5.0));\n"
-  "      alb *= mix(1.0 - 0.62 * hole, 0.42, panel) * (0.84 + 0.32 * knit);\n"
+  "    } else if (mf < -1.5) {\n"        // glove: triplanar mesh, so it never stretches
+  "      vec3 nl = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
+  "      nl *= nl; nl *= nl; nl /= nl.x + nl.y + nl.z + 1e-4;\n"
+  "      vec3 hg = vec3(0.0);\n"
+  "      for (int i = 0; i < 3; i++) {\n"
+  "        vec2 m2 = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 260.0;\n"
+  "        m2.x += floor(m2.y) * 0.5;\n"
+  "        hg[i] = 1.0 - smoothstep(0.22, 0.34, length(fract(m2) - 0.5));\n"
+  "      }\n"
+  "      float hole = dot(hg, nl);\n"
+  "      float panel = smoothstep(0.45, 0.55, vnoise2(cp * 1.3 + 5.0));\n"
+  "      alb *= mix(1.0 - 0.50 * hole, 0.46, panel) * (0.86 + 0.28 * knit);\n"
   "    } else {\n"                       // sleeve: plain ripstop
   "      vec2 rg = abs(fract(cp * 1.5) - 0.5);\n"
   "      alb *= (0.86 + 0.28 * knit) * (1.0 - 0.14 * step(0.47, max(rg.x, rg.y)));\n"
@@ -26146,7 +26167,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // view; filmed at 78 and 88 percent with the AR's numbers, the whole receiver
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
-  float px = 0.178f * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
+  float px = 0.168f * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
            + (lean_d * 0.16f - lean * 0.028f) * hip;
   // DOWN a little and NOT toward the eye. The comment used to call this a "dip
@@ -26155,7 +26176,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // one part of the gun a magazine change is about — off the bottom of the
   // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
   // below frame, so the old failure is not being re-created.
-  float py = -0.082f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
+  float py = -0.112f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
            // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
            // which is the identical failure the reload dip above was already fixed
            // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
@@ -26189,7 +26210,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // own 9.1 mm peak on the same axis, so recoil still dominates either way.
   float tkick = cur == WPN_SR ? hip : 0.45f + 0.55f * hip;
   float pz = 0.30f - 0.0015f * trig * tkick
-           - 0.042f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
+           - 0.022f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
            + VLERP(lag_z) - sw * 0.03f + rl * 0.050f
            - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f;
 
@@ -26209,7 +26230,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                  + rl * 0.055f - rch * 0.045f
                  - rk * 0.075f + sw * 0.42f) + 0.105f * hip);              // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (0.150f + lean_d * 0.22f) * hip);                     // yaw
+                 + (0.195f + lean_d * 0.22f) * hip);                     // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
   // (the weapon sits right of centre at the hip, so the camera is on its left);
@@ -26592,7 +26613,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
       // The back of the support hand turns to face the eye. Built along the gun it
       // would be foreshortened to a strip, since the gun points away from the view.
-      v3 lx = VD(0.42f, 0.0f, 0.907f), lz = VD(-0.907f, 0.0f, 0.42f);
+      v3 lx = VD(0.60f, 0.0f, 0.80f), lz = VD(-0.80f, 0.0f, 0.60f);
       v3 lpiv = v3_add(VP(-0.0080f, -0.0060f, 0.2820f), lo);
       v3 lo2 = v3_sub(lpiv, v3_add(v3_scale(lx, -0.0420f), v3_add(v3_scale(gy, -0.0060f),
                                                                   v3_scale(lz, 0.2950f))));

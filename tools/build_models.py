@@ -52,6 +52,7 @@ def prof_front(pts, z0, z1, name='front'):
 
 def lathe(rings, x=0.0, y=0.0, seg=28, name='lathe'):
     """Round part along z. rings = [(z, r), ...]."""
+    seg = max(seg, 44)
     bm = bmesh.new(); rv = []
     for z, r in rings:
         rv.append([bm.verts.new((x + r*cos(2*math.pi*i/seg), y + r*sin(2*math.pi*i/seg), z)) for i in range(seg)])
@@ -65,6 +66,7 @@ def lathe(rings, x=0.0, y=0.0, seg=28, name='lathe'):
 
 def pin(x0, x1, y, z, r, seg=16, name='pin'):
     """Round part across x, centred on (y, z)."""
+    seg = max(seg, 40)
     return prof([(z + r*cos(2*math.pi*i/seg), y + r*sin(2*math.pi*i/seg)) for i in range(seg)], x0, x1, name)
 
 def cut(o, cutter):
@@ -113,7 +115,7 @@ def emit(store, tag):
         cache[key] = int(255 * (.34 + .66 * v))
         return cache[key]
     for o, e, me in meshes:
-        me.set_sharp_from_angle(angle=radians(38))
+        if o['flag'] not in (1, 2): me.set_sharp_from_angle(angle=radians(38))
         me.calc_loop_triangles()
         key = (tuple(round(x, 3) for x in o['col']), o['rough'], o['metal'], o['group'], o['flag'])
         out = tris.setdefault(key, [])
@@ -263,11 +265,11 @@ def merge_glove(parts):
         bpy.ops.object.modifier_apply(modifier='s')
     bpy.context.view_layer.objects.active = parts[0]
     bpy.ops.object.join(); g = bpy.context.view_layer.objects.active
-    r = g.modifiers.new('r', 'REMESH'); r.mode = 'VOXEL'; r.voxel_size = .0017; r.use_smooth_shade = True
+    r = g.modifiers.new('r', 'REMESH'); r.mode = 'VOXEL'; r.voxel_size = .0020; r.use_smooth_shade = True
     bpy.ops.object.modifier_apply(modifier='r')
-    s = g.modifiers.new('sm', 'SMOOTH'); s.iterations = 26; s.factor = .75
+    s = g.modifiers.new('sm', 'SMOOTH'); s.iterations = 34; s.factor = .8
     bpy.ops.object.modifier_apply(modifier='sm')
-    d = g.modifiers.new('d', 'DECIMATE'); d.ratio = .14
+    d = g.modifiers.new('d', 'DECIMATE'); d.ratio = .22
     finish(g, SLATE, .80, 0, 0, flag=2)
 
 def flat(c, along, out, hl, hw, ht=.0024, col=None, b=.0014):
@@ -287,33 +289,33 @@ def pad(a, b, out, r=.0088, lift=.0086, col=None):
     soft(o); finish(o, col or PAD, .56, 0, 0)
 
 def hand_l():
-    """Support hand, back of the hand toward the eye, fingers over the handguard."""
+    """Support hand in a C-clamp: fingers curl up and over the handguard."""
     clear()
-    Z = (.264, .285, .306, .327)
+    Z = (.262, .284, .306, .328)
     W = V3(-.060, -.112, .262)
     X = V3(-1, 0, 0)
     parts = []; rows = []
     for i, z in enumerate(Z):
-        mcp = V3(-.0420, -.0060, z)
+        arc = (-.0060, .0012, .0030, -.0012)[i]     # knuckles follow a curve
+        fan = (-.0065, -.0022, .0022, .0065)[i]     # fingers spread a little
+        mcp = V3(-.0420 + arc*.3, -.0100 + arc, z)
         base = W + V3(0, 0, -.0240 + .0160*i)
         parts.append(tube([(base, .0165), ((base+mcp)/2 + V3(-.002,0,0), .0160), (mcp, .0145)]))
         r = (.0112, .0122, .0126, .0120)[i]
-        l = (.84, .95, 1.0, .96)[i]
-        pip = mcp + V3(-.0040, .0300*l, .0008)
-        dip = pip + V3(.0100, .0220*l, .0008)
-        tip = dip + V3(.0170, .0085*l, .0008)
-        parts.append(tube([(mcp, r*1.12), (pip, r*1.05), (dip, r*.98), (tip, r*.84)]))
+        l = (.86, .96, 1.0, .96)[i]
+        pip = mcp + V3(.0020, .0290*l, fan)
+        dip = pip + V3(.0190, .0200*l, fan*.7)
+        tip = dip + V3(.0230, .0020*l, fan*.4)
+        parts.append(tube([(mcp, r*1.12), (pip, r*1.06), (dip, r*.98), (tip, r*.84)]))
         rows.append((mcp, pip, dip))
     th = [(V3(-.0500,-.0800,.2800), .0200), (V3(-.0320,-.0440,.3300), .0170), (V3(-.0090,-.0220,.3520), .0138), (V3(.0090,-.0090,.3500), .0112)]
     parts.append(tube(th))
     parts.append(tube([(W + V3(0,0,-.018), .0230), (W + V3(0,0,.018), .0230)]))
     merge_glove(parts)
     for mcp, pip, dip in rows:
-        flat(mcp + V3(-.0128,.0020,0), (0,1,0), X, .0084, .0088, .0026)                     # knuckle
-        flat((mcp+pip)/2 + V3(-.0124,.0035,0), pip-mcp, X, .0085, .0082, .0020)             # finger panels
-        flat((pip+dip)/2 + V3(-.0088,.0070,0), dip-pip, (-.75,.65,0), .0066, .0074, .0018)
-    c = (W + V3(-.0150,.0620,.0050))
-    flat(c, V3(.012,.1,.0), X, .0220, .0240, .0028)                                         # back-of-hand panel
+        flat(mcp + V3(-.0132,.0015,0), (0,1,0), (-1,.15,0), .0062, .0078, .0022, b=.0016)   # knuckle
+        o_ = (pip + dip)/2 - V3(0,.020,(pip.z+dip.z)/2)
+        flat((pip+dip)/2 + o_.normalized()*.0108, dip-pip, o_, .0060, .0068, .0015, b=.0011)
     flat(W + V3(-.0225,.0130,.0030), (0,0,1), (-.9,.1,-.3), .0250, .0072, .0024, DARK)      # wrist strap
 
 def hand_r():
@@ -423,16 +425,21 @@ def sniper():
     finish(prof([(.078,-.018),(.026,-.018),(.024,-.104),(.076,-.104)], -.0120, .0120), DARK, .7, 0, .0018, 2, group=1)
 
 store = {}
-rifle()
-for o in bpy.context.collection.objects:
-    if 'col' in o and o['flag'] == 0 and o['metal'] < .8: o['flag'] = 4
+def assign_finishes():
+    # 4 moulded polymer, 5 anodised alloy, 6 painted alloy
+    for o in bpy.context.collection.objects:
+        if 'col' not in o or o['flag'] != 0 or o['metal'] >= .8: continue
+        tan = o['col'][0] > o['col'][2] * 1.3
+        if o['rough'] >= .62 and not (tan and o['group'] == 0): o['flag'] = 4
+        elif tan: o['flag'] = 6
+        else: o['flag'] = 5
+
+rifle(); assign_finishes()
 emit(store, 'RIFLE')
 hand_r(); emit(store, 'HAND_R')
 hand_l(); emit(store, 'HAND_L')
 bracer(); emit(store, 'BRACER')
-sniper()
-for o in bpy.context.collection.objects:
-    if 'col' in o and o['flag'] == 0 and o['metal'] < .8: o['flag'] = 4
+sniper(); assign_finishes()
 emit(store, 'SNIPER')
 
 with open(OUT, 'w') as f:
