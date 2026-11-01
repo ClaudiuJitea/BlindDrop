@@ -187,6 +187,7 @@ typedef struct __GLsync *GLsync;
   X(void,   glUniform1f, (GLint, GLfloat)) \
   X(void,   glUniform2f, (GLint, GLfloat, GLfloat)) \
   X(void,   glUniform3f, (GLint, GLfloat, GLfloat, GLfloat)) \
+  X(void,   glUniform3fv, (GLint, GLsizei, const GLfloat *)) \
   X(void,   glUniform4f, (GLint, GLfloat, GLfloat, GLfloat, GLfloat)) \
   X(void,   glGenVertexArrays, (GLsizei, GLuint *)) \
   X(void,   glBindVertexArray, (GLuint)) \
@@ -1246,6 +1247,7 @@ typedef struct {
   int   fps_cap;             // frame limiter, 0 = off
   int   show_fps;
   int   msaa;                // MSAA samples: 0 (off), 2, 4 or 8
+  int   post_fx;             // bloom, colour grade and vignette
   // Read by audio_mix on the audio thread while the GAME tab's slider writes it
   // on the main thread — the one object crossing that boundary that was not yet
   // atomic (g_trig_w/g_trig_r and g_audio_run are). Making the member itself
@@ -1330,7 +1332,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -1394,7 +1396,7 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "%s %.2f\n", VOL_DEF.key, (double)c->vol);
   fprintf(f, "sp_bots %d\nsp_difficulty %d\nsp_fraglimit %d\nplayer_name %s\n",
           c->sp_bots, c->sp_diff, c->sp_frag, c->name);
-  fprintf(f, "mp_host %s\nmp_port %d\n", c->mp_host, c->mp_port);
+  fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
   for (int w = 0; w < WPN_COUNT; w++)
@@ -1586,6 +1588,9 @@ static void config_load_or_create(const char *path, config_t *c) {
         if (g) c->name[n++] = g;
       }
       if (n) c->name[n] = '\0';  // empty/garbage keeps the default
+    }
+    else if (!strcmp(key, "post_fx")) {
+      c->post_fx = parse_long(val, c->post_fx) ? 1 : 0;
     }
     else if (!strcmp(key, "mp_host")) {
       snprintf(c->mp_host, sizeof c->mp_host, "%s", val);   // 64 == val width
@@ -14051,13 +14056,7 @@ static int net_cl_poll(void) {
 // rest of that fix. Calibrated against the world pass, not eyeballed. (The note lives outside the macro: a backslash-continued macro
 // cannot contain a comment.)
 //
-// ONE copy of the sun direction: the shadow-map projection needs the same
-// vector in C (it casts along -SUN_DIR), and a hand-typed twin there is how
-// shadows end up cast from a sun the shader no longer has. The components are
-// stringized into the GLSL below (the 'f' suffix is legal GLSL since 1.20).
-#define SUN_DIR_X 0.72f
-#define SUN_DIR_Y 0.62f
-#define SUN_DIR_Z 0.34f
+// The sun and sky are per-arena uniforms: see ATM below.
 #define GLSL_NUM2(v) #v
 #define GLSL_NUM(v)  GLSL_NUM2(v)
 // The floor's baseline roughness, and it lives up here because the FRAGMENT
@@ -14099,22 +14098,17 @@ static int net_cl_poll(void) {
      faces of the same box to within a few percent of each other: no azimuthal
      cue anywhere in the frame, nothing for a cast shadow to subtract, and every
      material reads as overcast satin however good its BRDF is. */ \
-  "const vec3 SUN_DIR = normalize(vec3(" GLSL_NUM(SUN_DIR_X) ", " \
-    GLSL_NUM(SUN_DIR_Y) ", " GLSL_NUM(SUN_DIR_Z) "));\n" \
+  "uniform vec3 SUN_DIR, SUN_COL, SKY_HOR, SKY_TOP, SKY_GND, uGlow;\n" \
+  "uniform float EXPOSURE, uAmb, uFog, uCloud;\n" \
   /* Sun up, sky down. Measured off the frames: the horizon landed at 185 display
      while sunlit ground reached 130, and NOTHING in any frame reached the
      tonemap's shoulder — an arena lit by a lightbox behind it, with no highlight
      end for any material to reach. A clear sky is not brighter than the ground it
      lights; it only was here because the ambient was paying for what the sun
      should have. */ \
-  "const vec3 SUN_COL = vec3(2.90, 2.56, 2.04);\n" \
-  "const vec3 SKY_HOR = vec3(0.88, 0.96, 1.11);\n" \
-  "const vec3 SKY_TOP = vec3(0.14, 0.27, 0.49);\n" \
-  "const vec3 SKY_GND = vec3(0.36, 0.33, 0.29);\n" \
   /* Exposure. Every light above is a radiance in the same unit as the sky the
      player can see, so ONE number decides where mid-grey lands and the balance
      between sun, sky and reflection is never re-derived per surface. */ \
-  "const float EXPOSURE = 0.40;\n" \
   "vec3 sky_env(vec3 d, float disc){\n" \
   "  float t = clamp(d.y, -1.0, 1.0);\n" \
   /* ONE pow, not two. A ternary over two pow calls is flattened to a select by
@@ -14124,6 +14118,10 @@ static int net_cl_poll(void) {
   "  bool up = t > 0.0;\n" \
   "  vec3 c = mix(SKY_HOR, up ? SKY_TOP : SKY_GND, pow(abs(t), up ? 0.42 : 0.45));\n" \
   "  float s = max(dot(d, SUN_DIR), 0.0);\n" \
+  /* The low-sun horizon band: warm light banked along the horizon on the sun's
+     side. It lives here so distant walls fog into the same glow. */ \
+  "  float hb = 1.0 - abs(t);\n" \
+  "  c += uGlow * hb * hb * hb * hb * hb * hb * (0.25 + 0.75 * s * s);\n" \
   /* THE SUN IS 0.53 DEGREES ACROSS, and it was drawn at four times that. The
      old term was pow(s, 900), whose half-power point is 2.25 degrees off axis —
      a soft blob the size of four suns, which is why the sky read as an
@@ -14202,6 +14200,54 @@ static int net_cl_poll(void) {
   "                                          vec2(0.06711056, 0.00583715))));\n" \
   "  return x + (dth - 0.5) * 0.0039216;\n" \
   "}\n"
+
+// ---------------------------------------------------------------------------
+// Atmospheres. Each arena gets one, picked from the map seed so every player in
+// a match sees the same sky. Purely presentation: the sim never reads any of it.
+// All five stay bright enough to read a figure against the ground.
+// ---------------------------------------------------------------------------
+typedef struct {
+  const char *name;
+  float sun[3], sun_col[3], hor[3], top[3], gnd[3], glow[3];
+  float exposure, amb, fog, cloud;
+  float bloom, sat, con, vig, tint[3], lift[3];
+} atm_t;
+static const atm_t ATM[] = {
+  {"HIGH NOON",   {0.62f, 0.70f, 0.35f}, {3.25f, 2.86f, 2.24f}, {0.74f, 0.90f, 1.16f},
+   {0.06f, 0.18f, 0.48f}, {0.40f, 0.35f, 0.28f}, {0.10f, 0.08f, 0.05f},
+   0.36f, 1.05f, 7.0e-5f, 0.30f, 0.34f, 1.12f, 0.34f, 0.24f,
+   {1.01f, 1.00f, 0.98f}, {0.000f, 0.002f, 0.006f}},
+  {"GOLDEN HOUR", {0.80f, 0.31f, 0.52f}, {3.55f, 2.42f, 1.32f}, {0.96f, 0.78f, 0.68f},
+   {0.10f, 0.20f, 0.46f}, {0.42f, 0.33f, 0.26f}, {0.95f, 0.46f, 0.18f},
+   0.36f, 1.35f, 8.0e-5f, 0.34f, 0.42f, 1.10f, 0.34f, 0.26f,
+   {1.02f, 0.99f, 0.96f}, {0.006f, 0.003f, 0.006f}},
+  {"EMBER DUSK",  {-0.72f, 0.24f, 0.66f}, {3.50f, 1.85f, 0.95f}, {0.82f, 0.50f, 0.46f},
+   {0.08f, 0.10f, 0.29f}, {0.34f, 0.25f, 0.26f}, {1.10f, 0.34f, 0.14f},
+   0.44f, 1.80f, 1.0e-4f, 0.38f, 0.46f, 1.08f, 0.34f, 0.28f,
+   {1.02f, 0.98f, 0.99f}, {0.012f, 0.006f, 0.016f}},
+  {"COLD DAWN",   {-0.34f, 0.29f, -0.90f}, {3.00f, 2.40f, 2.20f}, {0.76f, 0.80f, 0.98f},
+   {0.10f, 0.17f, 0.38f}, {0.30f, 0.30f, 0.34f}, {0.56f, 0.34f, 0.36f},
+   0.45f, 1.70f, 1.0e-4f, 0.32f, 0.36f, 1.04f, 0.32f, 0.26f,
+   {0.98f, 0.99f, 1.03f}, {0.002f, 0.006f, 0.014f}},
+  {"STORMFRONT",  {0.46f, 0.64f, -0.62f}, {1.95f, 1.98f, 2.10f}, {0.60f, 0.66f, 0.76f},
+   {0.15f, 0.19f, 0.28f}, {0.32f, 0.32f, 0.34f}, {0.05f, 0.06f, 0.08f},
+   0.46f, 2.00f, 1.3e-4f, 0.68f, 0.22f, 0.96f, 0.38f, 0.30f,
+   {0.98f, 1.00f, 1.02f}, {0.002f, 0.006f, 0.010f}},
+};
+#define ATM_COUNT ((int)(sizeof ATM / sizeof ATM[0]))
+static const atm_t *atm_now(void) {
+  // A Murmur-style mix: map seeds step by a constant, which would otherwise walk
+  // the presets in lockstep.
+  uint32_t h = g_map_seed ^ 0x9e3779b9u;
+  h ^= h >> 16; h *= 0x85ebca6bu; h ^= h >> 13; h *= 0xc2b2ae35u; h ^= h >> 16;
+  return &ATM[h % (uint32_t)ATM_COUNT];
+}
+static v3 atm_sun(void) {
+  const atm_t *a = atm_now();
+  return v3_norm((v3){{a->sun[0], a->sun[1], a->sun[2]}});
+}
+
+typedef struct { GLint sun, col, hor, top, gnd, glow, exp, amb, fog, cloud; } atm_loc_t;
 
 static const char *WORLD_VS =
   "#version 330 core\n"
@@ -14418,7 +14464,16 @@ static const char *WORLD_FS =
   "    float sc = abs(n.x) > 0.5 ? vWorld.z : vWorld.x;\n"
   "    float sf = abs(fract(sc / 3.0) - 0.5) * 3.0;\n"
   "    float sm = 1.0 - smoothstep(0.02, 0.05, sf);\n"
-  "    alb *= 1.0 - 0.075 * det * sm;\n"
+  "    alb *= 1.0 - 0.22 * det * sm;\n"
+  // Weathering. Streaks run down each panel from its top, sand banks up against
+  // its foot, and broad patches break up the flat paint. All of it is anchored to
+  // the world and costs a few noise taps on structure pixels only.
+  "    float streak = vnoise2(vec2(sc * 2.7, vWorld.y * 0.22 + floor(sc / 3.0)));\n"
+  "    float patchy = vnoise2(vec2(sc, vWorld.y) * 0.62);\n"
+  "    alb *= 1.0 - 0.26 * smoothstep(0.54, 0.86, streak);\n"
+  "    alb *= 0.90 + 0.20 * patchy;\n"
+  "    float dust = 1.0 - smoothstep(0.0, 0.42 + 0.40 * patchy, vWorld.y);\n"
+  "    alb = mix(alb, vec3(0.47, 0.39, 0.29), dust * 0.36);\n"
   "    rough = mix(rough, 1.0, 0.5 * det * sm);\n"
   "  }\n"
   // --- THE FLOOR ----------------------------------------------------------
@@ -14531,7 +14586,9 @@ static const char *WORLD_FS =
   // are nearer 4 mm and 7 degrees; this is the same stylisation the figure
   // already carries (ANSUR II with the head at 1.05), and at 4 mm the field was
   // invisible at every range a player is ever at.
-  "      float amp = 0.0090 * uSurf.x * vis * (0.62 + 0.50 * rv);\n"
+  "      float amp = 0.0090 * uSurf.x * vis * (0.62 + 0.50 * rv)\n"
+  // A low sun rakes across every crest, so the same relief reads far stronger.
+  "                * clamp(SUN_DIR.y * SUN_DIR.y * 2.2, 0.16, 1.0);\n"
   "      vec2 gr = wd * (dh * amp / lam);\n"
   "      n = normalize(n - vec3(gr.x, 0.0, gr.y));\n"
   // The albedo term is deliberately weak. At 0.15 the crests carried the read on
@@ -14673,7 +14730,7 @@ static const char *WORLD_FS =
   // direct beam.
   "  vec3 amb = mix(SKY_GND * 0.44, mix(SKY_HOR, SKY_TOP, 0.45) * 0.40,\n"
   "                 n.y * 0.5 + 0.5);\n"
-  "  vec3 irr = amb * ao;\n"
+  "  vec3 irr = amb * ao * uAmb;\n"
   "  float fr = pow(1.0 - NoV, 5.0);\n"
   "  vec3 Fe = F0 + (max(vec3(1.0 - rough), F0) - F0) * fr;\n"
   // SIXTEEN SHADOW TAPS ONLY WHERE THE ANSWER IS READ. `sh` has exactly three
@@ -14791,7 +14848,7 @@ static const char *WORLD_FS =
   // Twice the aerial perspective. A figure at 30 m measured 4% off the wall
   // behind it, and no work on the figure buys contrast the ATMOSPHERE has to
   // provide: haze lifts and desaturates the wall, not the man in front of it.
-  "  col = mix(col, sky_env(-V, 0.0), 1.0 - exp(-d * d * 9.0e-5));\n"
+  "  col = mix(col, sky_env(-V, 0.0), 1.0 - exp(-d * d * uFog));\n"
   "  oCol = vec4(tonemap(col), 1.0);\n"
   "}\n";
 
@@ -14842,7 +14899,16 @@ static const char *SKY_FS =
   "float deck(vec2 p){\n"
   "  float w = vnoise2(p * 0.55) - 0.5;\n"
   "  vec2 q = p + vec2(w, -w * 0.6) * 1.15;\n"
-  "  return vnoise2(q) * 0.62 + vnoise2(q * 2.31) * 0.38;\n"
+  "  return vnoise2(q) * 0.56 + vnoise2(q * 2.31) * 0.30 + vnoise2(q * 5.3) * 0.14;\n"
+  "}\n"
+  // Height of a mountain range around the horizon. Sampling on the unit circle
+  // rather than on the azimuth angle leaves no seam behind the player.
+  "float ridge(vec2 az, float f, float off){\n"
+  "  vec2 p = az * f + off;\n"
+  "  float a = 1.0 - abs(vnoise2(p) * 2.0 - 1.0);\n"
+  "  float b = 1.0 - abs(vnoise2(p * 2.7 + 3.0) * 2.0 - 1.0);\n"
+  "  float c = 1.0 - abs(vnoise2(p * 7.1 + 9.0) * 2.0 - 1.0);\n"
+  "  return a * a * 0.62 + b * b * 0.28 + c * 0.10;\n"
   "}\n"
   "void main(){\n"
   "  vec3 dir = normalize(uFwd + uRight * (vNdc.x * uTan.x) + uUp * (vNdc.y * uTan.y));\n"
@@ -14852,20 +14918,38 @@ static const char *SKY_FS =
   "    float t = min(1.0 / max(up, 0.05), 14.0);\n"
   "    vec2 p = dir.xz * t * 1.05;\n"
   "    float n = deck(p);\n"
-  "    float cov = 0.26;\n"
-  "    float dens = smoothstep(1.0 - cov, 1.0 - cov + 0.20, n);\n"
-  "    dens *= smoothstep(0.03, 0.26, up);\n"
+  "    float cov = uCloud;\n"
+  "    float dens = smoothstep(1.0 - cov, 1.0 - cov + 0.24, n);\n"
+  "    dens *= smoothstep(0.03, 0.22, up);\n"
   "    if (dens > 0.002) {\n"
   // One offset sample TOWARD the sun, no march: where the deck is thick on the
   // sun side, this pixel is behind it and its underside goes grey. That single
   // extra tap is what gives a cloud a dark base instead of a uniform dimming.
-  "      float d2 = smoothstep(1.0 - cov, 1.0 - cov + 0.20,\n"
+  "      float d2 = smoothstep(1.0 - cov, 1.0 - cov + 0.24,\n"
   "                            deck(p + normalize(SUN_DIR.xz) * 0.42));\n"
   "      float litc = exp(-d2 * 1.9) * (1.0 - exp(-d2 * 2.0 - 0.55));\n"
   "      vec3 base = sky_env(dir, 0.0);\n"
-  "      c = mix(c, base * mix(1.34, 2.05, litc), dens * 0.80);\n"
+  "      float sd = max(dot(dir, SUN_DIR), 0.0);\n"
+  "      vec3 cc = base * mix(0.92, 1.70, litc) + SUN_COL * litc * (0.20 + 0.65 * sd * sd * sd);\n"
+  "      c = mix(c, cc, dens * 0.92);\n"
   "    }\n"
   "  }\n"
+  // Two mountain ranges beyond the arena walls, hazed by distance. The near one
+  // also closes the space below the horizon, which is what a raised camera sees.
+  "  vec2 az = normalize(dir.xz + vec2(1e-5));\n"
+  "  float aa = max(fwidth(up), 1e-4);\n"
+  "  vec3 hz = sky_env(normalize(vec3(dir.x, 0.012, dir.z)), 0.0);\n"
+  "  vec3 far = hz * mix(vec3(0.80), SKY_TOP * 1.9, 0.24);\n"
+  "  vec3 nr = hz * mix(vec3(0.52), SKY_GND * 1.4, 0.30);\n"
+  "  float h1 = 0.006 + 0.082 * ridge(az, 3.1, 7.0);\n"
+  "  c = mix(c, mix(hz, far, smoothstep(-0.01, h1, up)),\n"
+  "          1.0 - smoothstep(h1 - aa, h1 + aa, up));\n"
+  "  float h2 = -0.004 + 0.046 * ridge(az, 5.3, 41.0);\n"
+  "  c = mix(c, mix(hz * 0.86, nr, smoothstep(-0.025, h2, up)),\n"
+  "          1.0 - smoothstep(h2 - aa, h2 + aa, up));\n"
+  // Below the ranges a raised camera sees open desert running to their feet.
+  "  c = mix(c, mix(hz * 0.78, SKY_GND * 0.82, smoothstep(0.0, 0.26, -up)),\n"
+  "          smoothstep(-0.002, -0.022, up));\n"
   "  oCol = vec4(tonemap(c), 1.0);\n"
   "}\n";
 
@@ -14888,6 +14972,31 @@ static const char *BLUR_FS =
   "  c += texture(uTex, vUV + vec2(uPix.x, -uPix.y)).rgb;\n"
   "  c += texture(uTex, vUV - vec2(uPix.x, -uPix.y)).rgb;\n"
   "  oCol = vec4(c * 0.125, 1.0); }\n";   // exact, and three fdiv fewer
+
+// Post stack: the tonemapped frame is already display-referred, so bloom keys on
+// what survives near the top of the range. A soft knee keeps it from popping.
+static const char *BRIGHT_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uTex; uniform float uThresh, uGain; out vec4 oCol;\n"
+  "void main(){ vec3 c = texture(uTex, vUV).rgb;\n"
+  "  float l = max(c.r, max(c.g, c.b));\n"
+  "  float k = smoothstep(uThresh, uThresh + 0.22, l);\n"
+  "  oCol = vec4(c * k * uGain, 1.0); }\n";
+static const char *POST_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uTex;\n"
+  "uniform float uSat, uCon, uVig; uniform vec3 uTint, uLift;\n"
+  "out vec4 oCol;\n"
+  "void main(){\n"
+  "  vec3 c = texture(uTex, vUV).rgb;\n"
+  "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+  "  c = mix(vec3(l), c, uSat) * uTint;\n"
+  "  c = mix(c, c * c * (3.0 - 2.0 * c), uCon);\n"
+  "  c += uLift * (1.0 - l) * (1.0 - l);\n"
+  "  vec2 q = vUV - 0.5;\n"
+  "  c *= 1.0 - uVig * smoothstep(0.16, 0.74, dot(q, q) * 2.0);\n"
+  "  float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
+  "  oCol = vec4(c + (dth - 0.5) * 0.0039216, 1.0); }\n";
 
 static const char *HUD_VS =
   "#version 330 core\n"
@@ -15191,8 +15300,8 @@ static int g_hud_visible = 1;  // harness capture switch; menus remain visible
 // One map over the whole 48 m arena: 4096 px gives ~1.3 cm texels, which is fine
 // enough that a figure self-shadows its own arms.
 #define SHADOW_TEX    4096
-#define SHADOW_HALF   31.0f   // light-space half extent: arena + the height smear
-#define SHADOW_DEPTH  80.0f
+#define SHADOW_HALF   37.0f   // light-space half extent: arena + the height smear
+#define SHADOW_DEPTH  96.0f
 // World depth range. See the comment at the main projection: 1/near sets the
 // depth resolution, and sub-millimetre nesting on a figure is only stable if the
 // buffer can still separate it at across-the-arena distance.
@@ -15235,6 +15344,11 @@ typedef struct {
   GLuint present_fbo;               // frame destination: 0 on Windows, harness FBO on Linux
   GLuint msaa_fbo, msaa_rb[2];      // multisampled scene target, msaa_fbo 0 = MSAA off
   int    msaa_cfg, msaa_w, msaa_h;  // setting/size the MSAA target was built for
+  GLuint post_fbo, post_tex, prog_bright, prog_post;  // scene copy + post programs
+  int    post_w, post_h;
+  GLint  u_br_tex, u_br_thresh, u_br_gain, u_po_tex, u_po_sat, u_po_con,
+         u_po_vig, u_po_tint, u_po_lift;
+  atm_loc_t atm_loc[2];              // world, sky
   GLuint blur_fbo[2], blur_tex[2];  // quarter-res ping-pong: the frosted menu
   GLuint prog_blur;                 // dual-Kawase tap (see ui_menu_backdrop)
   GLint  u_blur_tex, u_blur_px;
@@ -15691,6 +15805,33 @@ static void renderer_init(int width, int height) {
   R.prog_hud = gl_program(HUD_VS, HUD_FS);
   R.prog_sky = gl_program(SKY_VS, SKY_FS);
   R.prog_depth = gl_program(DEPTH_VS, DEPTH_FS);
+  R.prog_bright = gl_program(BLUR_VS, BRIGHT_FS);
+  R.prog_post = gl_program(BLUR_VS, POST_FS);
+  R.u_br_tex = glGetUniformLocation(R.prog_bright, "uTex");
+  R.u_br_thresh = glGetUniformLocation(R.prog_bright, "uThresh");
+  R.u_po_tex = glGetUniformLocation(R.prog_post, "uTex");
+  R.u_br_gain = glGetUniformLocation(R.prog_bright, "uGain");
+  R.u_po_sat = glGetUniformLocation(R.prog_post, "uSat");
+  R.u_po_con = glGetUniformLocation(R.prog_post, "uCon");
+  R.u_po_vig = glGetUniformLocation(R.prog_post, "uVig");
+  R.u_po_tint = glGetUniformLocation(R.prog_post, "uTint");
+  R.u_po_lift = glGetUniformLocation(R.prog_post, "uLift");
+  {
+    GLuint pr[2] = {R.prog_world, R.prog_sky};
+    for (int i = 0; i < 2; i++) {
+      atm_loc_t *l = &R.atm_loc[i];
+      l->sun = glGetUniformLocation(pr[i], "SUN_DIR");
+      l->col = glGetUniformLocation(pr[i], "SUN_COL");
+      l->hor = glGetUniformLocation(pr[i], "SKY_HOR");
+      l->top = glGetUniformLocation(pr[i], "SKY_TOP");
+      l->gnd = glGetUniformLocation(pr[i], "SKY_GND");
+      l->glow = glGetUniformLocation(pr[i], "uGlow");
+      l->exp = glGetUniformLocation(pr[i], "EXPOSURE");
+      l->amb = glGetUniformLocation(pr[i], "uAmb");
+      l->fog = glGetUniformLocation(pr[i], "uFog");
+      l->cloud = glGetUniformLocation(pr[i], "uCloud");
+    }
+  }
   R.u_dvp = glGetUniformLocation(R.prog_depth, "uVP");
   R.u_lightvp = glGetUniformLocation(R.prog_world, "uLightVP");
   R.u_smtexel = glGetUniformLocation(R.prog_world, "uSmTexel");
@@ -17049,13 +17190,12 @@ static int ui_tile(const char *label, const char *sub, float x, float y,
   float chevw = ls > 1.6f ? ls * 7.0f : 0.0f;
   (void)danger;
   ui_panel(x, y, w, h, 0, hot ? 1.0f : 0.92f);
-  // NO BAR. The hover used to add a hairline down the leading edge on top of
-  // the wash, and a bar is a bar whatever colour it is — six of them appearing
-  // and vanishing under a moving cursor is the flicker the accent rules were
-  // removed to stop. What is left is the slab itself lifting a little, on its
-  // OWN chamfered path so the outline never moves, and the type brightening
-  // with it. That is the whole state.
-  if (hot) ui_panel_wash(x, y, w, h, 0.086f, 0.098f, 0.112f, 0.88f);
+  // The slab warms on focus, on its OWN chamfered path so the outline never
+  // moves, and the type brightens with it.
+  if (hot) ui_panel_wash(x, y, w, h, 0.150f, 0.094f, 0.046f, 0.90f);
+  // The brand's one accent: a bar on the tile's leading edge, lit on focus.
+  ui_rect(x + 3, y + 5, hot ? 2.4f : 1.2f, h - 10,
+          C_BLAZE, hot ? 1.0f : 0.34f);
   ui_text_fit(label, lx, ty, w - 26 - chevw, ls, hot ? TXT_BLACK : TXT_BOLD,
               ls * 1.05f, C4(C_BONE, hot ? 1.0f : 0.86f));
   if (chevw > 0)
@@ -17139,10 +17279,20 @@ static void ui_home(int click, float cx, float cy) {
              C4(0.010f, 0.014f, 0.024f, 0.62f));
 
   float rx = HOME_RAIL_X, rw = HOME_RAIL_W;
-  ui_text_ex("BLIND", rx, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BONE, 1));
   float sw = ui_text_width_tr("BLIND", 3.1f, 3.0f);
+  float dw = ui_text_width_tr("DROP", 3.1f, 3.0f);
+  ui_glow(rx + sw + 11 + dw * 0.5f, 41, 72, C_BLAZE, 0.13f);
+  ui_text_ex("BLIND", rx + 1.2f, 31.4f, 3.1f, TXT_BOLD, 3.0f, C4(0, 0, 0, 0.55f));
+  ui_text_ex("DROP", rx + sw + 12.2f, 31.4f, 3.1f, TXT_BOLD, 3.0f, C4(0, 0, 0, 0.55f));
+  ui_text_ex("BLIND", rx, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BONE, 1));
   ui_text_ex("DROP", rx + sw + 11, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BLAZE, 1));
-  ui_rect(rx, 58, rw, 1.2f, C_BONE, 0.30f);
+  ui_rect(rx, 58, rw, 1.0f, C_BONE, 0.22f);
+  ui_rect(rx, 57.4f, 46, 2.2f, C_BLAZE, 1.0f);
+  if (g_home) {
+    ui_text_ex("CONDITIONS", rx, 66, 0.72f, TXT_REG, 1.5f, C4(C_BONE, 0.62f));
+    float ndw = ui_text_width_tr("CONDITIONS", 0.72f, 1.5f);
+    ui_text_ex(atm_now()->name, rx + ndw + 9, 66, 0.72f, TXT_BOLD, 1.5f, C4(C_BLAZE, 0.95f));
+  }
 
   // The rail is bottom-anchored: the wordmark owns the top, the tiles sit where
   // the eye lands after it, and the block grows UPWARD when DEV TOOLS adds a
@@ -17668,6 +17818,8 @@ static void ui_menu(void) {
 
   if (ui_toggle("VSYNC", &g_cfg.vsync, px, pw, y, click, cx, cy))
     platform_vsync_changed();
+  y += 15;
+  ui_toggle("POST EFFECTS", &g_cfg.post_fx, px, pw, y, click, cx, cy);
   y += 15;
   ui_toggle("SHOW FPS", &g_cfg.show_fps, px, pw, y, click, cx, cy);
   y += 15;
@@ -20044,12 +20196,12 @@ static int frustum_sees_cap(const frustum_t *f, v3 a, v3 b, float r) {
 // because a figure launched off a wall must not generate a kilometre of capsule.
 #define SHADOW_CAST_MAX 24.0f
 static v3 shadow_foot(v3 c) {
-  const float ly = SUN_DIR_Y / sqrtf(SUN_DIR_X * SUN_DIR_X + SUN_DIR_Y * SUN_DIR_Y +
-                                     SUN_DIR_Z * SUN_DIR_Z);
+  v3 sn = atm_sun();
+  const float ly = sn.y;
   float t = (c.y + 0.5f) / ly;
   if (t < 0.0f) t = 0.0f;
   if (t > SHADOW_CAST_MAX) t = SHADOW_CAST_MAX;
-  v3 d = v3_norm((v3){{-SUN_DIR_X, -SUN_DIR_Y, -SUN_DIR_Z}});
+  v3 d = v3_scale(sn, -1.0f);
   return v3_add(c, v3_scale(d, t));
 }
 
@@ -26665,7 +26817,8 @@ static unsigned home_loop(void);
 static void home_stage(player_t *p) {
   if (!p) return;
   // SUN_DIR points TO the light; the yaw convention is fwd = (sin y, 0, -cos y).
-  float syaw = atan2f(SUN_DIR_X, -SUN_DIR_Z) - 0.55f;
+  v3 sn = atm_sun();
+  float syaw = atan2f(sn.x, -sn.z) - 0.55f;
   p->yaw = syaw;
   // ...AND IT STANDS HIM AT A CORNER, ON THE SUN SIDE OF IT. One shot leans out
   // of cover and fires down the lens, and a man leaning in open ground is a man
@@ -26677,7 +26830,7 @@ static void home_stage(player_t *p) {
   // alone puts him in its shadow half the time, and a figure in shadow against
   // a lit arena is a silhouette with a menu next to it. The open side has to
   // face the sun, which is what `sun` scores below — distance only breaks ties.
-  v3 sunh = v3_norm((v3){{SUN_DIR_X, 0.0f, SUN_DIR_Z}});
+  v3 sunh = v3_norm((v3){{sn.x, 0.0f, sn.z}});
   float best = -1e9f;
   v3 stand = p->pos;
   float syaw2 = syaw;
@@ -27144,8 +27297,116 @@ static int home_camera(cam_override_t *ov, const player_t *p, float alpha,
   return 1;
 }
 
+static void atm_upload(void) {
+  const atm_t *a = atm_now();
+  v3 sn = atm_sun();
+  GLuint pr[2] = {R.prog_world, R.prog_sky};
+  for (int i = 0; i < 2; i++) {
+    const atm_loc_t *l = &R.atm_loc[i];
+    glUseProgram(pr[i]);
+    glUniform3f(l->sun, sn.x, sn.y, sn.z);
+    glUniform3fv(l->col, 1, a->sun_col);
+    glUniform3fv(l->hor, 1, a->hor);
+    glUniform3fv(l->top, 1, a->top);
+    glUniform3fv(l->gnd, 1, a->gnd);
+    glUniform3fv(l->glow, 1, a->glow);
+    glUniform1f(l->exp, a->exposure);
+    glUniform1f(l->amb, a->amb);
+    glUniform1f(l->fog, a->fog);
+    glUniform1f(l->cloud, a->cloud);
+  }
+}
+
+// Full-resolution single-sample copy of the frame, rebuilt on size change.
+static void post_update(void) {
+  if (R.post_fbo && R.post_w == R.width && R.post_h == R.height) return;
+  if (R.post_fbo) {
+    glDeleteFramebuffers(1, &R.post_fbo);
+    glDeleteTextures(1, &R.post_tex);
+    R.post_fbo = 0;
+  }
+  R.post_w = R.width; R.post_h = R.height;
+  glGenTextures(1, &R.post_tex);
+  glBindTexture(GL_TEXTURE_2D, R.post_tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, R.width, R.height, 0, GL_RGBA,
+               GL_UNSIGNED_BYTE, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenFramebuffers(1, &R.post_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.post_fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                         R.post_tex, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    glDeleteFramebuffers(1, &R.post_fbo);
+    glDeleteTextures(1, &R.post_tex);
+    R.post_fbo = 0;  // an ungraded game rather than no game
+  }
+}
+
+// Bloom, grade and vignette, over the finished 3D frame and under the HUD.
+static void post_pass(void) {
+  blur_update();
+  post_update();
+  if (!R.post_fbo || !R.blur_fbo[0] || !R.blur_fbo[1]) return;
+  const atm_t *a = atm_now();
+  GLuint dst = R.msaa_fbo ? R.msaa_fbo : R.present_fbo;
+  msaa_resolve();
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.post_fbo);
+  glBlitFramebuffer(0, 0, R.width, R.height, 0, 0, R.width, R.height,
+                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+  glDisable(GL_BLEND);
+  glDisable(GL_DEPTH_TEST);
+  glDisable(GL_CULL_FACE);
+  glBindVertexArray(R.vao_sky);
+  glViewport(0, 0, R.blur_w, R.blur_h);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.blur_fbo[0]);
+  glUseProgram(R.prog_bright);
+  glUniform1i(R.u_br_tex, 0);
+  glUniform1f(R.u_br_thresh, 0.70f);
+  glUniform1f(R.u_br_gain, 1.0f);
+  glBindTexture(GL_TEXTURE_2D, R.post_tex);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  glUseProgram(R.prog_blur);
+  glUniform1i(R.u_blur_tex, 0);
+  int src = 0;
+  for (int i = 0; i < 6; i++) {
+    glBindFramebuffer(GL_FRAMEBUFFER, R.blur_fbo[1 - src]);
+    glBindTexture(GL_TEXTURE_2D, R.blur_tex[src]);
+    glUniform2f(R.u_blur_px, (float)(i + 1) / (float)R.blur_w,
+                (float)(i + 1) / (float)R.blur_h);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    src = 1 - src;
+  }
+  // Everything stays on texture unit 0 (see the loader's note), so the bloom is
+  // screen-blended into the copy first and the grade then reads one texture.
+  glViewport(0, 0, R.width, R.height);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.post_fbo);
+  glEnable(GL_BLEND);
+  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
+  glUseProgram(R.prog_bright);
+  glUniform1f(R.u_br_thresh, -1.0f);   // pass everything through
+  glUniform1f(R.u_br_gain, a->bloom);
+  glBindTexture(GL_TEXTURE_2D, R.blur_tex[src]);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+  glDisable(GL_BLEND);
+  glBindFramebuffer(GL_FRAMEBUFFER, dst);
+  glUseProgram(R.prog_post);
+  glUniform1i(R.u_po_tex, 0);
+  glUniform1f(R.u_po_sat, a->sat);
+  glUniform1f(R.u_po_con, a->con);
+  glUniform1f(R.u_po_vig, a->vig);
+  glUniform3fv(R.u_po_tint, 1, a->tint);
+  glUniform3fv(R.u_po_lift, 1, a->lift);
+  glBindTexture(GL_TEXTURE_2D, R.post_tex);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+
 static void render_frame(const player_t *p, float alpha, int fps,
                          const cam_override_t *ov) {
+  atm_upload();
   if (g_world_dirty) { world_upload(); g_world_dirty = 0; }
   msaa_update();
   glBindFramebuffer(GL_FRAMEBUFFER, R.msaa_fbo ? R.msaa_fbo : R.present_fbo);
@@ -27266,7 +27527,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // back along the sun that nothing in the level is behind the near plane.
   int shadow_on = R.sm_fbo != 0;
   if (shadow_on) {
-    v3 ld = v3_norm((v3){{-SUN_DIR_X, -SUN_DIR_Y, -SUN_DIR_Z}});  // -SUN_DIR, one copy
+    v3 ld = v3_scale(atm_sun(), -1.0f);
     v3 lc = v3_add((v3){{0, 1.6f, 0}}, v3_scale(ld, -SHADOW_DEPTH * 0.5f));
     R.light_vp = m4_mul(m4_ortho(SHADOW_HALF, SHADOW_HALF, 0.5f, SHADOW_DEPTH),
                         m4_look_dir(lc, ld));
@@ -27595,6 +27856,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
   }
 
   // HUD + menu: everything batches into one buffer, one draw call.
+  if (g_cfg.post_fx && !g_vmorb.on) post_pass();
   g_ui_time += g_ui_dt;   // presentation clock (pulses, glides); never sim-read
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
@@ -27780,35 +28042,33 @@ static void render_frame(const player_t *p, float alpha, int fps,
       }
     }
     if (in_play) {
-      // Ammo, bottom-right. Low ammo bleeds the numeral toward THREAT over
-      // the last quarter of the magazine: running dry mid-burst is the
-      // commonest way to run out and the counter is the one element that can
-      // say so BEFORE it happens.
+      // Ammo and health mirror each other in the bottom corners: a large figure
+      // over a thin meter. Both bleed toward THREAT as they run out, and an ink
+      // shadow keeps them readable on open sky and sand.
+      const float hud_mw = 92.0f, hud_bot = g_ui_vh - 13.0f;
       {
-        // NUMBERS ONLY. One small quiet figure in each corner — the weapon
-        // and magazine state is the count itself; anything more is furniture.
-        // An INK SHADOW, not a plate: the whisper stays, but measured 1.1:1
-        // contrast on open sky/sand does not. State speaks through COLOR
-        // alone (low -> THREAT, reload -> BLAZE pulse).
         float rxe = g_ui_vw - 16;
-        float by = g_ui_vh - 24;
         int mag = WPN_DEF[p->wp.cur].mag, cur = p->wp.ammo[p->wp.cur];
         float a01 = f_clamp((float)cur / (0.25f * (float)mag), 0.0f, 1.0f);
-        char am[16];
-        snprintf(am, sizeof am, "%d/%d", cur, mag);
+        char am[16], mg[16];
+        snprintf(am, sizeof am, "%d", cur);
+        snprintf(mg, sizeof mg, "/%d", mag);
         float cr = 0.941f + (1.000f - 0.941f) * (1 - a01);
         float cg = 0.957f + (0.294f - 0.957f) * (1 - a01);
         float cb2 = 0.973f + (0.227f - 0.973f) * (1 - a01);
-        float aa = 0.85f;
+        float aa = 0.96f;
         if (p->wp.reload_t > 0) {
           float bl = 0.6f + 0.4f * sinf(g_ui_time * 6.0f);
           cr = 1.000f; cg = 0.549f; cb2 = 0.102f; aa = bl;
         }
-        ui_text_sh(am, rxe - ui_text_width(am, 1.0f), by, 1.0f, TXT_REG, 0,
-                   C4(cr, cg, cb2, aa));
+        float mgw = ui_text_width(mg, 0.85f);
+        ui_text_sh(mg, rxe - mgw, hud_bot - 13.5f, 0.85f, TXT_REG, 0, C4(C_BONE, 0.60f));
+        ui_text_sh(am, rxe - mgw - 3 - ui_text_width(am, 1.9f), hud_bot - 19.5f, 1.9f,
+                   TXT_BOLD, 0, C4(cr, cg, cb2, aa));
+        float f01 = f_clamp((float)cur / (float)mag, 0.0f, 1.0f);
+        ui_rect(rxe - hud_mw, hud_bot, hud_mw, 2.4f, 0, 0, 0, 0.42f);
+        ui_rect(rxe - hud_mw * f01, hud_bot, hud_mw * f01, 2.4f, cr, cg, cb2, aa);
       }
-      // Health, bottom-left: the ammo figure's mirror — the same quiet
-      // numeral, bleeding toward THREAT as it falls and pulsing when low.
       {
         float hp01 = f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f);
         float tt = 1.0f - hp01;
@@ -27817,8 +28077,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
         float cb2 = 0.973f + (0.227f - 0.973f) * tt;
         char hps[8];
         snprintf(hps, sizeof hps, "%d", p->hp);
-        float pulse = p->hp <= 25 ? 0.55f + 0.30f * sinf(g_ui_time * 7.0f) : 0.85f;
-        ui_text_sh(hps, 16, g_ui_vh - 24, 1.0f, TXT_REG, 0, C4(cr, cg, cb2, pulse));
+        float pulse = p->hp <= 25 ? 0.65f + 0.30f * sinf(g_ui_time * 7.0f) : 0.96f;
+        ui_text_sh(hps, 16, hud_bot - 19.5f, 1.9f, TXT_BOLD, 0, C4(cr, cg, cb2, pulse));
+        ui_rect(16, hud_bot, hud_mw, 2.4f, 0, 0, 0, 0.42f);
+        ui_rect(16, hud_bot, hud_mw * hp01, 2.4f, cr, cg, cb2, pulse);
       }
       // Low-HP vignette: a breathing THREAT edge, gradient so it never
       // reads as a solid frame over the game.

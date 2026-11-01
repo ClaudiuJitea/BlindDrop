@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/hero.gif" alt="BlindDrop gameplay: bullet-time headshot, a slide under fire and a jump past the camera" width="832">
+  <img src="media/hero.png" alt="BlindDrop main menu over a live arena at golden hour" width="832">
 </p>
 
 <h1 align="center">BlindDrop</h1>
@@ -14,13 +14,14 @@
 </p>
 
 <p align="center">
-  <img src="media/fight.png" alt="Assault rifle firefight on a procedural sand arena" width="49%">
-  <img src="media/scope.png" alt="Sniper scope on a bot returning fire" width="49%">
+  <img src="media/fight.png" alt="Fight in an arena under the Ember Dusk sky" width="49%">
+  <img src="media/arena.png" alt="Arena at Golden Hour with mountains on the horizon" width="49%">
 </p>
 
 ## The game
 
 - **Dropped in blind.** Every match generates a new arena, along with its weapons, characters and sounds, so nobody starts with map knowledge.
+- **Five skies.** Every arena drops into High Noon, Golden Hour, Ember Dusk, Cold Dawn or Stormfront, with its own light, clouds and color grade. Everyone in a match sees the same one.
 - **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts, unlocks or attachments.
 - **Movement you can get good at.** Air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots that make solo worthwhile.** They hear you, remember you and push.
@@ -37,6 +38,12 @@ chmod +x ./blinddrop-linux-amd64
 ```
 
 Each release includes a `SHA256SUMS` file, which you can check with `sha256sum -c SHA256SUMS`.
+
+## Graphics options
+
+Settings > Video has anti-aliasing and **Post Effects**, which covers bloom, color grading and the
+vignette. If frame rate is a problem, try turning Post Effects off first. You can also set
+`post_fx 0` in `config.cfg`.
 
 ## Privacy
 
