@@ -1,16 +1,16 @@
-Arena FPS in one C file. No engine, no assets, everything procedural.
+BlindDrop is an arena FPS in one C file. No engine, no asset files: maps, weapons and sounds are all generated in code.
 
-This build contains no telemetry, no update check and no built-in server. It only opens a network connection when you join or host a multiplayer game.
+This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 
-**Windows:** download `skill-issue-windows-amd64.exe`. It is unsigned, so SmartScreen will warn you: choose **More info**, then **Run anyway**.
-
-**Linux:** download `skill-issue-linux-amd64`, then:
+**Linux:** download `blinddrop-linux-amd64`, then:
 
 ```sh
-chmod +x ./skill-issue-linux-amd64
-./skill-issue-linux-amd64
+chmod +x ./blinddrop-linux-amd64
+./blinddrop-linux-amd64
 ```
 
-Needs glibc 2.38 or newer: Ubuntu 23.10+, Debian 13+, Fedora 39+, Arch or SteamOS 3.7+.
+Needs an x86_64 system with glibc 2.38 or newer: Ubuntu 23.10+, Debian 13+, Fedora 39+, Arch or SteamOS 3.7+.
 
-Check your download with `sha256sum -c SHA256SUMS --ignore-missing`.
+Check your download with `sha256sum -c SHA256SUMS`.
+
+A Windows build is not available yet.

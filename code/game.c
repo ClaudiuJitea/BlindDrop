@@ -1,4 +1,4 @@
-// game.c — "skill-issue": minimalist low-poly tactical FPS prototype, Phase 1.
+// game.c — "BlindDrop": minimalist low-poly tactical FPS prototype, Phase 1.
 //
 // One C23 translation unit. TWO platform backends selected at compile time
 // (#ifdef _WIN32), and THREE mutually exclusive runtime modes selected at
@@ -119,7 +119,7 @@
 // Fatal errors must be visible even in the -mwindows build (no console).
 static void fatal(const char *msg) {
 #ifdef _WIN32
-  MessageBoxA(NULL, msg, "skill-issue", MB_ICONERROR);
+  MessageBoxA(NULL, msg, "BlindDrop", MB_ICONERROR);
 #endif
   fprintf(stderr, "%s\n", msg);
   exit(1);
@@ -1376,7 +1376,7 @@ static void padbind_key(char *out, size_t n, int i) {
 // config. A new key now reaches both by construction.
 static void config_emit(FILE *f, const config_t *c) {
   fprintf(f,
-    "# skill-issue config — auto-generated defaults, edit freely.\n"
+    "# BlindDrop config — auto-generated defaults, edit freely.\n"
     "# key tokens: a-z 0-9 space tab lshift lctrl | mouse1=left mouse2=right mouse3=middle\n"
     "#             mouse4/mouse5 = thumb buttons (back/forward)\n"
     "sense %.3f\n"
@@ -17139,9 +17139,9 @@ static void ui_home(int click, float cx, float cy) {
              C4(0.010f, 0.014f, 0.024f, 0.62f));
 
   float rx = HOME_RAIL_X, rw = HOME_RAIL_W;
-  ui_text_ex("SKILL", rx, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BONE, 1));
-  float sw = ui_text_width_tr("SKILL", 3.1f, 3.0f);
-  ui_text_ex("ISSUE", rx + sw + 11, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BLAZE, 1));
+  ui_text_ex("BLIND", rx, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BONE, 1));
+  float sw = ui_text_width_tr("BLIND", 3.1f, 3.0f);
+  ui_text_ex("DROP", rx + sw + 11, 30, 3.1f, TXT_BOLD, 3.0f, C4(C_BLAZE, 1));
   ui_rect(rx, 58, rw, 1.2f, C_BONE, 0.30f);
 
   // The rail is bottom-anchored: the wordmark owns the top, the tiles sit where
@@ -17268,7 +17268,7 @@ static void ui_home(int click, float cx, float cy) {
   // the rail at y 32 it was drawn ON TOP of the title: the plate spanned
   // x 179.3-242 by y 32-47, and the wordmark spans x 34-246.7 by y 30-51.7 (cap
   // height is scale * 7, so 3.1 is 21.7 units tall) — the chip covered the last
-  // letters of ISSUE. Two things decide where it goes instead. The band between
+  // letters of the name. Two things decide where it goes instead. The band between
   // the rule and the tiles is EMPTY by construction, because the tile block is
   // bottom-anchored at vh * 0.80 and grows upward (y 59.2 to ~127 at vh 360, and
   // more on a taller viewport, never less). And it is LEFT-aligned, because the
@@ -29793,7 +29793,7 @@ static int write_wav(const char *path, const float *buf, int frames) {
 static void usage(void) {
   // printf rather than puts so the two match-slider ranges come from the ONE
   // place that defines them — a hardcoded "1-20" here is the copy nobody greps.
-  printf("skill-issue — NO ARGUMENTS PLAYS THE GAME (X11 window).\n"
+  printf("BlindDrop — NO ARGUMENTS PLAYS THE GAME (X11 window).\n"
        "             --do/--script run the headless harness instead.\n"
        "  --connect H[:P]    join a server on host H (port P, else mp_port)\n"
        "                     while the local match runs until the first snapshot\n"
@@ -35675,8 +35675,8 @@ static int nat_window(int w, int h) {
   XFree(vi);
   if (!g_xwin) fatal("X11: cannot create window");
 
-  XStoreName(g_xdpy, g_xwin, "skill-issue");
-  XClassHint ch = {(char *)"skill-issue", (char *)"skill-issue"};
+  XStoreName(g_xdpy, g_xwin, "BlindDrop");
+  XClassHint ch = {(char *)"blinddrop", (char *)"BlindDrop"};
   XSetClassHint(g_xdpy, g_xwin, &ch);
   XSetWMProtocols(g_xdpy, g_xwin, &A_WM_DELETE, 1);
   long bypass = 1;   // "please turn the compositor off while I am visible"
@@ -36106,7 +36106,7 @@ static int native_main(int w, int h, uint32_t seed) {
   g_xdpy = XOpenDisplay(NULL);
   if (!g_xdpy) {
     fprintf(stderr,
-            "skill-issue: no X display (DISPLAY=%s).\n"
+            "BlindDrop: no X display (DISPLAY=%s).\n"
             "This binary is the game; run it from a desktop or gaming session.\n"
             "For the headless test harness use --do \"CMDS\" (see --help).\n",
             getenv("DISPLAY") ? getenv("DISPLAY") : "unset");
@@ -37259,7 +37259,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
     .hInstance = inst,
     .hCursor = LoadCursorA(NULL, IDC_ARROW),
     .hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH),
-    .lpszClassName = "skill_issue",
+    .lpszClassName = "blinddrop",
   };
   RegisterClassA(&wc);
 
@@ -37271,7 +37271,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   // its multi-second black screen; one off-screen pixel row keeps DWM in
   // plain composition. (Learned the hard way on an HDR display.)
   int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN) + 1;
-  g_hwnd = CreateWindowExA(0, wc.lpszClassName, "skill-issue", WS_POPUP,
+  g_hwnd = CreateWindowExA(0, wc.lpszClassName, "BlindDrop", WS_POPUP,
                            0, 0, sw, sh, NULL, NULL, inst, NULL);
   HDC dc = GetDC(g_hwnd);
 

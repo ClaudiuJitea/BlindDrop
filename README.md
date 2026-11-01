@@ -1,75 +1,71 @@
 <p align="center">
-  <img src="media/hero.gif" alt="bullet-time headshot, slide under fire, jump the lens, fire at the camera" width="832">
+  <img src="media/hero.gif" alt="BlindDrop gameplay: bullet-time headshot, a slide under fire and a jump past the camera" width="832">
 </p>
 
-<h1 align="center">skill-issue</h1>
+<h1 align="center">BlindDrop</h1>
 
 <p align="center">
-  <b>A free, private arena FPS. A new procedural map every match, two guns, 120 Hz servers.<br>
-  No telemetry, no auto-updates, no accounts.</b>
+  <b>New arena. No map knowledge. Just aim and movement.</b><br>
+  A free, private arena FPS with procedural maps and no telemetry.
 </p>
 
 <p align="center">
-  <img src="media/fight.png" alt="assault rifle firefight on a procedural sand arena" width="49%">
-  <img src="media/scope.png" alt="sniper scope on a bot returning fire" width="49%">
+  <a href="https://github.com/ClaudiuJitea/BlindDrop/releases/latest"><b>Download for Linux</b></a>
 </p>
 
-This is an independent, privacy-focused version of the original
-[skill-issue by codehamr](https://codehamr.com). It runs on its own, with no
-connection to the original project's servers or releases.
+<p align="center">
+  <img src="media/fight.png" alt="Assault rifle firefight on a procedural sand arena" width="49%">
+  <img src="media/scope.png" alt="Sniper scope on a bot returning fire" width="49%">
+</p>
 
 ## The game
 
-- **A new arena every match.** Map, weapons, characters and sounds are all generated from a seed at startup.
-- **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts or unlocks.
+- **Dropped in blind.** Every match generates a new arena, along with its weapons, characters and sounds, so nobody starts with map knowledge.
+- **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts, unlocks or attachments.
 - **Movement you can get good at.** Air control, a slide that carries speed, and `Q`/`E` lean.
-- **Bots that work solo.** They hear you, remember you and push.
-- **One file.** Plain C with no engine, compiled to a single native executable.
+- **Bots that make solo worthwhile.** They hear you, remember you and push.
+- **One small executable.** Plain C with no engine and no asset files.
 
-## Privacy and network behaviour
+## Download and run
 
-The game contacts nothing on its own.
+BlindDrop currently ships as a Linux x86_64 binary. It needs glibc 2.38 or newer: Ubuntu 23.10+,
+Debian 13+, Fedora 39+, Arch or SteamOS 3.7+.
 
-| | This version |
+```sh
+chmod +x ./blinddrop-linux-amd64
+./blinddrop-linux-amd64
+```
+
+Each release includes a `SHA256SUMS` file, which you can check with `sha256sum -c SHA256SUMS`.
+
+## Privacy
+
+BlindDrop contacts nothing on its own.
+
+| | |
 |---|---|
-| Telemetry | Removed from client and server |
-| Update check and self-replacement | Removed |
-| Built-in server address | Removed |
+| Telemetry | None |
+| Update checks | None |
+| Built-in servers | None |
 | Singleplayer network traffic | None |
 | Multiplayer network traffic | Only to the server you choose, over UDP |
 
-Multiplayer traffic is not encrypted, and the server you join sees your IP address and player
-name, so only join servers you trust.
-
-If you ran an older version, delete its `config.cfg`. It may still hold the old server address.
-
-## Build
-
-Linux needs gcc 14 or newer, plus the EGL, GL and X11 development headers.
-
-```sh
-make build/game-x86_64     # Linux
-make build/game.exe        # Windows, cross-compiled with MinGW-w64
-./build/game-x86_64
-```
-
-Prebuilt binaries, when published, are on the
-[releases page](https://github.com/ClaudiuJitea/skill-issue/releases) with a `SHA256SUMS` file.
-Windows binaries are unsigned, so SmartScreen will warn you.
+Multiplayer traffic is not encrypted, and any server you join sees your IP address and player
+name. Only join servers you trust.
 
 ## Multiplayer
 
-Anyone can host with a Linux build. The default UDP port is 31415.
+Anyone can host from a Linux build. The default port is UDP 31415.
 
 ```sh
-./build/game-x86_64 --server
+./blinddrop-linux-amd64 --server
 ```
 
-To join, either pass the address when you launch:
+To join, pass the address when you launch:
 
 ```sh
-./build/game-x86_64 --connect 192.168.1.50
-./build/game-x86_64 --connect example.com:31415
+./blinddrop-linux-amd64 --connect 192.168.1.50
+./blinddrop-linux-amd64 --connect example.com:31415
 ```
 
 Or add it to `config.cfg` next to the binary, and **Quick Join** in the menu will use it:
@@ -79,14 +75,29 @@ mp_host 192.168.1.50
 mp_port 31415
 ```
 
-Up to 8 humans can play per arena, and bots fill the empty slots.
+Up to 8 people can play in each arena, and bots fill the empty slots.
 
-## License
+## Build from source
 
-Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You can read, change and
-share this software for noncommercial purposes. Commercial use is not permitted.
+You need gcc 14 or newer, make, and the EGL, GL and X11 development headers.
+
+```sh
+make build/game-x86_64
+./build/game-x86_64
+```
+
+To build the same redistributable binary as a release, which needs Docker:
+
+```sh
+make dist-linux RELEASE_VERSION=v0.1.0
+```
+
+## Credits and license
+
+BlindDrop is an independent modified version of
+[skill-issue by codehamr](https://codehamr.com). It is not affiliated with or endorsed by codehamr.
+
+It is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You can read, change
+and share it for noncommercial purposes. Commercial use is not permitted.
 
 Required Notice: Copyright (c) 2026 codehamr (https://codehamr.com)
-
-This version is a modified work based on that software. It is not affiliated with or endorsed by
-codehamr.

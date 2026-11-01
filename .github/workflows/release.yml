@@ -1,4 +1,5 @@
-# Every push and pull request builds both binaries and runs the proof gate.
+# Every push and pull request builds the game for Linux and Windows and runs the
+# proof gate. Releases currently ship the Linux binary only.
 # A release is published ONLY when a v* tag is pushed, so nothing reaches
 # players by accident. The game has no updater: players download a release
 # themselves and can check it against SHA256SUMS.
@@ -40,8 +41,7 @@ jobs:
           V=dev
           if [ "$REF_TYPE" = tag ]; then V="$REF_NAME"; fi
           make all BUILD_VERSION="$V" BUILD_COMMIT="$(echo "$SHA" | cut -c1-7)"
-          mv build/game-x86_64 skill-issue-linux-amd64
-          mv build/game.exe    skill-issue-windows-amd64.exe
+          mv build/game-x86_64 blinddrop-linux-amd64
 
       # Warning gate WITHOUT LTO (-flto swallows -Wformat-truncation), then the
       # self-contained proof gate. The build that ships is proved.
@@ -49,10 +49,10 @@ jobs:
         run: |
           gcc -std=c23 -O2 -Wall -Wextra -Werror -c code/game.c -o /dev/null
           x86_64-w64-mingw32-gcc -std=c23 -O2 -Wall -Wextra -Werror -c code/game.c -o /dev/null
-          ./tools/ci-proofs.sh ./skill-issue-linux-amd64
+          ./tools/ci-proofs.sh ./blinddrop-linux-amd64
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with: { name: assets, path: skill-issue-*, if-no-files-found: error }
+        with: { name: assets, path: blinddrop-*, if-no-files-found: error }
 
   release:
     needs: build
@@ -68,7 +68,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
         run: |
-          chmod +x dist/skill-issue-linux-*
-          ( cd dist && sha256sum skill-issue-* > SHA256SUMS )
+          chmod +x dist/blinddrop-linux-*
+          ( cd dist && sha256sum blinddrop-* > SHA256SUMS )
           gh release create "$TAG" dist/* --verify-tag --title "$TAG" \
             --notes-file .github/release-body.md

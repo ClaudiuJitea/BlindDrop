@@ -147,8 +147,8 @@ deploy: $(DEPLOY_BIN)
 # ---------------------------------------------------------------------------
 # Dedicated server on your own VPS — two commands, no systemd. These comments are
 # the ops authority; there is no separate server document.
-#   server-deploy      build + ship + (re)start ~/skill-issue/game, prove loopback
-#   server-delete      kill the process group and remove ~/skill-issue entirely
+#   server-deploy      build + ship + (re)start ~/blinddrop/game, prove loopback
+#   server-delete      kill the process group and remove ~/blinddrop entirely
 #
 # These targets are the maintainer's own deploy path — the game itself needs
 # none of them: any Linux copy runs a server with `./game --server`. `.env` in
@@ -165,7 +165,7 @@ deploy: $(DEPLOY_BIN)
 # and game down together). The wrapper (root) opens game.log BEFORE setpriv,
 # so the game runs as `nobody` (it parses hostile UDP from the internet) yet
 # writes a root-owned log through the inherited fd. Crash => restart in 2 s.
-# ~/skill-issue lives under /root (0700) and that does NOT block nobody:
+# ~/blinddrop lives under /root (0700) and that does NOT block nobody:
 # setpriv execs ./game through the inherited CWD dentry — path resolution
 # never walks /root. The dir itself is chmod 755 explicitly (umask-proof)
 # and the game opens no other path (--config /dev/null). Do not "fix" this
@@ -176,7 +176,7 @@ deploy: $(DEPLOY_BIN)
 # `Terminated`).
 -include .env
 SERVER_HOST ?= vps
-SERVER_DIR  ?= skill-issue
+SERVER_DIR  ?= blinddrop
 SERVER_PORT ?= 31415
 GAME_LOBBIES    ?= 16
 GAME_CAP_BOTS   ?= 1
@@ -283,20 +283,9 @@ SERVER_PIDKILL = if [ -f "$$D/game.pid" ]; then \
 # write into the destination inode — ETXTBSY against a still-running server.
 # `kill -s TERM` (not `-TERM`) because dash rejects `kill -TERM -- -N`: "POSIX
 # sh" has to mean dash-clean. `rc=$$?` is captured BEFORE the `$$(date …)`
-# substitution, which clobbers `$$?` under bash-as-sh. The `systemctl stop
-# "game@*"` line is a TRANSITION guard: the legacy systemd stack keeps port
-# 31415 with Restart=always, so without it the new wrapper's game fails bind
-# and respawn-loops forever while the loopback probe greps CONNECTED against
-# the OLD server — green, and completely wrong. `disable` belongs beside it:
-# `stop` alone leaves the units ENABLED, so the next VPS reboot resurrects the
-# old server on 31415. And the explicit `rm -f` of the wants-symlink belongs
-# beside THAT: `disable` takes unit NAMES and its glob expansion is not
-# guaranteed, so if it refuses "game@*" the fix is a silent no-op — and the
-# symlink in multi-user.target.wants is the thing that actually survives a
-# reboot. server-delete has always removed it explicitly; the deploy now does
-# too. The crash-loop gate after the probe is the second half of that same
-# defence. The CRLF .env guard and the warning-level public-path probe are
-# carried over from the systemd Makefile: the provider firewall is a SECOND
+# substitution, which clobbers `$$?` under bash-as-sh.
+# The crash-loop gate follows the loopback probe. The warning-level public-path
+# probe stays because the provider firewall is a SECOND
 # firewall a loopback probe cannot see, and qemu-x86_64-static only exists on
 # an aarch64 host (hence `command -v`).
 # EVERY failure branch prints `tail -5 game.log`, because the log is two lines
@@ -319,9 +308,6 @@ server-deploy: build/game-x86_64
 	@ssh -n $(SERVER_HOST) 'mkdir -p $(SERVER_DIR) && chmod 755 $(SERVER_DIR)'
 	@scp -q $< $(SERVER_HOST):$(SERVER_DIR)/game.new
 	@ssh -n $(SERVER_HOST) 'set -e; D="$$HOME/$(SERVER_DIR)"; $(SERVER_MATCH) \
-	  systemctl stop "game@*" 2>/dev/null || true; \
-	  systemctl disable "game@*" 2>/dev/null || true; \
-	  rm -f /etc/systemd/system/multi-user.target.wants/game@*.service 2>/dev/null || true; \
 	  $(SERVER_PIDKILL) \
 	  sleep 1; $(SERVER_SWEEP) rm -f "$$D/game.pid"; \
 	  mv -f "$$D/game.new" "$$D/game"; chmod 755 "$$D/game"; \
@@ -357,56 +343,38 @@ server-deploy: build/game-x86_64
 # Purge. No `cd` anywhere — srv_is_ours matches by cwd and would flag its own
 # shell from inside the dir. `$${p##*/}` is UNESCAPED here (recipe context; the
 # `\#\#` form belongs only in the variable assignment above).
-#
-# The LEGACY systemd block is ORDERED, and the order was paid for on the live
-# box (2026-08-19). It used to open with `systemctl disable --now "game@*"` and
-# then delete the unit file, and the purge printed a clean line while the old
-# server was STILL RUNNING: pid 795, `exe -> /opt/skill-issue/game (deleted)`,
-# cwd `/`, still bound to UDP 31415, with `systemctl list-units --all "game*"`
-# reporting `game@31415.service  not-found  active running` — the unit FILE had
-# been removed while the service ran on, so systemd kept the runtime unit and
-# could no longer resolve its definition. Cause: `disable` takes unit NAMES and
-# its glob expansion is NOT guaranteed, and the `2>/dev/null || true` swallowed
-# the refusal. `stop` DOES match loaded units — which is why server-deploy's
-# transition guard (stop first) cleaned the orphan up a minute later. So the
-# order here is fixed and load-bearing: STOP, then disable, then remove the
-# unit file and the wants-symlink, then daemon-reload, then remove the payload
-# directories. (`--now` is gone from `disable` for the same reason: it only
-# runs if the glob resolved, so it was never the thing doing the stopping.)
-# These lines STAY now that the migration is done — the old Makefile is still
-# in git history, so a future checkout can recreate that stack.
-#
-# The re-scan is TWO questions, because one predicate cannot answer both eras.
-# `srv_is_ours` covers the NEW install and is the same predicate the sweep
-# uses, so the proof cannot drift from what was killed (exe-only it was
-# structurally blind to the wrapper, whose exe is /usr/bin/dash, and it printed
-# a clean line while an immortal respawner was alive). It says NOTHING about a
-# legacy survivor: that orphan's exe is /opt/skill-issue/game and its cwd is
-# `/`, so neither half of the predicate matches $$HOME/$(SERVER_DIR) — exactly
-# why the live purge read clean while a process held the port. The second,
-# exe-only check on /opt/skill-issue/game* closes that gap, and costs one
-# readlink on the pids the first question already rejected.
 server-delete:
 	@$(SERVER_DIR_GUARD)
 	@ssh -n $(SERVER_HOST) 'D="$$HOME/$(SERVER_DIR)"; $(SERVER_MATCH) \
 	  $(SERVER_PIDKILL) \
 	  sleep 1; $(SERVER_SWEEP) \
 	  rm -rf "$$D"; \
-	  systemctl stop "game@*" 2>/dev/null || true; \
-	  systemctl disable "game@*" 2>/dev/null || true; \
-	  rm -f /etc/systemd/system/game@.service \
-	        /etc/systemd/system/multi-user.target.wants/game@*.service; \
-	  systemctl daemon-reload 2>/dev/null || true; \
-	  rm -rf /opt/skill-issue /etc/skill-issue; \
-	  left=""; leg=""; for p in /proc/[0-9]*; do q="$${p##*/}"; \
-	    if srv_is_ours "$$q"; then left="$$left $$q"; \
-	    else le="$$(readlink "$$p/exe" 2>/dev/null)" || le=""; \
-	      case "$$le" in /opt/skill-issue/game*) leg="$$leg $$q";; esac; fi; done; \
-	  echo "purged ~/$(SERVER_DIR) (+ legacy systemd) on $(SERVER_HOST)$${left:+ (STILL RUNNING:$$left)}$${leg:+ (LEGACY STILL RUNNING:$$leg)}"'
+	  left=""; for p in /proc/[0-9]*; do q="$${p##*/}"; \
+	    if srv_is_ours "$$q"; then left="$$left $$q"; fi; done; \
+	  echo "purged ~/$(SERVER_DIR) on $(SERVER_HOST)$${left:+ (STILL RUNNING:$$left)}"'
 
 # build/ carries a Dropbox-ignore NTFS attribute on the folder itself —
 # delete its contents, never the folder, or the attribute is lost.
 clean:
 	rm -f build/game build/game.exe build/game-asan build/game-x86_64 build/game.res.o
+	rm -rf dist
 
-.PHONY: all clean deploy server-deploy server-delete
+# The redistributable Linux binary. Built in the same pinned image CI uses, not
+# on the host: a binary inherits the glibc floor of the machine that built it,
+# so a rolling-release host would produce one that refuses to start elsewhere.
+RELEASE_IMAGE := debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
+RELEASE_VERSION ?= dev
+dist-linux:
+	mkdir -p dist
+	docker run --rm -v "$(CURDIR):/src:ro" -v "$(CURDIR)/dist:/out" $(RELEASE_IMAGE) sh -ec '\
+	  apt-get update -qq; \
+	  apt-get install -y -qq --no-install-recommends build-essential \
+	    libegl-dev libgl-dev libx11-dev >/dev/null; \
+	  cp -r /src /tmp/w; cd /tmp/w; rm -rf build; \
+	  make build/game-x86_64 BUILD_VERSION="$(RELEASE_VERSION)" \
+	    BUILD_COMMIT="$(shell git rev-parse --short=7 HEAD)"; \
+	  install -m 755 build/game-x86_64 /out/blinddrop-linux-amd64; \
+	  chown $(shell id -u):$(shell id -g) /out/blinddrop-linux-amd64'
+	cd dist && sha256sum blinddrop-linux-amd64 > SHA256SUMS
+
+.PHONY: all clean deploy dist-linux server-deploy server-delete
