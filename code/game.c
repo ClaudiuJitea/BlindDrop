@@ -26614,7 +26614,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
       for (int h = 0; h < 2; h++) {
         v3 wr = h == 0 ? v3_add(VP(0.058f, -0.100f, -0.098f), ro)
-                       : v3_add(VP(-0.060f, -0.112f, 0.262f), lo);
+                       : v3_add(VP(-0.070f, -0.078f, 0.262f), lo);
         v3 ax = v3_norm(h == 0 ? VD(0.40f, -0.62f, -0.68f) : VD(-0.48f, -0.80f, -0.34f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
