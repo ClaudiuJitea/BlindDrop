@@ -5,17 +5,8 @@
 <h1 align="center">skill-issue</h1>
 
 <p align="center">
-  <b>Free arena FPS. A new procedural map every match, two guns, 120 Hz servers.<br>
-  No SBMM, no unlocks, no attachments. If you lose: skill issue.</b>
-</p>
-
-<p align="center">
-  <a href="https://github.com/codehamr/skill-issue/releases/latest/download/skill-issue-windows-amd64.exe"><b>Download for Windows</b></a>
-  &nbsp;·&nbsp;
-  <a href="https://github.com/codehamr/skill-issue/releases/latest/download/skill-issue-linux-amd64"><b>Linux / Steam Deck</b></a><br>
-  One file, about a megabyte. No installer, no launcher, no account.<br>
-  <sub>Windows will warn (new, unsigned): More info, then Run anyway. Linux: <code>chmod +x</code> it first.
-  Details on the <a href="https://github.com/codehamr/skill-issue/releases/latest">release page</a>.</sub>
+  <b>A free, private arena FPS. A new procedural map every match, two guns, 120 Hz servers.<br>
+  No telemetry, no auto-updates, no accounts.</b>
 </p>
 
 <p align="center">
@@ -23,68 +14,79 @@
   <img src="media/scope.png" alt="sniper scope on a bot returning fire" width="49%">
 </p>
 
+This is an independent, privacy-focused version of the original
+[skill-issue by codehamr](https://codehamr.com). It runs on its own, with no
+connection to the original project's servers or releases.
+
 ## The game
 
-**A new arena every match.** Map, weapons, characters, sounds: everything is generated
-from a seed at startup. Nobody has map knowledge. What carries over is aim and movement.
+- **A new arena every match.** Map, weapons, characters and sounds are all generated from a seed at startup.
+- **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts or unlocks.
+- **Movement you can get good at.** Air control, a slide that carries speed, and `Q`/`E` lean.
+- **Bots that work solo.** They hear you, remember you and push.
+- **One file.** Plain C with no engine, compiled to a single native executable.
 
-**Two guns, everyone gets both.** A hitscan rifle and a bolt sniper that one-shots to the
-body. No loadouts, no battle pass. Rounds cross up to 1.2 m of material at *full* damage, so
-most cover in the arena is a timing problem rather than a wall — and anything thicker still
-has corners. The arena's outer shell is the one thing nothing goes through.
+## Privacy and network behaviour
 
-**Movement you can get good at.** Air control to carve a jump, a slide that carries real
-speed out of a corner, `Q`/`E` lean to peek with your eye instead of your whole body.
+The game contacts nothing on its own.
 
-**No SBMM. Ever.** Mixed lobbies. You will run into someone better than you. If you get
-farmed, you got farmed. The title of the game is the diagnosis.
+| | This version |
+|---|---|
+| Telemetry | Removed from client and server |
+| Update check and self-replacement | Removed |
+| Built-in server address | Removed |
+| Singleplayer network traffic | None |
+| Multiplayer network traffic | Only to the server you choose, over UDP |
 
-**Instant.** There is a live firefight behind the start screen while you read it. Two
-presses — SINGLEPLAYER, then START MATCH — and you are shooting, keyboard or pad. The bots
-hear you, remember you and push, so it works solo too.
+Multiplayer traffic is not encrypted, and the server you join sees your IP address and player
+name, so only join servers you trust.
+
+If you ran an older version, delete its `config.cfg`. It may still hold the old server address.
+
+## Build
+
+Linux needs gcc 14 or newer, plus the EGL, GL and X11 development headers.
+
+```sh
+make build/game-x86_64     # Linux
+make build/game.exe        # Windows, cross-compiled with MinGW-w64
+./build/game-x86_64
+```
+
+Prebuilt binaries, when published, are on the
+[releases page](https://github.com/ClaudiuJitea/skill-issue/releases) with a `SHA256SUMS` file.
+Windows binaries are unsigned, so SmartScreen will warn you.
 
 ## Multiplayer
 
-The dedicated server is the same file with graphics and sound stripped out, running the
-same simulation at the full 120 Hz tick, with lag compensation that rewinds the world to
-the tick you actually shot on. Up to 8 humans per arena — my own Quick Join box is set
-lower while it is small — and bots fill the empty slots without ever being disguised as
-humans.
+Anyone can host with a Linux build. The default UDP port is 31415.
 
-Quick Join lands on a small server I run and pay for myself, so no promises it stays
-smooth if a crowd shows up. Which is fine: anyone can host with any Linux copy.
+```sh
+./build/game-x86_64 --server
+```
 
-## Why this exists
+To join, either pass the address when you launch:
 
-Fun project by a single dev who grew up on Quake 3 and is done with SBMM, DLC and
-microtransactions. I wanted to know how clean and fast a skill-based shooter gets when
-you drop all of that: no engine, no bloat, plain C compiled to one native executable that
-runs fast on basically anything. If a real crowd forms and wants friend join and stable
-servers, a fun Steam release is on the table. Until then: do not take my little
-experiment too seriously, have fun with it.
+```sh
+./build/game-x86_64 --connect 192.168.1.50
+./build/game-x86_64 --connect example.com:31415
+```
 
-## Usage ping
+Or add it to `config.cfg` next to the binary, and **Quick Join** in the menu will use it:
 
-The game pings my server about once a minute, and this is the whole packet: an install id
-(a number rolled from the clock when the game first ran and kept in `config.cfg` — not
-anything about your machine), whether the ping is the first of the session or a later one,
-which mode you are in, seconds played, Windows or Linux, and the build version. No name,
-no hardware details, no addresses stored. `telemetry 0` in `config.cfg` opts out.
+```
+mp_host 192.168.1.50
+mp_port 31415
+```
 
-It also checks GitHub for a newer build. On the start screen — before you are in a match —
-it installs it by itself and restarts, showing `UPDATING...` for a moment. Once a session is
-running it never does that: from then on the update is a row in the menu that you press. The
-binary it replaced is left beside the new one with a `.old` suffix, so a bad build is one rename
-away from being undone. `update_check 0` turns the whole thing off.
+Up to 8 humans can play per arena, and bots fill the empty slots.
 
 ## License
 
-Free for private use: read it, change it, share it. Just no commercial use (PolyForm
-Noncommercial 1.0.0, [source available](LICENSE)). © 2026
-[codehamr.com](https://codehamr.com), who also builds
-[codehamr](https://github.com/codehamr/codehamr), a local-first open source LLM terminal
-coding agent.
+Licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE). You can read, change and
+share this software for noncommercial purposes. Commercial use is not permitted.
 
----
+Required Notice: Copyright (c) 2026 codehamr (https://codehamr.com)
 
-<p align="center"><b>Star it if it earned one.</b></p>
+This version is a modified work based on that software. It is not affiliated with or endorsed by
+codehamr.

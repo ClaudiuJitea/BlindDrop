@@ -45,11 +45,7 @@ OPT      := -O3 -ffast-math -funroll-loops -flto=auto
 # (the CPU cost of this game is the scalar figure build).
 WIN_ARCH := -march=x86-64-v2
 
-# The version the auto-updater compares against. Without an
-# explicit BUILD_VERSION the build is a developer build and NEVER updates —
-# that is the default and not the special case, so a local build can never
-# clobber itself with a release. BUILD_COMMIT is the only re-cut confirmation
-# a player has (two different binaries can ship under the same date tag).
+# Shown at the foot of the menu and in the server log. Purely informational.
 BUILD_VERSION ?= dev
 BUILD_COMMIT  ?= unknown
 VERFLAG       := -DBUILD_VERSION='"$(BUILD_VERSION)"' -DBUILD_COMMIT='"$(BUILD_COMMIT)"'
@@ -57,7 +53,7 @@ VERFLAG       := -DBUILD_VERSION='"$(BUILD_VERSION)"' -DBUILD_COMMIT='"$(BUILD_C
 WIN_CC     := x86_64-w64-mingw32-gcc
 WIN_RES    := x86_64-w64-mingw32-windres
 WIN_CFLAGS := -std=c23 $(OPT) $(WIN_ARCH) -Wall -Wextra -Wshadow -mwindows
-WIN_LIBS   := -static -lgdi32 -luser32 -lopengl32 -lwinmm -lole32 -lwinhttp -lws2_32 -lm
+WIN_LIBS   := -static -lgdi32 -luser32 -lopengl32 -lwinmm -lole32 -lws2_32 -lm
 
 # -fno-tree-vectorize is a DEPENDENCY decision, not an optimization one
 # (measured 2026-08-08): under -ffast-math the auto-vectorizer
@@ -70,7 +66,11 @@ WIN_LIBS   := -static -lgdi32 -luser32 -lopengl32 -lwinmm -lole32 -lwinhttp -lws
 # which is why the flag predates the arm64 release's removal and outlives it.
 # Linux only — Windows has no libmvec and keeps WIN_ARCH above.
 LIN_CC     := gcc
-LIN_CFLAGS := -std=c23 $(OPT) -fno-tree-vectorize -Wall -Wextra -Wshadow
+# Exploit hardening for the Linux binary: it parses hostile UDP as a --server.
+# Stack canaries, fortified libc calls, read-only GOT, position independence.
+LIN_HARDEN := -fstack-protector-strong -D_FORTIFY_SOURCE=3 -fPIE -pie \
+              -Wl,-z,relro,-z,now,-z,noexecstack
+LIN_CFLAGS := -std=c23 $(OPT) -fno-tree-vectorize -Wall -Wextra -Wshadow $(LIN_HARDEN)
 LIN_LIBS   := -lEGL -lGL -lX11 -lm
 
 # The shippable Linux binary is x86_64. On an x86_64 host the native gcc IS
@@ -123,9 +123,9 @@ build/game-asan: code/game.c
 	$(LIN_CC) -std=c23 -O1 -g -fsanitize=address,undefined,float-cast-overflow,float-divide-by-zero -Wall -Wextra $< -o $@ $(LIN_LIBS)
 
 # Copy the SHIPPABLE Linux build to the handheld's home directory and make it
-# runnable there. `handheld` is an ssh config Host entry, which comes from the
-# Windows host's ~/.ssh mounted by .devcontainer/devcontainer.json — so the key
-# and the address live in one place instead of being repeated here.
+# runnable there. `handheld` is an ssh config Host entry on the machine running
+# make, so the key and the address live in one place instead of being repeated
+# here. Run it from the host: the devcontainer deliberately has no ssh keys.
 #
 # The guard reads the ELF machine field (0x3e00 LE = x86_64) before shipping:
 # shipping a container-native build from the aarch64 devcontainer once put an
@@ -145,11 +145,9 @@ deploy: $(DEPLOY_BIN)
 	ssh $(DEPLOY_HOST) chmod +x game
 
 # ---------------------------------------------------------------------------
-# Dedicated server on the VPS — four commands, no systemd. These comments are
+# Dedicated server on your own VPS — two commands, no systemd. These comments are
 # the ops authority; there is no separate server document.
 #   server-deploy      build + ship + (re)start ~/skill-issue/game, prove loopback
-#   server-logs        render game.log into last-24h / all-time usage stats
-#   server-logs-reset  truncate game.log IN PLACE (never rm — see the target)
 #   server-delete      kill the process group and remove ~/skill-issue entirely
 #
 # These targets are the maintainer's own deploy path — the game itself needs
@@ -159,8 +157,8 @@ deploy: $(DEPLOY_BIN)
 # anywhere — the ssh identity is the SERVER_HOST Host entry in the mounted
 # ~/.ssh/config, exactly like DEPLOY_HOST above. That is also why the server
 # deploy is NOT a GitHub job: a runner would need host and key as repo secrets,
-# i.e. a second copy of .env. release.yml ships the CLIENT, .env + this
-# Makefile ship the SERVER, and .git/hooks/post-commit fires the second one.
+# i.e. a second copy of .env. release.yml ships the CLIENT; .env + this
+# Makefile ship the SERVER, by hand.
 #
 # Process model: setsid + a sh respawn loop, pid in game.pid (== the process
 # GROUP id, since setsid makes pid=pgid=sid — one negative kill takes wrapper
@@ -173,11 +171,9 @@ deploy: $(DEPLOY_BIN)
 # and the game opens no other path (--config /dev/null). Do not "fix" this
 # to /opt — the isolation-in-one-folder is the design.
 # CONSCIOUS TRADE vs systemd: a VPS reboot needs a `make server-deploy`.
-# game.log is APPEND across deploys (the stats history) — only server-delete
-# removes it. The wrapper shell also drops its own job-status words into
-# game.log (`Killed`, `Terminated`); that is harmless because
-# tools/server-report.awk ignores every line that does not start with a unix
-# timestamp.
+# game.log is APPEND across deploys — only server-delete removes it. The
+# wrapper shell also drops its own job-status words into game.log (`Killed`,
+# `Terminated`).
 -include .env
 SERVER_HOST ?= vps
 SERVER_DIR  ?= skill-issue
@@ -408,46 +404,9 @@ server-delete:
 	      case "$$le" in /opt/skill-issue/game*) leg="$$leg $$q";; esac; fi; done; \
 	  echo "purged ~/$(SERVER_DIR) (+ legacy systemd) on $(SERVER_HOST)$${left:+ (STILL RUNNING:$$left)}$${leg:+ (LEGACY STILL RUNNING:$$leg)}"'
 
-# The first line of the pipe is the byte size — tools/server-report.awk treats a
-# lone-number first record as the size header, everything after it as log lines.
-# No log yet => empty pipe => the awk prints its "no game.log yet" notice.
-# The `2>/dev/null` PRECEDES `wc -c <` on purpose: redirections apply left to
-# right, and with the stderr redirect last the shell's own "cannot open"
-# message for a missing log escapes to the terminal before stderr is silenced.
-server-logs:
-	@ssh -n $(SERVER_HOST) '2>/dev/null wc -c < $(SERVER_DIR)/game.log; \
-	    cat $(SERVER_DIR)/game.log 2>/dev/null' \
-	  | awk -v now="$$(date +%s)" -f tools/server-report.awk
-
-# TRUNCATE IN PLACE, NEVER `rm`. The respawn wrapper holds this exact file open
-# with `>> game.log` (see server-deploy), so removing it leaves the server
-# writing to a deleted inode: every line until the next server-deploy goes
-# nowhere, and `make server-logs` then reports an empty log that is not empty
-# but UNREACHABLE — the one failure mode a reset must not be able to cause.
-# `: > file` keeps the inode and O_APPEND simply continues at 0.
-#
-# It prints the byte count it cleared, because a reset that says nothing is
-# indistinguishable from an ssh that never landed; and it names what is lost,
-# because the report's "all time" column is all-time OF THIS LOG — the unique
-# player count starts over here. No prompt: an explicitly typed target IS the
-# confirmation, and the same reasoning the destructive `server-delete` uses.
-server-logs-reset:
-	@$(SERVER_DIR_GUARD)
-	@ssh -n $(SERVER_HOST) 'D="$$HOME/$(SERVER_DIR)"; \
-	  if [ ! -f "$$D/game.log" ]; then \
-	    echo "no game.log on $(SERVER_HOST) — nothing to reset"; exit 0; fi; \
-	  n=$$(wc -c < "$$D/game.log"); : > "$$D/game.log"; \
-	  echo "game.log reset on $(SERVER_HOST) ($$n bytes cleared; all-time stats start over)"'
-
 # build/ carries a Dropbox-ignore NTFS attribute on the folder itself —
 # delete its contents, never the folder, or the attribute is lost.
 clean:
 	rm -f build/game build/game.exe build/game-asan build/game-x86_64 build/game.res.o
 
-init:
-	clear
-	git reset $$(git commit-tree -S HEAD^{tree} -m "init")
-	git push --force origin main
-	@echo "Git history reset to single 'init' commit"
-
-.PHONY: all clean deploy init server-deploy server-delete server-logs server-logs-reset
+.PHONY: all clean deploy server-deploy server-delete

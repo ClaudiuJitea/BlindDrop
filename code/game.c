@@ -54,7 +54,6 @@
 //   PCG32                          separate streams: map/gun/bot/vfx/synth
 //   Config                         "key value" lines; MV_/WP_/ACTION_DEF tables
 //   Gamepad                        shared vocabulary + processing; backends fill
-//   Auto-update                    shared core: SHA-256, offer state, asset table
 //   Procedural map                 AABB solids = collision set AND render mesh
 //   Events                         the sim's one-way channel to presentation
 //   Hitscan                        ray vs AABB, shared by every shot and probe
@@ -93,7 +92,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>       // update check timestamps ("CHECKED n MIN AGO")
+#include <time.h>
 
 #ifdef _WIN32
   #define WIN32_LEAN_AND_MEAN
@@ -105,8 +104,6 @@
   #include <objbase.h>    // CoInitializeEx & friends (LEAN_AND_MEAN drops them)
   #include <mmdeviceapi.h>
   #include <audioclient.h>
-  #include <winhttp.h>    // auto-update check; the ~/.curlrc class of attack
-                          // does not exist here
   #include <GL/gl.h>
 #else
   #include <sys/stat.h>
@@ -1279,18 +1276,6 @@ typedef struct {
   // truncates and the bind[12] warning class cannot return.
   char  mp_host[64];
   int   mp_port;
-  // Auto-update: the release URL is a config key, NOT a bare
-  // compiled-in address — the developer cannot touch downloaded copies, and a
-  // repo move would otherwise kill every installed client's updates for good.
-  char  update_url[64];
-  int   update_check;        // 0 disables the startup check entirely
-  // Anonymous usage telemetry. The flag is the OPT-OUT
-  // — `telemetry 0` makes tele_tick return on its first line — and the id is a
-  // random u32 rolled ONCE by tele_tick and persisted here. It is derived from
-  // NOTHING: not hardware, not hostname, not MAC. It identifies an install and
-  // is the only stable value a ping carries.
-  int      telemetry;        // 1 = send (default), 0 = off entirely
-  unsigned tele_id;          // 0 = not yet generated
 } config_t;
 
 static config_t g_cfg;
@@ -1363,25 +1348,10 @@ static config_t config_defaults(void) {
                 // console shooter's — stick aim against a strafing target
                 // without it is a handicap, not a difficulty choice.
                 .pad_curve = 0, .pad_assist = 1,
-                // The master server, compiled in so a FRESH install is
-                // immediately playable, and overridable by config.cfg because
-                // the address has to outlive the developer's ability
-                // to touch installed copies. TWO LIMITS OF THAT ESCAPE HATCH,
-                // both load-bearing if this address ever has to move:
-                //   - config_load_or_create WRITES the whole file on first
-                //     start, so an installed client has this literal value
-                //     frozen in its config.cfg. Changing it here reaches FRESH
-                //     installs only; everyone else keeps dialling the old one.
-                //   - which is why net_resolve takes a NAME as happily as a
-                //     dotted quad (getaddrinfo, see the Linux/Winsock halves):
-                //     a DNS record is the only form of this default that can
-                //     be repointed after the fact. The raw IP is the choice
-                //     that trades that away for having no dependency.
-                .mp_host = "178.104.216.82", .mp_port = NET_PORT_DEF,
-                .update_url = "https://github.com/codehamr/skill-issue",
-                // .tele_id = 0 is the "not yet generated" sentinel, spelled out
-                // rather than left to the implicit zero: tele_tick branches on it.
-                .update_check = 1, .telemetry = 1, .tele_id = 0};
+                // NO SERVER IS COMPILED IN: the game contacts nothing on its own.
+                // Multiplayer dials only what the player configures here or
+                // passes with --connect.
+                .mp_host = "", .mp_port = NET_PORT_DEF};
   for (int i = 0; i < MV_COUNT; i++) c.mv[i] = MV_DEF[i].def;
   for (int w = 0; w < WPN_COUNT; w++)
     for (int i = 0; i < WP_COUNT; i++) c.wp[w][i] = WP_DEFAULTS[w][i];
@@ -1424,22 +1394,7 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "%s %.2f\n", VOL_DEF.key, (double)c->vol);
   fprintf(f, "sp_bots %d\nsp_difficulty %d\nsp_fraglimit %d\nplayer_name %s\n",
           c->sp_bots, c->sp_diff, c->sp_frag, c->name);
-  // COUPLING, and the only copy of the `tele_id` key spelling outside the
-  // parser: tele_id_persisted() re-reads the file this emitter just wrote and
-  // sscanf's for "tele_id %u" to decide whether the id actually landed — a
-  // failed persist has to disable telemetry, or a read-only install directory
-  // rolls a fresh id every launch and invents a unique player per start.
-  // RENAMING THIS KEY SILENTLY BREAKS THAT CHECK (it would simply never find
-  // the line and kill telemetry on every install). Rename both together.
-  // The obvious refactor — have tele_id_persisted call config_load_or_create
-  // into a scratch config_t and compare — was considered and REJECTED: that
-  // function WRITES on ENOENT, so the check would re-attempt the very write
-  // that is already failing, on the path where it is failing. A documented
-  // coupling beats an untested side effect on the error path.
-  fprintf(f, "mp_host %s\nmp_port %d\nupdate_url %s\nupdate_check %d\n"
-             "telemetry %d\ntele_id %u\n",
-          c->mp_host, c->mp_port, c->update_url, c->update_check,
-          c->telemetry, c->tele_id);
+  fprintf(f, "mp_host %s\nmp_port %d\n", c->mp_host, c->mp_port);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
   for (int w = 0; w < WPN_COUNT; w++)
@@ -1569,7 +1524,7 @@ static void config_load_or_create(const char *path, config_t *c) {
     int cut_hash = hash && hash > line && hash[-1] != ' ' && hash[-1] != '\t' &&
                    hash[-1] != '\n' && hash[-1] != '\r';  // '#' glued to a token
     if (hash) *hash = '\0';
-    // val is 64 wide for string-valued keys (mp_host, update_url — design
+    // val is 64 wide for string-valued keys (mp_host — design
     // WIDTH MATTERS: %11s cut "192.168.1.100" to the VALID address "192.168.1.1", a
     // silent wrong-machine connect). Width and format are TWO COPIES of one
     // number: widen %63s and val[64] together or it is a stack smash, not a
@@ -1637,27 +1592,6 @@ static void config_load_or_create(const char *path, config_t *c) {
     }
     else if (!strcmp(key, "mp_port")) {
       c->mp_port = parse_int(val, c->mp_port, 1, 65535);
-    }
-    else if (!strcmp(key, "update_url")) {
-      snprintf(c->update_url, sizeof c->update_url, "%s", val);
-    }
-    else if (!strcmp(key, "update_check")) {
-      c->update_check = parse_long(val, c->update_check) ? 1 : 0;
-    }
-    // The opt-out flag mirrors update_check exactly: `? 1 : 0`, not a clamp, so
-    // a hand-edited `telemetry -1` means "on" like every other flag here.
-    else if (!strcmp(key, "telemetry")) {
-      c->telemetry = parse_long(val, c->telemetry) ? 1 : 0;
-    }
-    // strtoul, and NOT parse_long — do not "fix" this for consistency.
-    // parse_long returns long, which is 32-BIT on the MinGW target, so every id
-    // with the high bit set (half of all of them) would saturate to LONG_MAX on
-    // a Windows load: silent id churn that inflates the unique-player count in
-    // the report. There is nothing to clamp either — the whole u32 range is
-    // valid and 0 is the "not yet generated" sentinel, so garbage parsing to 0
-    // simply rolls a fresh id, which is the correct recovery.
-    else if (!strcmp(key, "tele_id")) {
-      c->tele_id = (unsigned)strtoul(val, NULL, 10);
     }
     else {
       int hit = 0;
@@ -1778,519 +1712,12 @@ static void exe_dir(char *out, size_t n) {
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// Auto-update — shared core. Everything here is pure
-// data-in/data-out (asset table, SHA-256, the SHA256SUMS comparison rules,
-// the status line) so the harness can prove it without touching the network;
-// only the fetch (curl subprocess / WinHTTP), the swap and the check thread
-// are per-platform, below the split. Server and harness sessions never check,
-// never download and never swap; a "dev" build (no BUILD_VERSION from make)
-// never updates at all.
-// ---------------------------------------------------------------------------
-
 #ifndef BUILD_VERSION
-#define BUILD_VERSION "dev"     // Makefile default: a dev build NEVER updates
+#define BUILD_VERSION "dev"     // Makefile default
 #endif
 #ifndef BUILD_COMMIT
 #define BUILD_COMMIT "unknown"
 #endif
-
-// The FULL own path, not exe_dir(): exe_dir cuts the file name, and composing
-// "dir + assumed name" swaps whatever file happens to carry that name — the
-// player may have renamed the binary. What is swapped is always the path this
-// process actually executes.
-static int exe_path(char *out, size_t n) {
-#ifdef _WIN32
-  DWORD len = GetModuleFileNameA(NULL, out, (DWORD)n);
-  return len > 0 && len < (DWORD)n;
-#else
-  // readlink neither NUL-terminates nor reports truncation: a full buffer is
-  // indistinguishable from a path that happens to fit, so a too-long path
-  // would be silently shortened and the updater would swap the wrong file.
-  ssize_t len = readlink("/proc/self/exe", out, n - 1);
-  if (len <= 0 || (size_t)len >= n - 1) { out[0] = '\0'; return 0; }
-  out[len] = '\0';
-  return 1;
-#endif
-}
-
-// --- SHA-256 (FIPS 180-4), self-contained: ~60 lines beat a dependency. ---
-typedef struct { uint32_t h[8]; uint64_t n; uint8_t buf[64]; size_t fill; } sha256_t;
-static const uint32_t SHA256_K[64] = {
-  0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-  0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-  0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-  0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-  0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-  0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-  0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-  0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-static uint32_t sha_rotr(uint32_t x, int r) { return (x >> r) | (x << (32 - r)); }
-static void sha256_block(sha256_t *s, const uint8_t *p) {
-  uint32_t w[64], a, b, c, d, e, f, g, h;
-  for (int i = 0; i < 16; i++)
-    w[i] = (uint32_t)p[i * 4] << 24 | (uint32_t)p[i * 4 + 1] << 16 |
-           (uint32_t)p[i * 4 + 2] << 8 | p[i * 4 + 3];
-  for (int i = 16; i < 64; i++) {
-    uint32_t s0 = sha_rotr(w[i - 15], 7) ^ sha_rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
-    uint32_t s1 = sha_rotr(w[i - 2], 17) ^ sha_rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
-    w[i] = w[i - 16] + s0 + w[i - 7] + s1;
-  }
-  a = s->h[0]; b = s->h[1]; c = s->h[2]; d = s->h[3];
-  e = s->h[4]; f = s->h[5]; g = s->h[6]; h = s->h[7];
-  for (int i = 0; i < 64; i++) {
-    uint32_t S1 = sha_rotr(e, 6) ^ sha_rotr(e, 11) ^ sha_rotr(e, 25);
-    uint32_t ch = (e & f) ^ (~e & g);
-    uint32_t t1 = h + S1 + ch + SHA256_K[i] + w[i];
-    uint32_t S0 = sha_rotr(a, 2) ^ sha_rotr(a, 13) ^ sha_rotr(a, 22);
-    uint32_t mj = (a & b) ^ (a & c) ^ (b & c);
-    uint32_t t2 = S0 + mj;
-    h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
-  }
-  s->h[0] += a; s->h[1] += b; s->h[2] += c; s->h[3] += d;
-  s->h[4] += e; s->h[5] += f; s->h[6] += g; s->h[7] += h;
-}
-static void sha256_init(sha256_t *s) {
-  static const uint32_t iv[8] = {0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,
-                                 0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19};
-  memcpy(s->h, iv, sizeof iv); s->n = 0; s->fill = 0;
-}
-static void sha256_update(sha256_t *s, const void *data, size_t len) {
-  const uint8_t *p = data;
-  s->n += len;
-  while (len) {
-    size_t take = 64 - s->fill; if (take > len) take = len;
-    memcpy(s->buf + s->fill, p, take);
-    s->fill += take; p += take; len -= take;
-    if (s->fill == 64) { sha256_block(s, s->buf); s->fill = 0; }
-  }
-}
-static void sha256_hex(sha256_t *s, char out[65]) {
-  uint64_t bits = s->n * 8;   // captured BEFORE padding, so padding may grow n
-  uint8_t pad = 0x80;
-  sha256_update(s, &pad, 1);
-  while (s->fill != 56) { uint8_t z = 0; sha256_update(s, &z, 1); }
-  uint8_t lenb[8];
-  for (int i = 0; i < 8; i++) lenb[i] = (uint8_t)(bits >> (56 - i * 8));
-  sha256_update(s, lenb, 8);
-  for (int i = 0; i < 8; i++)
-    snprintf(out + i * 8, 9, "%08x", s->h[i]);
-}
-
-// ONE table, not an #ifdef expression: update_asset_name() picks
-// its own row per #ifdef and updinfo prints the WHOLE table for the manual
-// cross-check. Workflow names and this table are a CONTRACT — drift means
-// every installed client silently stops updating. TWO rows, deliberately
-// (2026-08-08): linux-arm64 was dropped — no player target, and the aarch64
-// devcontainer builds "dev", which never updates anyway; Windows-on-ARM runs
-// the amd64 asset via its built-in emulation.
-static const struct { const char *os, *arch, *suffix; } UPD_ASSETS[] = {
-  {"linux",   "amd64", ""},
-  {"windows", "amd64", ".exe"},
-};
-#define UPD_NASSETS ((int)(sizeof UPD_ASSETS / sizeof UPD_ASSETS[0]))
-static int upd_own_asset(void) {
-#if defined(_WIN32)
-  return 1;
-#elif defined(__x86_64__)
-  return 0;
-#else
-  return -1;   // unreleased platform (incl. aarch64): no asset, updater off
-#endif
-}
-static void upd_asset_name(char *out, size_t n, int i) {
-  snprintf(out, n, "skill-issue-%s-%s%s",
-           UPD_ASSETS[i].os, UPD_ASSETS[i].arch, UPD_ASSETS[i].suffix);
-}
-static int update_asset_name(char *out, size_t n) {
-  int i = upd_own_asset();
-  if (i < 0) { snprintf(out, n, "none"); return 0; }
-  upd_asset_name(out, n, i);
-  return 1;
-}
-
-// The comparison is an ORDER, not an inequality, and positively phrased
-//: an update is offered ONLY if every condition holds — a 404
-// page, a captive portal or a half-read file must never read as "update".
-typedef enum {
-  UPDV_MALFORMED,   // any parse rule violated — never an update signal
-  UPDV_CURRENT,     // same date, same sum
-  UPDV_UPDATE,      // remote date strictly newer
-  UPDV_RECUT,       // same date, different sum — a same-day re-cut (the common
-                    // case now that every push overwrites the one "latest")
-  UPDV_DOWNGRADE,   // remote older — happens when starting into the publish
-                    // window; NEVER offered
-} upd_verdict_t;
-
-static int upd_date_ok(const char *s) {  // strict YYYY-MM-DD
-  for (int i = 0; i < 10; i++) {
-    if (i == 4 || i == 7) { if (s[i] != '-') return 0; }
-    else if (s[i] < '0' || s[i] > '9') return 0;
-  }
-  int mm = (s[5] - '0') * 10 + (s[6] - '0'), dd = (s[8] - '0') * 10 + (s[9] - '0');
-  return mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31;
-}
-static int upd_hex64(const char *s) {
-  for (int i = 0; i < 64; i++)
-    if (!((s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f') ||
-          (s[i] >= 'A' && s[i] <= 'F'))) return 0;
-  return 1;
-}
-
-// buf: the fetched SHA256SUMS (need not be NUL-terminated), len its size.
-// own_sha may be "" when the local sum is unknown — a same-date release then
-// reads as RECUT, which errs toward offering, never toward hiding an update.
-static upd_verdict_t upd_compare(const char *buf, size_t len,
-                                 const char *own_asset, const char *own_sha,
-                                 const char *local_date,
-                                 char remote_date[11], char remote_sha[65],
-                                 const char **why) {
-  *why = "";
-  remote_date[0] = remote_sha[0] = '\0';
-  if (len == 0 || len > 4096) { *why = "SIZE"; return UPDV_MALFORMED; }
-  // rule 2: first line is exactly "# version YYYY-MM-DD"
-  // len < 21, not 20: buf[20] is the line terminator, and the buffer need not
-  // be NUL-terminated, so a 20-byte body would be read one past its end.
-  if (len < 21 || memcmp(buf, "# version ", 10) != 0 || !upd_date_ok(buf + 10) ||
-      (buf[20] != '\n' && buf[20] != '\r')) { *why = "HEADER"; return UPDV_MALFORMED; }
-  memcpy(remote_date, buf + 10, 10);
-  remote_date[10] = '\0';
-  // rule 3: exactly one well-formed line for the EXACT own asset name
-  size_t alen = strlen(own_asset);
-  int found = 0;
-  for (size_t i = 0; i < len;) {
-    size_t e = i;
-    while (e < len && buf[e] != '\n') e++;
-    // "<64hex>  <name>" — sha256sum's own format, name must end the line
-    if (e - i >= 66 + alen && upd_hex64(buf + i) &&
-        buf[i + 64] == ' ' && (buf[i + 65] == ' ' || buf[i + 65] == '*')) {
-      const char *nm = buf + i + 66;
-      size_t nlen = e - i - 66;
-      while (nlen && (nm[nlen - 1] == '\r' || nm[nlen - 1] == ' ')) nlen--;
-      if (nlen == alen && memcmp(nm, own_asset, alen) == 0) {
-        if (found++) { *why = "DUPLICATE"; return UPDV_MALFORMED; }
-        memcpy(remote_sha, buf + i, 64);
-        remote_sha[64] = '\0';
-      }
-    }
-    i = e + 1;
-  }
-  if (!found) { *why = "NO ASSET LINE"; return UPDV_MALFORMED; }
-  // rule 4: the order. ISO dates compare correctly as strings once validated.
-  if (!upd_date_ok(local_date)) { *why = "LOCAL DATE"; return UPDV_MALFORMED; }
-  int c = strcmp(remote_date, local_date);
-  if (c > 0) return UPDV_UPDATE;
-  if (c < 0) { *why = "REMOTE OLDER"; return UPDV_DOWNGRADE; }
-  if (own_sha[0] && !strcmp(remote_sha, own_sha)) return UPDV_CURRENT;
-  return UPDV_RECUT;
-}
-
-// --- update state, published by the check thread, read by UI and updinfo ---
-typedef enum {
-  UPD_DEV, UPD_OFF, UPD_UNSUPPORTED, UPD_CHECKING,
-  UPD_CURRENT, UPD_UPDATE, UPD_RECUT, UPD_APPLYING, UPD_FAILED, UPD_RDONLY,
-} upd_state_e;
-// The strings are written by the thread BEFORE the seq_cst state store and
-// only read after a load sees a completed state — same publish idiom as the
-// atomic config volume.
-static _Atomic int  g_upd_state = UPD_DEV;
-static _Atomic int  g_upd_busy;
-static _Atomic long g_upd_checked_at;          // time(NULL) of the last result
-static char g_upd_remote_date[11];
-static char g_upd_remote_sha[65];
-static char g_upd_why[32];
-// Written by the check thread's fs probe, read by the menu every frame while
-// the check is still in flight — it must be atomic like the state above.
-static _Atomic int g_upd_writable = -1;        // probed before any offer
-
-// ONE cap for the update download. curl's --max-filesize (stringified below)
-// and both apply-path buffers must be the same number, or bumping one side
-// silently truncates or rejects the asset.
-#define UPD_FETCH_MAX 4194304   // 4 MiB
-#define UPD_STR_(x) #x
-#define UPD_STR(x) UPD_STR_(x)
-
-static int upd_is_dev(void) { return strcmp(BUILD_VERSION, "dev") == 0; }
-
-// SHA-256 of the running binary itself — the compared identity
-// (two release builds can share a date; the sum is what tells them apart).
-static int upd_own_sha(char out[65]) {
-  char path[512];
-  out[0] = '\0';
-  if (!exe_path(path, sizeof path)) return 0;
-  FILE *f = fopen(path, "rb");
-  if (!f) return 0;
-  sha256_t s;
-  sha256_init(&s);
-  char buf[16384];
-  size_t n;
-  while ((n = fread(buf, 1, sizeof buf, f)) > 0) sha256_update(&s, buf, n);
-  int ok = !ferror(f);
-  fclose(f);
-  if (ok) sha256_hex(&s, out);
-  return ok;
-}
-
-// Shared tail of every check: parse + compare + publish. Runs on the check
-// thread; also driven synchronously by the updcheck proof command.
-static void upd_check_finish(int fetch_ok, const char *buf, size_t len) {
-  if (!fetch_ok) {
-    atomic_store(&g_upd_checked_at, (long)time(NULL));
-    atomic_store(&g_upd_state, UPD_FAILED);
-    return;
-  }
-  char own[64], own_sha[65], rdate[11], rsha[65];
-  const char *why;
-  // No asset for this platform means there is nothing this build could ever
-  // install, so the comparison must not run at all: the "none" sentinel is a
-  // MATCHABLE name, and a SHA256SUMS carrying a line called "none" would
-  // otherwise be read as an offer. The start path already gates on this
-  // (UPD_UNSUPPORTED); honouring the return keeps every other caller safe.
-  if (!update_asset_name(own, sizeof own)) {
-    atomic_store(&g_upd_checked_at, (long)time(NULL));
-    atomic_store(&g_upd_state, UPD_UNSUPPORTED);
-    return;
-  }
-  if (!upd_own_sha(own_sha)) own_sha[0] = '\0';
-  upd_verdict_t v = upd_compare(buf, len, own, own_sha, BUILD_VERSION,
-                                rdate, rsha, &why);
-  snprintf(g_upd_remote_date, sizeof g_upd_remote_date, "%s", rdate);
-  snprintf(g_upd_remote_sha, sizeof g_upd_remote_sha, "%s", rsha);
-  snprintf(g_upd_why, sizeof g_upd_why, "%s", why);
-  atomic_store(&g_upd_checked_at, (long)time(NULL));
-  int st = v == UPDV_UPDATE ? UPD_UPDATE
-         : v == UPDV_RECUT  ? UPD_RECUT
-         : v == UPDV_CURRENT || v == UPDV_DOWNGRADE ? UPD_CURRENT
-         : UPD_FAILED;
-  // No offer without an exit path: an unwritable directory
-  // (Program Files, /usr/local/bin, an AppImage mount) turns the offer into
-  // the manual-download line BEFORE anything downloads 800 KB per start.
-  if ((st == UPD_UPDATE || st == UPD_RECUT) && g_upd_writable == 0) st = UPD_RDONLY;
-  atomic_store(&g_upd_state, st);
-}
-
-// THE DIAGNOSTIC LINE, and it is no longer on any screen. The player-facing
-// half of the updater is now exactly two things — the version at the foot of
-// the entry screen and an UPDATE tile that only exists when there is one — so
-// this string survives for `updinfo` and the server log, where a full state
-// name is what a bug report needs. It used to be printed under the match-end
-// hero as well, which put a build hash and a check age on the one screen whose
-// subject is who won. Font note: the 5x7 font has no '?' or parentheses.
-// [[maybe_unused]]: its ONE consumer is the harness `updinfo`, and the harness
-// is the Linux backend's half of the file — on MinGW nothing calls this, which
-// is a -Wunused-function warning and therefore a broken build (the warning gate
-// is part of the release, see .github/workflows/release.yml). Same idiom as
-// ui_page_name. It stays shared rather than moving below the split because the
-// state machine it prints is shared.
-[[maybe_unused]] static void upd_status_line(char *out, size_t n) {
-  const char *ver = upd_is_dev() ? "DEV" : BUILD_VERSION;
-  char pre[48];
-  int r = snprintf(pre, sizeof pre, "VERSION %s+%.7s", ver, BUILD_COMMIT);
-  long at = atomic_load(&g_upd_checked_at);
-  long mins = at ? (long)(time(NULL) - at) / 60 : 0;
-  switch (atomic_load(&g_upd_state)) {
-    case UPD_DEV:       r = snprintf(out, n, "%s - DEV BUILD, NO UPDATES", pre); break;
-    case UPD_OFF:       r = snprintf(out, n, "%s - UPDATE CHECK OFF", pre); break;
-    case UPD_UNSUPPORTED: r = snprintf(out, n, "%s - NO RELEASE FOR THIS PLATFORM", pre); break;
-    case UPD_CHECKING:  r = snprintf(out, n, "%s - CHECKING...", pre); break;
-    case UPD_CURRENT:   r = snprintf(out, n, "%s - UP TO DATE [CHECKED %ld MIN AGO]", pre, mins); break;
-    // ONE line for both offers, and it names the build on the other end the
-    // same way `pre` names this one. "REBUILD AVAILABLE" said neither WHICH
-    // build nor that it was newer — and a same-day re-cut is the common case
-    // with one rolling release, so the state a player sees most often was the
-    // one that read least like an update. Date plus seven hex is also the
-    // whole diagnosis: an equal date means a re-cut, a later one a new day.
-    case UPD_UPDATE:
-    case UPD_RECUT:     r = snprintf(out, n, "%s - UPDATE %s+%.7s AVAILABLE", pre,
-                                     g_upd_remote_date, g_upd_remote_sha); break;
-    case UPD_APPLYING:  r = snprintf(out, n, "%s - UPDATING...", pre); break;
-    case UPD_RDONLY:    r = snprintf(out, n, "%s - FOLDER NOT WRITABLE: DOWNLOAD MANUALLY", pre); break;
-    default:            r = snprintf(out, n, "%s - CHECK FAILED%s%s", pre,
-                                     g_upd_why[0] ? ": " : "", g_upd_why); break;
-  }
-  if (r < 0) out[0] = '\0';   // encoding error only; truncation is fine here
-}
-
-// Platform halves (defined in the Linux/Windows backends below the split):
-// start the async check thread, and perform the swap. Both are no-ops or
-// failures in harness and server sessions by construction — only the native
-// frame loop ever calls them.
-//
-// THERE IS NO ROLLBACK. It was a second swap, backwards, with its own UI row,
-// its own probe field and its own failure strings — a whole mechanism for the
-// one case where a release is broken AND the player works out that the menu
-// row is what fixes it. The <exe>.old copy the apply leaves behind is kept
-// (it costs a link() and it is the only recovery a bad build has), but it is
-// now a file on disk for a human to rename, not a button. What replaced the
-// button is the reason the button was rare: the update is applied by itself.
-static void upd_check_start(void);
-static int  upd_apply(void);          // returns 0 on failure, g_upd_why says why
-
-// A SECOND CHECK, ON THE SCREEN THAT SHOWS THE ANSWER. The boot check is one
-// shot, so a client that was ALREADY RUNNING when a release went out never
-// learns about it — and with one rolling "latest" that is re-cut several times
-// a day, that is the common case rather than an edge one. The entry screen is
-// where the status line and the APPLY UPDATE row live, so OPENING it is the
-// event; a timer in the frame loop would spend requests nobody is looking at.
-//
-// The policy is a pure predicate so it can be asserted without a network:
-//   - a verdict still in flight is not re-asked (UPD_CHECKING),
-//   - an OFFER is never re-asked, because a later fetch that failed would take
-//     the UPDATE row away from under the player's thumb — and an offer that is
-//     already being INSTALLED (UPD_APPLYING) is not a question at all,
-//   - everything else — up to date, failed, read-only — is re-asked once the
-//     throttle has expired, so ESC-tapping cannot become a request per press.
-// upd_check_gate() still owns the dev/off/unsupported refusals and the
-// one-checker-at-a-time exchange; this only decides WHETHER to ask it.
-#define UPD_RECHECK_S 600
-static int upd_recheck_due(long now, long at, int st) {
-  if (st == UPD_CHECKING || st == UPD_UPDATE || st == UPD_RECUT ||
-      st == UPD_APPLYING) return 0;
-  if (at && now - at < UPD_RECHECK_S) return 0;
-  return 1;
-}
-// Called by BOTH native backends from platform_menu_changed, at the point where
-// each already knows it is not the harness — the same one-call-site-per-backend
-// shape upd_check_start has, and the reason the harness and the dedicated
-// server still cannot reach the network through this.
-static void upd_menu_recheck(void) {
-  if (!g_menu_open) return;
-  if (!upd_recheck_due((long)time(NULL), atomic_load(&g_upd_checked_at),
-                       atomic_load(&g_upd_state))) return;
-  upd_check_start();
-}
-
-// AN UPDATE IS NOT A DECISION, AND THE BOOT SCREEN IS WHERE IT COSTS NOTHING.
-// With one rolling `latest` re-cut several times a day, "there is a newer build"
-// is the normal state of an installed client rather than an event, and a player
-// who is asked about it every second session learns to press past it — which is
-// how a fixed bug stays live on a machine that has the fix sitting next to it.
-// So the offer applies ITSELF, and the two guards below are the whole policy:
-//
-//   g_home  — the boot screen, i.e. before the player has entered a session.
-//             This is the ONE moment where a swap costs nothing: the match
-//             behind the reel has no score anybody is keeping, and the restart
-//             lands on the same screen the player is already looking at. Past
-//             it, an update is a row in the menu and nothing else; a process
-//             that replaces itself mid-firefight is the one thing a menu may
-//             never do, whatever the version numbers say.
-//   !g_online — --connect kicks a connection at boot, so g_home alone does not
-//             mean "no session": a client that is already talking to a server
-//             is in a match as far as the player is concerned.
-//   ROOT page — the entry screen itself, not one of its forms. A player who is
-//             three rows into CONTROLS with a rebind capture armed, or holding
-//             a slider, is DOING something; replacing the process under that is
-//             the same rudeness as doing it mid-firefight, one screen up. They
-//             get the update the moment they come back to the rail, or on the
-//             next start. This one term covers every modal in the menu, which
-//             is why it is a page test and not a list of them.
-//
-// TWO PHASES, and the second one is the point. upd_apply blocks for the whole
-// download and then execv's, so a single-call version would freeze the picture
-// for a second or two and come back as a different process with nothing on
-// screen ever having said why. Arming stores UPD_APPLYING, the frame that is
-// already being drawn says UPDATING..., and the NEXT frame does the work — one
-// state, two readers, and the manual tile arms exactly the same way.
-// Forward-declared like platform_menu_changed: the page enum lives with the UI,
-// 15k lines down, and this policy belongs HERE with the rest of it.
-static int ui_on_entry_screen(void);
-
-static void upd_arm_apply(void) {
-  int st = atomic_load(&g_upd_state);
-  if (st != UPD_UPDATE && st != UPD_RECUT) return;
-  if (atomic_load(&g_upd_busy)) return;      // a check is still in flight
-  atomic_store(&g_upd_state, UPD_APPLYING);
-}
-
-// Called once per frame from app_pump, which is the shared glue BOTH native
-// backends run and NOTHING else does — the harness drives app_frame directly
-// and the dedicated server has no frame loop at all, so this is the same
-// "one call site per backend, and no reachable path from a proof" property
-// upd_check_start has.
-static void upd_auto_tick(void) {
-  if (atomic_load(&g_upd_state) == UPD_APPLYING) {
-    if (atomic_load(&g_upd_busy)) return;
-    // upd_apply only returns on FAILURE: on success the image is already the
-    // new binary (execv) or the process has exited (CreateProcessW + exit).
-    if (!upd_apply()) atomic_store(&g_upd_state, UPD_FAILED);
-    return;
-  }
-  // FOUR GUARDS, and each excludes a different way of being mid-session:
-  // g_home = the boot screen (before any session, so the restart lands on the
-  // screen the player is already looking at), g_menu_open = the rail is
-  // actually up, !g_online (--connect kicks a join at boot, so g_home alone
-  // does not mean "no session"), and ui_on_entry_screen() = not three rows
-  // into CONTROLS with a rebind armed. One page test covers every modal.
-  if (!g_home || !g_menu_open || g_online || !ui_on_entry_screen()) return;
-  upd_arm_apply();
-}
-
-// The genuinely per-OS updater primitives, forward-declared like net_udp_*:
-// the transport (curl child / WinHTTP) and the fs probe. Everything else in
-// the check/apply flow is OS-agnostic and lives HERE — each backend had grown
-// its own copy of it, and the copies had already drifted (a why-clear only
-// one side had).
-static int  upd_fetch(const char *url, char *dst, size_t cap, size_t *out_len);
-static void upd_probe_fs(void);
-
-// The check thread's body — each backend's upd_thread is a two-line wrapper
-// in its own thread ABI around this.
-static void upd_thread_body(void) {
-  upd_probe_fs();
-  char url[128 + 64];
-  snprintf(url, sizeof url, "%s/releases/latest/download/SHA256SUMS", g_cfg.update_url);
-  static char buf[4096];    // one checker at a time (g_upd_busy) — static is safe
-  size_t len = 0;
-  g_upd_why[0] = '\0';      // a stale why must not survive into a fresh verdict
-  int ok = upd_fetch(url, buf, sizeof buf, &len);
-  upd_check_finish(ok, buf, len);
-  atomic_store(&g_upd_busy, 0);
-}
-
-// The boot-time gate: decides whether a check runs at all and flips the state
-// machine; returns 1 when the backend should spawn its thread.
-static int upd_check_gate(void) {
-  if (upd_is_dev())        { atomic_store(&g_upd_state, UPD_DEV); return 0; }
-  if (upd_own_asset() < 0) { atomic_store(&g_upd_state, UPD_UNSUPPORTED); return 0; }
-  if (!g_cfg.update_check) { atomic_store(&g_upd_state, UPD_OFF); return 0; }
-  if (atomic_exchange(&g_upd_busy, 1)) return 0;   // one check at a time
-  atomic_store(&g_upd_state, UPD_CHECKING);
-  return 1;
-}
-
-static void upd_spawn_failed(void) {   // the thread never started: undo the gate
-  snprintf(g_upd_why, sizeof g_upd_why, "THREAD");
-  atomic_store(&g_upd_busy, 0);
-  atomic_store(&g_upd_state, UPD_FAILED);
-}
-
-// Download the offered asset to MEMORY and verify its SHA-256 there (the
-// TOCTOU rule: the filesystem is only touched after this returns). NULL on
-// any failure, with g_upd_why set; the caller frees the returned buffer.
-static char *upd_download_verified(size_t *out_len) {
-  int st = atomic_load(&g_upd_state);
-  if (st != UPD_UPDATE && st != UPD_RECUT) return NULL;
-  char own[64], url[128 + 128];
-  if (!update_asset_name(own, sizeof own)) return NULL;   // no asset: nothing to install
-  snprintf(url, sizeof url, "%s/releases/latest/download/%s", g_cfg.update_url, own);
-  char *buf = malloc((size_t)UPD_FETCH_MAX);
-  if (!buf) { snprintf(g_upd_why, sizeof g_upd_why, "MEM"); return NULL; }
-  size_t len = 0;
-  g_upd_why[0] = '\0';
-  if (!upd_fetch(url, buf, UPD_FETCH_MAX, &len)) { free(buf); return NULL; }
-  sha256_t s;
-  sha256_init(&s);
-  sha256_update(&s, buf, len);
-  char hex[65];
-  sha256_hex(&s, hex);
-  if (strcmp(hex, g_upd_remote_sha) != 0) {
-    free(buf);
-    snprintf(g_upd_why, sizeof g_upd_why, "BAD SHA");
-    return NULL;
-  }
-  *out_len = len;
-  return buf;
-}
 
 // UDP socket backend: the ONLY networking below the platform
 // split — POSIX in the Linux backend, Winsock in the Windows one. Everything
@@ -5828,16 +5255,6 @@ typedef enum {
                     // breaks on any loss burst past the resend window and for
                     // every late joiner, so it rides its own low-rate packet
                     // (the hot snapshot stays inside the MTU at full roster).
-  NP_TELE,          // client->server, fire-and-forget: anonymous usage beat
-                    // APPENDED, so no existing value shifts and
-                    // NET_PROTO is deliberately NOT bumped (design decision
-                    // 4): the packet is additive and never answered, and an
-                    // old server SILENTLY DROPS it — the else-if chain in
-                    // net_srv_packet has no fallback branch, and the 4-byte
-                    // NR_PROTO reject fires only on a *protocol* mismatch.
-                    // So a mixed-version deploy window loses a few beats and
-                    // nothing else; bumping PROTO would instead disconnect
-                    // every player for a statistics packet.
 } np_type_t;
 
 // Values are pinned: they ride the NP_REJECT payload, and 3/4 (bad cookie /
@@ -5935,269 +5352,6 @@ static int net_input_decode(np_rd *r, net_input_t *in) {
   in->wish_x = (int16_t)np_r16(r);
   in->wish_y = (int16_t)np_r16(r);
   return !r->bad;
-}
-
-// Telemetry: 23 fixed bytes, fire-and-forget, NEVER answered — a
-// reply to an unverified source is a UDP amplifier.
-// Encoder and parser are field-for-field mirrors and live ADJACENT on purpose:
-// the launch-day MP breakage was one stray type byte an encoder wrote and a
-// decoder never read, and nothing but adjacency makes that class visible.
-// The parser takes the FULL packet and re-checks the header itself, so the
-// server handler (which already matched proto+type) and netfuzz (which feeds
-// raw crafted buffers) call the SAME function with no special-casing.
-// Placed here, with the other wire codecs above the platform split, because it
-// has four consumers spread across the file: net_srv_packet (shared core), the
-// client heartbeat above app_frame, and the harness `tele`/`netfuzz` commands
-// in the Linux-only region. This is the only point above all four.
-enum { NET_TELE_LEN = 23 };
-// THE 90 s BOUNDARY, named once. A beat says "this
-// id spent dt seconds in mode X"; a gap above this is sleep/freeze/packet loss
-// and credits nothing. ONE NUMBER, THREE PLACES — tele_tick's send condition,
-// this parser's clamp, and the harness `tele` command's clamp — and they must
-// move together: an earlier draft sent gaps up to 120 into a field clamped at
-// 90, a silent 25 % bite out of every over-long beat with no counter anywhere.
-// Three literals is exactly how that comes back, so there is no literal left.
-enum { NET_TELE_DT_MAX = 90 };
-typedef struct { uint32_t id; int kind, mode, os, dt; char ver[13]; } net_tele_t;
-
-// Both platforms call this now — tele_tick's per-minute beat is shared core.
-// It carried a [[maybe_unused]] from the days when the harness `tele` command
-// was its only caller and the Windows -Werror gate failed on it; the client
-// heartbeat landed and the annotation outlived its reason.
-static void net_tele_encode(unsigned char *b, uint32_t id, int kind, int mode, int dt) {
-  np_wr w = {b, NET_TELE_LEN, 0, 0};
-  np_w16(&w, NET_PROTO);
-  np_w8(&w, NP_TELE);
-  np_w32(&w, id);
-  np_w8(&w, (uint8_t)kind);
-  np_w8(&w, (uint8_t)mode);
-#ifdef _WIN32
-  np_w8(&w, 1);
-#else
-  np_w8(&w, 0);
-#endif
-  np_w8(&w, (uint8_t)dt);
-  char ver[13] = {0};                      // 12 wire bytes + NUL for snprintf
-  if (kind == 0) snprintf(ver, sizeof ver, "%s", BUILD_VERSION);
-  for (int i = 0; i < 12; i++) np_w8(&w, (uint8_t)ver[i]);
-}
-
-static int net_tele_parse(const unsigned char *b, int n, net_tele_t *t) {
-  if (n != NET_TELE_LEN) return 0;
-  np_rd r = {b, (size_t)n, 0, 0};          // full packet, header re-checked here
-  if (np_r16(&r) != NET_PROTO || np_r8(&r) != NP_TELE) return 0;
-  t->id = np_r32(&r);
-  t->kind = np_r8(&r); t->mode = np_r8(&r); t->os = np_r8(&r); t->dt = np_r8(&r);
-  if (t->kind > 1 || t->mode > 2) return 0;
-  if (t->os > 1) t->os = 0;
-  if (t->dt > NET_TELE_DT_MAX) t->dt = NET_TELE_DT_MAX;
-  for (int i = 0; i < 12; i++) {
-    int c = np_r8(&r);
-    // SPACE and '=' are excluded on purpose, not by accident: this string is
-    // printed into game.log, whose grammar is space-separated key=value and is
-    // a CONTRACT with tools/server-report.awk. A hostile 12-byte version of
-    // " id=deadbeef" would otherwise inject a second id field and make one
-    // install read as two unique players in the report (measured). So a
-    // version may contain neither a space nor an '='; everything else outside
-    // printable ASCII becomes '?', and a NUL still terminates.
-    t->ver[i] = (char)((c > 0x20 && c <= 0x7e && c != '=') ? c : (c ? '?' : 0));
-  }
-  t->ver[12] = 0;
-  return !r.bad;
-}
-
-// --- Telemetry: the client heartbeat --------------------------------------
-// WHAT LEAVES THE MACHINE, exhaustively: a random install id (tele_id — u32,
-// rolled once from the clock, derived from NOTHING), the mode (ui/sp/mp), a
-// seconds counter, the OS family, and BUILD_VERSION on the boot ping. No name,
-// no hardware, no position; no IP is logged server-side. `telemetry 0` in
-// config.cfg opts out. Unreachable in --server and in the harness; a failed
-// resolve turns it off for the session.
-//
-// WHERE IT GOES, and the consequence: mp_host:mp_port — the SAME address Quick
-// Join dials, no separate key. mp_host is an ordinary player-editable config
-// key (the comment at its default is about the DEVELOPER keeping the address
-// movable via DNS — it invites nothing), so a player who points the game
-// at a friend's or a community server hands THAT operator this install's
-// stable id, OS, build version and session cadence, not the developer. Ruled
-// deliberately: one destination, no `tele_host` — a second address key with
-// its own default and its own explanation costs more than the payload is
-// worth. If the payload ever grows, this is the decision that has to be
-// re-opened first.
-//
-// COST, honestly: the steady state is one time() and a compare, and the
-// resolve is off-thread (below). The ONE exception is the first frame of the
-// first session on a fresh install, which rolls the id and writes config.cfg
-// synchronously (fopen/config_emit/fclose/rename, ~2 KB). Once per install,
-// on the same path and through the same function that every menu close
-// already uses — but it IS a file write on a rendered frame, so it is named
-// here rather than hidden behind "telemetry never costs a frame".
-//
-// A SIDE EFFECT that write has, stated at its real size: config.cfg is
-// re-emitted from g_cfg, so hand-added comments and unknown keys are dropped.
-// For a player who never opens the menu that used to need an auto-update —
-// the window-close and Alt+F4 handlers write only when the menu is open, but
-// upd_relaunch/win_relaunch write UNCONDITIONALLY — so this is not the first
-// way it could happen, only the earliest and the most certain: the first play
-// session now normalises the file one frame in.
-//
-// It sits HERE, immediately under the codec it calls, because this is the
-// first line in the file where everything it needs is already visible at once:
-// net_tele_encode/NET_TELE_LEN above, and g_server, g_online, g_menu_open,
-// g_cfg/g_cfg_path, config_write and the net_udp_* / net_resolve / net_now_ms
-// forward declarations far above that. Its ONE caller, app_frame, is ~19500
-// lines below — the encoder and its live caller staying adjacent is worth more
-// than proximity to the call site (same argument as the codec's own comment).
-//
-// THE RESOLVE RUNS OFF THE FRAME THREAD, and that is not a nicety.
-// net_resolve is a synchronous getaddrinfo: the Linux half short-circuits a
-// dotted quad through inet_aton, but a NAME does not, and the Winsock half has
-// no numeric fast path at all. Measured: numeric 0 ms, NXDOMAIN 32 ms, a
-// black-holed resolver ~10 s of stall — on the FIRST RENDERED FRAME, which is
-// where tele_tick is called from. So it gets the updater's detached-thread
-// idiom verbatim (upd_thread_body + a per-backend upd_check_start); no new
-// pattern was invented for this. The thread is DETACHED and cannot be joined,
-// so a quit while it still sits in getaddrinfo runs exit()/ExitProcess() out
-// from under it — the same "resolved by loader luck" hazard win_relaunch's own
-// comment names for the WASAPI thread, which at least can be joined. It is
-// strictly better than the pre-existing updater thread (shorter call, no
-// buffers handed back), so the file's pattern parity holds and this stays a
-// known property rather than a fix.
-static int              g_tele_fd = -1;
-// 0 = still resolving, 0xFFFFFFFF = failed. That sentinel is also the valid
-// s_addr of 255.255.255.255, so an mp_host that resolves to the broadcast
-// address reads as a resolve failure and silently disables telemetry. Named
-// rather than defended: it is not a reachable server address, and spending a
-// second flag on it would buy nothing.
-static _Atomic uint32_t g_tele_ip;
-static long             g_tele_last;    // wall clock of the last accepted beat
-static int              g_tele_dead;    // one failure ends telemetry for the session
-// "A session has begun" — the whole difference between ui and sp time, set ONCE
-// by ui_close_menu (far below, but this is the file's only writer) and never
-// cleared: there is no quit-to-menu, QUIT ends the process. See tele_mode.
-static int              g_tele_played;
-
-// Runs OFF the frame thread. On Windows this is where net_wsa_init() first
-// runs for a session that never joins MP (both the Winsock net_udp_open and
-// net_resolve call it, by design — see the comment block there). Its static
-// guard flag is not atomic, but WSAStartup is refcounted and idempotent, so a
-// double call from two threads is harmless: do not "fix" it with a lock.
-static void tele_resolve_body(void) {
-  uint32_t ip = net_resolve(g_cfg.mp_host);
-  atomic_store(&g_tele_ip, ip ? ip : 0xFFFFFFFFu);
-}
-
-// Did the id actually reach the disk? config_write returns void and reports
-// its three failure exits to stderr only, and a read-only install directory is
-// a REAL deployment — config.cfg sits next to the executable. Without this
-// check the id lives for the session and a FRESH one is rolled next launch, so
-// every start reports a new unique player: the same metric corruption the
-// strtoul rule exists to prevent, arriving through another door, with no
-// counter and no log line. Under-counting is this plan's declared bias
-// (decision 7 lists its accepted undercounts); INVENTING players is not, so a
-// failed persist ends telemetry for the session.
-//
-// Read-back is the check, and deliberately not something cheaper: config_write
-// can fail at fopen, at fclose/ferror or at rename, and each cheaper probe
-// (does <path>.tmp survive, is the file W_OK, did mtime move) misses at least
-// one of the three. The post-condition — "the file now says this id" — misses
-// none. It costs one fopen of a ~2 KB file, once per install, on the frame
-// that just wrote the same file. The sscanf literal below is the OTHER half of
-// a two-place coupling with config_emit's telemetry fprintf — the note there
-// carries the rename rule and why the config_load_or_create refactor was
-// rejected.
-static int tele_id_persisted(uint32_t id) {
-  FILE *f = fopen(g_cfg_path, "r");
-  if (!f) return 0;
-  char line[128];                        // the loader's own line width
-  unsigned v = 0;
-  int found = 0;
-  while (!found && fgets(line, sizeof line, f))
-    found = sscanf(line, "tele_id %u", &v) == 1 && v == id;
-  fclose(f);
-  return found;
-}
-
-// Platform half, defined once in each backend below the split — exactly like
-// upd_check_start: spawn the detached thread, and on a spawn failure store the
-// sentinel so tele_tick gives up instead of waiting forever.
-static void tele_resolve_start(void);
-
-// The mode a beat is credited to (decision 8), as ONE predicate, because the
-// three rows of `make server-logs` are exactly this function's three returns:
-//
-//   mp — connected online. First, and unconditionally: an online session never
-//        pauses and the server slot stays occupied while the menu is open.
-//   ui — a menu with NO session behind it. Today that is exactly the boot menu
-//        (play mode opens it over the live arena), i.e. from
-//        launch until the first RESUME.
-//   sp — everything else offline, INCLUDING a paused match. The menu is an
-//        overlay over a singleplayer session you are in; crediting that time to
-//        ui made "playtime menu/ui" the pause counter and understated sp by the
-//        same seconds. The rule the report states is a partition: time spent in
-//        a mode is charged to that mode, and ui is the leftover.
-//
-// g_menu_open is deliberately NOT read here any more — it answers "is the menu
-// drawn", which is a different question from "is there a session".
-static int tele_mode(void) { return g_online ? 2 : g_tele_played ? 1 : 0; }
-
-// Called once per app_frame — the shared frame step, so both native backends
-// reach it and nothing else does. Every exit is cheap: the steady state is one
-// time() call and a compare.
-static void tele_tick(void) {
-  int headless = 0;                          // g_headless is Linux-only (declared
-#ifndef _WIN32                               // inside #ifndef _WIN32) — the file's
-  headless = g_headless;                     // own idiom for reading it from
-#endif                                       // shared core, see app_start's gate
-  if (g_tele_dead || g_server || headless || !g_cfg.telemetry) return;
-  long now = (long)time(NULL);
-  if (g_tele_fd < 0) {                       // bring-up: id, resolve, socket, boot ping
-    if (!g_cfg.tele_id) {
-      // Shared-core entropy: seed_from_clock() lives in the Linux backend
-      // below the split and MUST NOT be called or forward-declared here.
-      // | 1 keeps 0 meaning "not yet generated".
-      //
-      // NOT 32 bits of entropy, and nobody should read "random u32" as if it
-      // were: net_now_ms() is UPTIME (CLOCK_MONOTONIC / GetTickCount), so on a
-      // machine that launches the game at boot it is nearly constant and the
-      // id degenerates to a function of the wall second. Decision 6 accepts
-      // collisions outright at early-dev player counts; this is the shape they
-      // would take.
-      g_cfg.tele_id = (((uint32_t)time(NULL) * 2654435761u) ^ net_now_ms()) | 1u;
-      config_write(g_cfg_path, &g_cfg);      // the path the session was started with
-      // A persist that did not stick would churn the id every launch and
-      // invent a player per start — see tele_id_persisted. g_cfg keeps the id
-      // in memory on purpose: a later menu-close write may still land it.
-      if (!tele_id_persisted(g_cfg.tele_id)) { g_tele_dead = 1; return; }
-    }
-    static int kicked;
-    if (!kicked) { kicked = 1; tele_resolve_start(); return; }   // never blocks
-    uint32_t ip = atomic_load(&g_tele_ip);
-    if (!ip) return;                                   // still resolving; retry next frame
-    if (ip == 0xFFFFFFFFu || (g_tele_fd = net_udp_open(0)) < 0) { g_tele_dead = 1; return; }
-    g_tele_last = now;
-    unsigned char b[NET_TELE_LEN];
-    net_tele_encode(b, g_cfg.tele_id, 0, 0, 0);
-    net_udp_send(g_tele_fd, ip, (uint16_t)g_cfg.mp_port, b, NET_TELE_LEN);
-    return;
-  }
-  long gap = now - g_tele_last;
-  // A BACKWARDS clock step (NTP correction, manual set, DST on a machine whose
-  // RTC is local time) makes gap negative, which falls into `gap < 60` WITHOUT
-  // resetting the anchor — beats then stop until the clock catches up, which
-  // can be hours. Wall clock is still the right source here (decision 7's
-  // sleep case needs it; a monotonic clock does not tick across suspend), so
-  // the fix is to re-anchor and credit nothing, exactly like the > 90 case.
-  if (gap < 0) { g_tele_last = now; return; }
-  if (gap < 60) return;
-  g_tele_last = now;
-  if (gap > NET_TELE_DT_MAX) return;   // slept/frozen/missed: restart the clock,
-                                       // credit nothing — THE boundary, shared
-                                       // with the wire field and the server
-                                       // clamp (decision 7, named at the enum)
-  unsigned char b[NET_TELE_LEN];
-  net_tele_encode(b, g_cfg.tele_id, 1, tele_mode(), (int)gap);
-  net_udp_send(g_tele_fd, atomic_load(&g_tele_ip), (uint16_t)g_cfg.mp_port, b, NET_TELE_LEN);
 }
 
 // Per-entity snapshot record: the anim_tick INPUT list (pure physics
@@ -9792,65 +8946,6 @@ static unsigned g_srv_trim_drops;       // moves discarded by the backlog trim �
                                         // THE rubber-band path; it read as
                                         // dropped_in=0 while the live server
                                         // trimmed a correction per hitch
-// TELEMETRY LINE BUDGETS — TWO of them, answering DIFFERENT questions. NP_TELE
-// arrives on the open UDP port with no cookie, no conn and no per-source
-// accounting, so this pair of counters is the ONLY thing between a stranger
-// and game.log.
-//   g_tele_budget     is a RATE limit: <=128 accepted lines per second, so a
-//                     burst cannot outrun the disk or drown the digest lines a
-//                     human actually reads. It says nothing about the TOTAL.
-//   g_tele_day_budget is the TOTAL bound: <=TELE_DAY_MAX accepted lines per
-//                     day. A RATE LIMIT ON AN APPEND-FOREVER LOG IS NOT A
-//                     BOUND — the rate alone permits 128 * 86400 = 11.06 M
-//                     lines/day, and a line MEASURES 42 B (beat) to 56 B
-//                     (dated boot), so 464-619 MB/day, 3.3-4.3 GB a week,
-//                     into a file the deploy APPENDS to across restarts and
-//                     that `make server-logs` cats whole over ssh. (Measured
-//                     real baseline: 1.8 MB per 12 days.) Design decision 9
-//                     calls the log "bounded by design" and names a crash loop
-//                     as the only unbounded case; this counter is what makes
-//                     that sentence true of telemetry too.
-// TELE_DAY_MAX = 50000: one beat per minute per player is 1/60 lines per
-// second, i.e. 1440 lines per 24 h played, so the ceiling is ~35 players
-// beating around the clock or ~400 players at 2 h/day each — far past any
-// realistic population for this project — while capping telemetry's share of
-// the log at 2.1 MB/day of beats (measured: 50000 beat lines = 2 100 000 B
-// exactly; 2.8 MB if every line were a dated boot) instead of 464-619 MB.
-// The window is FIXED, not sliding, so an observer whose own second/day
-// boundary is out of phase with the reset can see up to 2x the ceiling across
-// one boundary — inherent to a fixed-window limiter, and the reason the TOTAL
-// bound is the one that matters: even 2 * TELE_DAY_MAX is 4.2 MB of beats and
-// still needs 780 s of sustained flooding at the RATE cap to emit.
-// TWO THINGS THE WORD "DAY" DOES NOT MEAN HERE, both by construction:
-//   * It is 86400 s of UPTIME, not a calendar day — the reset keys off
-//     CLOCK_MONOTONIC (see server_main), which is why it cannot be walked by
-//     an NTP step or a catch-up burst. The bucket boundary therefore falls
-//     wherever this process happened to start.
-//   * It is PER PROCESS. Both counters live in BSS and are reset only inside
-//     server_main, so a restart zeroes them while the deploy wrapper
-//     (`while :; do ./game ...; done >> game.log`) keeps appending to the SAME
-//     file — a restarting server gets a fresh TELE_DAY_MAX allowance each
-//     time. That is accepted, not overlooked: a healthy server restarts only
-//     on a deploy, and the pathological case (a crash loop) is already the one
-//     unbounded case design decision 9 names and that `server-deploy` gates on
-//     by watching for repeated `exit rc=` lines. Making the total survive a
-//     restart would mean persisting state the server deliberately does not
-//     have (it writes no files; --config /dev/null).
-// HONEST LIMITATION, recorded rather than defended: tele_id is a random u32
-// the CLIENT picks and NOTHING verifies. Anyone can mint ids, so "unique
-// players" in the report is a TRUST-BASED number, not an authenticated one.
-// The only real defence is authenticating the sender, and a credential is an
-// identity — which is exactly what anonymous fire-and-forget telemetry must
-// not have. These budgets bound the DAMAGE (log size), never the TRUTH of the
-// count; read the number as a trend, not as evidence.
-// Both are reset in server_main only. A future LISTEN server would increment
-// without ever resetting and would stick at the cap; nothing observable
-// changes today (the sole consumer of an accepted packet is the g_server-gated
-// slog below), and the one-line fix on that day is to gate the whole NP_TELE
-// branch on g_server.
-static int  g_tele_budget;              // accepted this second   (RATE)
-static long g_tele_day_budget;          // accepted this day      (TOTAL)
-enum { TELE_DAY_MAX = 50000 };
 // Optional net diagnostics (OFF by default): `netdebug` in the harness,
 // `--net-debug` on a server. One line per correction / backlog trim / far-
 // ahead skip — the questions a live rubber-banding report needs answered,
@@ -9877,20 +8972,8 @@ static int g_net_debug;
            rtt, qd, net_world_hash());
 }
 
-// Server log line: unix-ts prefix, one flushed stdout line. On the VPS stdout
-// IS game.log (the deploy wrapper redirects it), and the line grammar is a
-// CONTRACT with tools/server-report.awk — change one, change both. Only
-// --server mode calls this; the harness and play mode never do.
-//
-// FOUR keywords remain (2026-08-19): `server` (start), `lobby`/`digest`
-// (diagnostics, unparsed) and `tele` — the ONLY one the report reads. The
-// `join`, `leave` and `stat` lines are gone: they fed the four rows that were
-// cut from `make server-logs` (mp connections, mp connection time, peak
-// players, peak arenas), and "mp connection time" in particular measured
-// SOCKET time, not playtime — it counted telemetry opt-outs, counted every
-// deploy's own loopback probe, and split one session in two on a re-join.
-// Multiplayer time is the `tele mode=mp` beats, which is the same question
-// asked once, on the channel that also knows about singleplayer.
+// Server log line: unix-ts prefix, one flushed stdout line. Only --server mode
+// calls this; the harness and play mode never do.
 static void slog(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void slog(const char *fmt, ...) {
   printf("%ld ", (long)time(NULL));
@@ -13929,26 +13012,6 @@ static void net_srv_packet(const unsigned char *b, int n, uint32_t ip, uint16_t 
       if (!net_input_decode(&r, &in)) break;
       net_srv_queue_input(c, h, &in);
     }
-  } else if (type == NP_TELE) {
-    // Stateless, hostile, NEVER answered (a reply = UDP amplifier). No
-    // cookie and no conn: telemetry is not a session. BOTH global budgets must
-    // allow the line — the per-second RATE and the per-day TOTAL, which bound
-    // different things (see their declaration) — and nothing in the packet
-    // indexes any array: every field is clamped inside net_tele_parse.
-    // The parse re-reads the full packet from this function's own b/n and
-    // re-verifies the header it already matched: one parser shape for the
-    // server, the fuzzer and any future caller (one-copy rule).
-    net_tele_t t;
-    if (g_tele_budget < 128 && g_tele_day_budget < TELE_DAY_MAX &&
-        net_tele_parse(b, n, &t)) {
-      g_tele_budget++;
-      g_tele_day_budget++;
-      static const char *M[] = {"ui", "sp", "mp"}, *O[] = {"lin", "win"};
-      if (g_server) {
-        if (t.kind == 0) slog("tele id=%08x ev=boot os=%s v=%s", t.id, O[t.os], t.ver);
-        else             slog("tele id=%08x mode=%s dt=%d", t.id, M[t.mode], t.dt);
-      }
-    }
   }
 }
 
@@ -17249,8 +16312,7 @@ static int   g_ui_quit;          // set by the QUIT button
 // and LEAVE MATCH share the rail: with a bool, arming one and then pressing the
 // other would read as a confirmation. Any navigation clears it, and ui_route
 // clears it on every page change, so an armed row never survives being walked
-// away from. The UPDATE row deliberately has NO arm — it neither ends a session
-// nor destroys anything, and it only appears when there IS an update.
+// away from.
 typedef enum { UI_ARM_NONE, UI_ARM_QUIT, UI_ARM_LEAVE, UI_ARM_RESTART } ui_arm_t;
 static ui_arm_t g_ui_arm;
 static int   g_ui_root_focus;  // rail row to return to, THIS menu session only
@@ -17397,11 +16459,6 @@ typedef enum { UI_PAGE_ROOT, UI_PAGE_MATCH, UI_PAGE_SETTINGS,
 
 static ui_page_t g_ui_page = UI_PAGE_ROOT;
 
-// "Is the player looking at the entry screen rather than at one of its forms" —
-// the updater's own question (see upd_auto_tick), answered where the page state
-// lives so there is one reader of the enum outside this section and no copy of
-// the enum's spelling in the updater.
-static int ui_on_entry_screen(void) { return g_ui_page == UI_PAGE_ROOT; }
 static int g_ui_control;  // CONTROLS page: 0 keyboard/mouse, 1 gamepad
 static int g_ui_tab;      // legacy uistat field; mirrors the page enum
 static int g_ui_pad_sub;  // CONTROLS/GAMEPAD: 0 sticks+aim, 1 buttons
@@ -17567,11 +16624,6 @@ static void ui_close_menu(void) {
   // different job; leaving the flag set would run a hero camera over a fight
   // the player stopped to look at.
   g_home = 0;
-  // THE telemetry ui->sp edge (tele_mode): the boot menu is the only menu with
-  // no session behind it, and this is the moment the player leaves it. One-way
-  // on purpose — every later menu open is a PAUSE inside a session that has
-  // begun, and pause time belongs to that session, not to ui.
-  g_tele_played = 1;
   g_ui_rebind = -1;
   g_ui_drag = 0;
   g_ui_arm = UI_ARM_NONE;
@@ -18135,10 +17187,10 @@ static void ui_home(int click, float cx, float cy) {
     const char *ml = busy ? "CONNECTING" : "MULTIPLAYER";
     const char *ms = st == NC_FAILED
                    ? (g_cl.reject == NR_FULL  ? "ALL ARENAS FULL"
-                    : g_cl.reject == NR_PROTO ? "UPDATE REQUIRED"
+                    : g_cl.reject == NR_PROTO ? "VERSION MISMATCH"
                     : g_cl.reject == NR_WORLD ? "ARENA MISMATCH"
                                               : "SERVER UNREACHABLE")
-                   : "QUICK JOIN";
+                   : g_cfg.mp_host[0] ? "QUICK JOIN" : "SET MP_HOST IN CONFIG";
     // ...and online the same slot is the way OUT of the match, which is the one
     // destination a live session has and a boot screen does not. It keeps the
     // full width the mode tile has: it is the same slot, not a smaller one.
@@ -18149,7 +17201,8 @@ static void ui_home(int click, float cx, float cy) {
                   rx, y, rw, sh2, 1.25f, click, cx, cy, 1)) {
         if (ui_arm_take(UI_ARM_LEAVE)) { leave_match(); ui_close_menu(); }
       }
-    } else if (ui_tile(ml, ms, rx, y, rw, sh2, 1.25f, click, cx, cy, 0) && !busy) {
+    } else if (ui_tile(ml, ms, rx, y, rw, sh2, 1.25f, click, cx, cy, 0) && !busy &&
+               g_cfg.mp_host[0]) {
       g_ui_arm = UI_ARM_NONE;
       if (start_connect(g_cfg.mp_host, g_cfg.mp_port)) ui_close_menu();
     }
@@ -18169,40 +17222,12 @@ static void ui_home(int click, float cx, float cy) {
     y += sh2 + gap;
   }
 
-  // AN UPDATE IS A ROW ONLY WHEN THERE IS SOMETHING LEFT TO DO WITH IT, and
-  // after the boot screen applies them by itself that is the exception rather
-  // than the rule: the row exists for the verdict that arrived LATE, once the
-  // player had already left the reel (a sleeping radio, a captive portal). One
-  // press, not two — the old CONFIRM step guarded a row that could also mean
-  // ROLLBACK, and installing the build the player is already being told about
-  // is not the kind of act that needs a second thought.
-  //
-  // IT SITS BELOW QUIT, and that ordering is an input decision. A verdict can
-  // arrive while the menu is open, and a row inserted ABOVE an existing one
-  // shifts every focus index under it — so a player resting on QUIT would find
-  // a one-press install under the focus instead. Appearing last can only ever
-  // add a row past where the focus is.
   if (ui_tile(g_ui_arm == UI_ARM_QUIT ? "CONFIRM QUIT" : "QUIT", NULL,
               rx, y, rw, qh, 1.1f, click, cx, cy, 1)) {
     if (ui_arm_take(UI_ARM_QUIT)) { config_write(g_cfg_path, &g_cfg); g_ui_quit = 1; }
   }
   y += qh + gap;
 
-  int ust = atomic_load(&g_upd_state);
-  int offer = ust == UPD_UPDATE || ust == UPD_RECUT;
-  if (offer || ust == UPD_APPLYING) {
-    // The label is the STATE: arming stores UPD_APPLYING and the frame that is
-    // already in flight draws it, which is the whole reason the apply is two
-    // phases (see upd_arm_apply).
-    if (ui_tile(offer ? "UPDATE & RESTART" : "UPDATING...",
-                offer ? g_upd_remote_date : NULL, rx, y, rw, qh, 1.1f,
-                click, cx, cy, 0) && offer) {
-      g_ui_arm = UI_ARM_NONE;
-      config_write(g_cfg_path, &g_cfg);
-      upd_arm_apply();
-    }
-    y += qh + gap;
-  }
   y += 12 - gap;
 
   // The pad grammar, and only in pad mode: the tiles say what they do, so a
@@ -18231,17 +17256,8 @@ static void ui_home(int click, float cx, float cy) {
   }
   ui_text_ex(g_cfg.name, rx, y, 0.85f, TXT_BOLD, 1.6f, C4(C_BONE, 0.72f));
   float nw = ui_text_width_tr(g_cfg.name, 0.85f, 1.6f);
-  // THE VERSION LIVES HERE AND NOWHERE ELSE. It used to be printed under the
-  // match-end hero as well, as a full VERSION/commit/check-age status line —
-  // on the one screen whose subject is who won, in a game that updates itself.
-  // One quiet line at the foot of the entry screen is what a build number is
-  // for: it answers "which build am I running" when somebody asks, and it is
-  // never the thing the eye lands on. A FAILED check is appended to the same
-  // line rather than given a red one of its own; nothing is broken for the
-  // player, the game just could not reach the release.
   char vl[40];
-  snprintf(vl, sizeof vl, "V %s%s", BUILD_VERSION,
-           ust == UPD_FAILED ? " - UPDATE CHECK FAILED" : "");
+  snprintf(vl, sizeof vl, "V %s", BUILD_VERSION);
   ui_text_ex(vl, rx + nw + 12, y + 1, 0.7f, TXT_REG, 1.0f, C4(C_HAZE, 0.5f));
 
   // The state chip, on the same predicate the tick reads so it can never
@@ -18795,7 +17811,7 @@ static void ui_menu(void) {
     // the match — and regenerate the map — twice for one press.
     // ONE PRESS ONLY WHERE THERE IS NOTHING TO LOSE, and `g_home` alone does not
     // say that: --connect kicks a join at boot, so the boot screen can be up
-    // with g_online already set — the same trap upd_auto_tick's guards spell
+    // with g_online already set — a trap worth spelling
     // out. Online the action must ALWAYS be leave_match: restart_req is
     // serviced by match_tick, which never runs online, so a fast path here
     // armed a flag nothing consumes and closed the menu on a button that then
@@ -28982,12 +27998,6 @@ static void render_frame(const player_t *p, float alpha, int fps,
       }
       ui_text_ex(sub, ccx - ui_text_width_tr(sub, 0.9f, 1.4f) * 0.5f, 54, 0.9f,
                  TXT_REG, 1.4f, C4(C_BONE, 0.85f));
-      // NO VERSION LINE HERE. This used to carry the same VERSION+update status
-      // string the entry screen does, on the reasoning that the match end is
-      // where the player is already stopped — but what it actually did was put
-      // a build hash, a commit and a "CHECKED 4 MIN AGO" under the name of
-      // whoever just won. The version has one home now (the foot of the entry
-      // screen) and the update has one voice (a tile, only when there is one).
     }
 
     if (g_score_held || g_match.over) ui_scoreboard();
@@ -29655,7 +28665,6 @@ static void leave_match(void) {
 }                      // which clears the corpses of players who are gone
 
 static int app_frame(app_t *a, player_t *p, double dt, const frame_input_t *in) {
-  tele_tick();             // anonymous usage ping; self-gated, never blocks
   if (dt > 0.1) dt = 0.1;  // hitch clamp: never spiral the sim
   // Presentation motion clock: real dt while playing; the harness never gets
   // here for uiframe/shot, so those keep the fixed 1/60 default and stay
@@ -29786,11 +28795,6 @@ static int app_frame(app_t *a, player_t *p, double dt, const frame_input_t *in) 
 // deltas stay parameters because their accumulators are backend-owned (filled
 // by wndproc / the XI2 pump). Returns 1 when the session should end.
 static int app_pump(app_t *a, player_t *p, double dt, float mdx, float mdy) {
-  // The updater's per-frame half: apply what the boot screen armed.
-  // It lives HERE and not in app_frame because app_frame is what the harness
-  // runs — see upd_auto_tick's own comment for why that distinction is the
-  // whole "a proof never touches the network" rule.
-  upd_auto_tick();
   int binds[IN_COUNT], pbinds[IN_COUNT];
   pad_sync((float)dt);
   resolve_binds(binds, pbinds);
@@ -30943,13 +29947,6 @@ static void usage(void) {
        "                     back as an event\n"
        "  netdeath           online death -> ragdoll -> corpse (client half)\n"
        "  netleave           online->local teardown: every count must be 0\n"
-       "  tele H P KIND [DT] one telemetry packet (NP_TELE) at a --server on\n"
-       "                     H:P through the live encoder. KIND is boot|ui|sp|\n"
-       "                     mp; DT (default 60, clamped 0..%d) is the beat's\n"
-       "                     seconds. Fire-and-forget: grep the server log.\n"
-       "                     Sends a FIXED install id — point it at a local\n"
-       "                     --server, not the public one, or it adds a\n"
-       "                     permanent phantom player to that append-only log\n"
        "  netstat            print the server digest line (the SAME function\n"
        "                     the --server mode prints every 10 s)\n"
        "  netdebug           toggle per-event net diagnostics: one line per\n"
@@ -30958,19 +29955,9 @@ static void usage(void) {
        "  humans N           set the human roster to N (slots 1+ spawn idle;\n"
        "                     entity ids 21+, see the three-range rule)\n"
        "  localent N         force g_local_ent (identity-sweep instrument;\n"
-       "                     diff sfxlog/HUD against the id-0 run)\n"
-       "  updinfo            version, own asset name, the FULL asset table\n"
-       "                     (the naming contract), the update status line and\n"
-       "                     the menu-open re-check policy as never/just-inside/\n"
-       "                     just-outside the throttle, per update state\n"
-       "  updcheck P [DATE]  run the update comparison against a local\n"
-       "                     SHA256SUMS file P; DATE overrides the local\n"
-       "                     version for UPDATE/DOWNGRADE cases\n\n",
+       "                     diff sfxlog/HUD against the id-0 run)\n\n",
        (int)SP_BOTS_DEF.lo, (int)SP_BOTS_DEF.hi,
-       (int)SP_FRAG_DEF.lo, (int)SP_FRAG_DEF.hi,
-       (int)NET_TELE_DT_MAX);   // same reason as the slider ranges above: a
-                                // hardcoded "0..90" in the help is the copy
-                                // nobody greps when the boundary moves
+       (int)SP_FRAG_DEF.lo, (int)SP_FRAG_DEF.hi);
 }
 
 typedef struct {
@@ -33491,7 +32478,7 @@ static void netfuzz_proof(void) {
   // where a missing bounds check becomes a report instead of luck.
   long n = next_n();
   uint64_t rs = 0xf00dface ^ (uint64_t)n * 40503u;
-  long accepted_in = 0, accepted_ent = 0, accepted_tele = 0;
+  long accepted_in = 0, accepted_ent = 0;
   for (long i = 0; i < n; i++) {
     unsigned char buf[200];
     int len = (int)(rng_next(&rs) % (sizeof buf + 1));   // 0..200, incl. short
@@ -33502,61 +32489,6 @@ static void netfuzz_proof(void) {
     if ((i & 1) && len >= 3) {
       buf[0] = NET_PROTO & 0xff; buf[1] = NET_PROTO >> 8;
       buf[2] = (i & 2) ? NP_SNAPSHOT : NP_SCORES;
-    }
-    // NP_TELE share (every 4th packet). Proto, type AND LENGTH are all
-    // forced: net_tele_parse's first test is `n != NET_TELE_LEN`, and a
-    // random 0..200 length hits 23 about once in 200 — without the length
-    // the field clamps never execute at all.
-    // It gets its OWN buffer and its OWN stream on purpose. Forcing
-    // len on the shared `buf` would (a) truncate a quarter of the packets
-    // to 23 bytes — and (i&3)==3 is exactly HALF the NP_SNAPSHOT share
-    // this loop's own comment says was added to reach the deep paths —
-    // and (b) read the tail of `buf` past whatever length was drawn, which
-    // was never written. The separate stream also leaves in_accepted /
-    // ent_accepted byte-identical, so a future netfuzz diff still means
-    // what it says.
-    if ((i & 3) == 3) {
-      // NET_TELE_LEN + 1 bytes, deliberately: the over-length probe below
-      // hands the parser 24, and a 23-byte local would be an out-of-bounds
-      // read the moment anyone moves the header check above the length
-      // check. Sizing the buffer removes the trap instead of documenting
-      // it — a fuzzer that can read past its own buffer proves nothing.
-      unsigned char tb[NET_TELE_LEN + 1];
-      uint64_t trs = rs ^ 0x9e3779b97f4a7c15ull;
-      for (int b = 0; b < NET_TELE_LEN + 1; b++) tb[b] = (unsigned char)rng_next(&trs);
-      tb[0] = NET_PROTO & 0xff; tb[1] = NET_PROTO >> 8;
-      tb[2] = NP_TELE;
-      // HALF of the share also lands kind/mode IN RANGE. Random enum bytes
-      // survive `kind > 1 || mode > 2` about once in 11000, so a share
-      // that left them alone would report tele_accepted=0..2 over 20000
-      // packets and never once run the os/dt clamps or the version
-      // sanitizer — the trivial zero this whole share exists to avoid.
-      // The other half keeps them random so the REJECT path is fuzzed too.
-      //
-      // CONSEQUENCE, so nobody reads the printed number as a measurement:
-      // a biased packet is accepted DETERMINISTICALLY, so tele_accepted is
-      // exactly n/8 by construction (n/4 share, half of it biased) and can
-      // only ever read n/8 or the -1 sentinel. THE SENTINEL IS THE GATE.
-      // The value is a wiring check — n/8 says the share reached the
-      // parser at all, which is the trivial-zero failure mode; it is not
-      // evidence about the parser's behaviour.
-      if (i & 4) { tb[7] &= 1; tb[8] = (unsigned char)(tb[8] % 3); }
-      net_tele_t tf;
-      if (net_tele_parse(tb, NET_TELE_LEN, &tf)) {
-        accepted_tele++;
-        // Everything the server then prints must be in bounds: mode and os
-        // INDEX string tables, dt is clamped, and the version may carry
-        // neither a space nor an '=' or it injects fields into game.log.
-        if (tf.kind > 1 || tf.mode > 2 || tf.os > 1 ||
-            tf.dt > NET_TELE_DT_MAX || tf.ver[12])
-          accepted_tele = -1000000;
-        for (int k = 0; k < 12; k++)
-          if (tf.ver[k] == ' ' || tf.ver[k] == '=') accepted_tele = -1000000;
-      }
-      // A wrong length must be refused whatever the header says — the one
-      // check every other field's safety rests on.
-      if (net_tele_parse(tb, NET_TELE_LEN - 1, &tf) ||
-          net_tele_parse(tb, NET_TELE_LEN + 1, &tf)) accepted_tele = -1000000;
     }
     np_rd r = {buf, (size_t)len, 0, 0};
     net_input_t in;
@@ -33599,11 +32531,8 @@ static void netfuzz_proof(void) {
                            rng_next(&rs), (uint32_t)i);
   }
   printf("netfuzz n=%ld no_crash=ok in_accepted=%ld ent_accepted=%ld "
-         "tele_accepted=%ld "
-         "(all accepted ent ids < MAX_ENTS, weapon < WPN_COUNT; "
-         "tele_accepted is n/8 BY CONSTRUCTION - only -1 is a defect)\n",
-         n, accepted_in, accepted_ent < 0 ? -1 : accepted_ent,
-         accepted_tele < 0 ? -1 : accepted_tele);
+         "(all accepted ent ids < MAX_ENTS, weapon < WPN_COUNT)\n",
+         n, accepted_in, accepted_ent < 0 ? -1 : accepted_ent);
 }
 
 static void run_script(char *script, sim_ctx_t *s) {
@@ -34275,58 +33204,6 @@ static void run_script(char *script, sim_ctx_t *s) {
              g_local_ent, g_humans_on[0]);
     } else if (!strcmp(t, "netclient")) {
       netclient_proof();
-    } else if (!strcmp(t, "tele")) {
-      // tele HOST PORT boot|ui|sp|mp [DT] — one telemetry packet at a
-      // --server, through the SAME encoder the live client uses (one-copy
-      // rule). The loopback proof: send, then grep the server's game.log.
-      // AIM IT AT A LOCAL --server. The id below is the FIXED 0xc0ffee01, and
-      // game.log is append-forever: every rig run against the public VPS adds a
-      // permanent phantom "unique player" to `make server-logs` (it lands under
-      // "dev builds", which is the split working, but it never ages out).
-      const char *host = next_tok();
-      // RANGE-CHECKED, fatally, for the same reason the mode token is: the
-      // cast to uint16_t is silent, so `tele H 70000 sp` would have gone to
-      // port 4464 and still printed a confident "tele sent". A test fixture
-      // must never do something other than what it says.
-      long portl = next_n();
-      if (portl < 1 || portl > 65535) {
-        fprintf(stderr, "script: tele port %ld out of range (1..65535)\n", portl);
-        exit(1);
-      }
-      int port = (int)portl;
-      const char *mode = next_tok();
-      // Enum-valued argument: a typo must not parse as a silent default. The
-      // harness's contract (parse_n exits on a bad token) is that a script
-      // which mistypes an argument FAILS rather than testing something else.
-      int kind = -1, m = 0;
-      if      (!strcmp(mode, "boot")) { kind = 0; m = 0; }
-      else if (!strcmp(mode, "ui"))   { kind = 1; m = 0; }
-      else if (!strcmp(mode, "sp"))   { kind = 1; m = 1; }
-      else if (!strcmp(mode, "mp"))   { kind = 1; m = 2; }
-      else { fprintf(stderr, "script: unknown tele mode '%s' (boot|ui|sp|mp)\n", mode); exit(1); }
-      int dt = (int)opt_n(60);
-      if (dt < 0) dt = 0;
-      if (dt > NET_TELE_DT_MAX) dt = NET_TELE_DT_MAX;   // u8 on the wire, and
-                              // the server clamps at the same NET_TELE_DT_MAX;
-                              // 300 would wrap to 44 and log a plausible lie
-      uint32_t ip = net_resolve(host);
-      int fd = ip ? net_udp_open(0) : -1;   // 0 = ephemeral local port
-      if (fd < 0) { printf("tele fail resolve/socket\n"); }
-      else {
-        unsigned char b[NET_TELE_LEN];
-        net_tele_encode(b, 0xC0FFEE01u, kind, m, kind ? dt : 0);
-        // sendto's result is CHECKED. Discarding it made "tele sent" a claim
-        // about intent rather than about the wire — the line printed happily
-        // when nothing had left the box (unreachable route, EPERM from a
-        // firewall, EMSGSIZE), which is the same class of silent lie as the
-        // truncated port above. Printed from the SAME values that were
-        // encoded, so the proof line and the wire bytes cannot disagree.
-        int sent = net_udp_send(fd, ip, (uint16_t)port, b, NET_TELE_LEN);
-        net_udp_close(fd);
-        if (sent == NET_TELE_LEN) printf("tele sent %s dt=%d\n", mode, kind ? dt : 0);
-        else printf("tele SEND FAIL %s dt=%d rc=%d (%s)\n", mode, kind ? dt : 0,
-                    sent, strerror(errno));
-      }
     } else if (!strcmp(t, "netstat")) {
       // The SAME function the server's 10 s digest prints — that is
       // the one-copy rule on observability, checked rather than asserted.
@@ -34373,78 +33250,6 @@ static void run_script(char *script, sim_ctx_t *s) {
       long le = next_n();
       g_local_ent = (le < -1 || le >= MAX_ENTS) ? -1 : (int)le;
       printf("localent %d\n", g_local_ent);
-    } else if (!strcmp(t, "updinfo")) {
-      // The naming CONTRACT's proof half: prints the
-      // WHOLE client asset table for the cross-check against the workflow,
-      // plus the exact UI status line, so display and diagnosis are one copy.
-      char own[64], line[96], sha[65];
-      int have = update_asset_name(own, sizeof own);
-      upd_status_line(line, sizeof line);
-      printf("updinfo version=%s commit=%.7s own=%s writable=%d\n",
-             BUILD_VERSION, BUILD_COMMIT, have ? own : "none",
-             g_upd_writable);
-      for (int i = 0; i < UPD_NASSETS; i++) {
-        char nm[64];
-        upd_asset_name(nm, sizeof nm, i);
-        printf("asset %s\n", nm);
-      }
-      if (upd_own_sha(sha)) printf("sha %s\n", sha);
-      printf("line %s\n", line);
-      // The MENU-OPEN RE-CHECK's policy, tabulated the way padcurve tabulates
-      // its curves: the predicate is pure, and it is the only part of that path
-      // a harness can reach at all (the call itself lives in each native
-      // backend, past its own not-the-harness gate). A fixed `now` keeps the
-      // table deterministic — a wall clock in a proof's output is not a proof.
-      // What must hold: an offer is NEVER re-asked, a check in flight is never
-      // doubled, and everything else flips from 0 to 1 across UPD_RECHECK_S.
-      {
-        static const struct { int st; const char *n; } RS[] = {
-          {UPD_CURRENT, "current"}, {UPD_FAILED, "failed"},
-          {UPD_RDONLY, "rdonly"},   {UPD_CHECKING, "checking"},
-          {UPD_UPDATE, "update"},   {UPD_RECUT, "recut"},
-        };
-        long now = 1000000;
-        printf("recheck window=%ds", UPD_RECHECK_S);
-        for (int i = 0; i < (int)(sizeof RS / sizeof RS[0]); i++)
-          printf(" %s=%d/%d/%d", RS[i].n,
-                 upd_recheck_due(now, 0, RS[i].st),
-                 upd_recheck_due(now, now - (UPD_RECHECK_S - 1), RS[i].st),
-                 upd_recheck_due(now, now - UPD_RECHECK_S, RS[i].st));
-        printf("\n");
-      }
-    } else if (!strcmp(t, "updcheck")) {
-      // The update comparison against a LOCAL file — the whole rule set is
-      // provable without the network, and the output can move (truncated
-      // file, missing line, bad date, downgrade all print differently).
-      // Optional second arg overrides the local date, so a dev build can
-      // exercise UPDATE/CURRENT/DOWNGRADE, not only MALFORMED.
-      const char *path = next_tok();
-      char *ldate = take_tok();
-      char local[16];
-      snprintf(local, sizeof local, "%s", ldate ? ldate : BUILD_VERSION);
-      char buf[8192];
-      size_t len = 0;
-      FILE *uf = fopen(path, "rb");
-      if (uf) { len = fread(buf, 1, sizeof buf, uf); fclose(uf); }
-      char own[64], own_sha[65], rdate[11] = "", rsha[65] = "";
-      const char *why;
-      // The DEV CONTAINER IS aarch64 and has no release asset, so
-      // update_asset_name() writes the "none" sentinel here — and a comparison
-      // against an asset that appears in no SHA256SUMS can only ever print
-      // MALFORMED, i.e. the proof of the naming contract would be inert on the
-      // one machine it is run from. Fall back to the first real asset and say
-      // which one was used, so the printed verdict is about the RULES.
-      int have = update_asset_name(own, sizeof own);
-      if (!have) upd_asset_name(own, sizeof own, 0);
-      if (!upd_own_sha(own_sha)) own_sha[0] = '\0';
-      upd_verdict_t v = uf ? upd_compare(buf, len, own, own_sha, local,
-                                         rdate, rsha, &why)
-                           : (why = "NO FILE", UPDV_MALFORMED);
-      static const char *VN[] = {"MALFORMED", "CURRENT", "UPDATE", "RECUT",
-                                 "DOWNGRADE"};
-      printf("updcheck verdict=%s local=%s remote=%s why=%s offer=%d asset=%s%s\n",
-             VN[v], local, rdate[0] ? rdate : "-", why[0] ? why : "-",
-             v == UPDV_UPDATE || v == UPDV_RECUT, own, have ? "" : " (stand-in)");
     } else if (!strcmp(t, "cfg")) {
       printf("cfg sense=%.2f ads_sense=%.2f fov=%d vsync=%d fps_cap=%d show_fps=%d msaa=%d binds=",
              (double)g_cfg.sense, (double)g_cfg.ads_sense, (int)g_cfg.fov, g_cfg.vsync,
@@ -35885,10 +34690,6 @@ static double nat_now(void) {
 
 // --- UDP socket backend, POSIX half ---
 static int net_udp_open(int port) {
-  // SOCK_CLOEXEC, for the same reason the evdev pump opens with O_CLOEXEC: this
-  // process both FORKS (upd_fetch execs curl) and EXECVs ITSELF (the update
-  // swap). Without it curl inherits a live game socket, and the replacement
-  // image starts life owning a bound UDP descriptor nothing will ever read.
   int fd = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
   if (fd < 0) return -1;
   int fl = fcntl(fd, F_GETFL, 0);
@@ -36795,7 +35596,6 @@ static void audio_start(void) {
 static void platform_menu_changed(void) {
   g_ui_mdown = 0;
   if (g_headless) return;
-  upd_menu_recheck();   // native only, and past the harness gate on purpose
   if (g_menu_open) {
     nat_grab(0);
     // Seed the UI cursor from the real pointer, in WINDOW coordinates: g_ui_cx
@@ -37290,184 +36090,6 @@ static void nat_pump(void) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Auto-update, POSIX half: fetch = /usr/bin/curl as a
-// child process with a pinned argv, swap = write-verify-rename, restart =
-// execv. The check runs on its own thread and publishes atomically — the
-// start is never blocked.
-// ---------------------------------------------------------------------------
-#include <sys/wait.h>
-
-static char **g_main_argv;   // set in main(); execv keeps the launch arguments
-
-// The exact fetch contract, argv-pinned. -q MUST be the first
-// argument: without it curl reads ~/.curlrc, and a line `insecure` or
-// `proxy = ...` there disables TLS or reroutes the download — writing that
-// file needs no rights in the game directory. Absolute /usr/bin/curl keeps
-// $PATH out of the TCB. --proto '=https' (and -redir) refuses a redirect onto
-// http:// or file://. -f turns HTTP errors into exit 22, and a short body
-// into exit 18 — so "exit 0" covers both halves of the fetch rule.
-static int upd_fetch(const char *url, char *dst, size_t cap, size_t *out_len) {
-  int fds[2];
-  *out_len = 0;
-  if (pipe(fds) != 0) { snprintf(g_upd_why, sizeof g_upd_why, "PIPE"); return 0; }
-  pid_t pid = fork();
-  if (pid < 0) {
-    close(fds[0]); close(fds[1]);
-    snprintf(g_upd_why, sizeof g_upd_why, "FORK");
-    return 0;
-  }
-  if (pid == 0) {
-    dup2(fds[1], 1);
-    close(fds[0]); close(fds[1]);
-    char *const cargv[] = {
-      "curl", "-q", "-fsS", "--proto", "=https", "--proto-redir", "=https",
-      // THE URL NEVER CHANGES, SO IT MUST BE ASKED FRESH. Both the sums and
-      // the asset live under releases/latest/download/, one fixed path per
-      // platform for the life of the project, and the DATE inside is equal
-      // across a same-day re-cut — so a proxy or CDN that caches by URL serves
-      // a body that nothing in it can be told is stale. curl keeps no cache of
-      // its own; this is for everything between here and GitHub.
-      "-H", "Cache-Control: no-cache", "-H", "Pragma: no-cache",
-      "--location", "--max-redirs", "5", "--connect-timeout", "5",
-      "--max-time", "30", "--max-filesize", UPD_STR(UPD_FETCH_MAX), "--no-progress-meter",
-      "-o", "-", (char *)url, NULL};
-    execv("/usr/bin/curl", cargv);
-    _exit(127);
-  }
-  close(fds[1]);
-  // A READ ERROR IS NOT END OF BODY. curl's exit status says the transfer went
-  // through; it says nothing about how much of curl's output THIS side got. A
-  // half-read SHA256SUMS whose truncation lands after our own asset line yields
-  // a confident verdict from an incomplete file, which is exactly what
-  // upd_compare's header forbids. Same for the over-cap drain: an error there
-  // used to leave over == 0, i.e. an over-long body accepted as exactly cap.
-  size_t got = 0;
-  int io_err = 0, over = 0;
-  for (;;) {
-    if (got == cap) break;
-    ssize_t r = read(fds[0], dst + got, cap - got);
-    if (r > 0) { got += (size_t)r; continue; }
-    if (r == 0) break;
-    if (errno == EINTR) continue;
-    io_err = 1; break;
-  }
-  if (!io_err && got == cap) {   // response larger than our cap: drain + reject
-    char sink[256];
-    for (;;) {
-      ssize_t r = read(fds[0], sink, sizeof sink);
-      if (r > 0) { over = 1; continue; }
-      if (r == 0) break;
-      if (errno == EINTR) continue;
-      io_err = 1; break;
-    }
-  }
-  close(fds[0]);
-  int st = 0;
-  waitpid(pid, &st, 0);
-  if (!WIFEXITED(st) || WEXITSTATUS(st) != 0) {
-    snprintf(g_upd_why, sizeof g_upd_why,
-             WIFEXITED(st) && WEXITSTATUS(st) == 127 ? "CURL MISSING" : "NET");
-    return 0;
-  }
-  if (io_err) { snprintf(g_upd_why, sizeof g_upd_why, "NET"); return 0; }
-  if (over) { snprintf(g_upd_why, sizeof g_upd_why, "TOO LARGE"); return 0; }
-  *out_len = got;
-  return 1;
-}
-
-// Writability is probed BEFORE any offer: an unwritable directory
-// (AppImage mount, /usr/local/bin) must show the manual line, not download
-// 800 KB per start that can go nowhere.
-static void upd_probe_fs(void) {
-  char exe[512], p[600];
-  if (!exe_path(exe, sizeof exe)) { g_upd_writable = 0; return; }
-  snprintf(p, sizeof p, "%s.new.probe.%d", exe, (int)getpid());
-  int fd = open(p, O_CREAT | O_EXCL | O_WRONLY, 0600);
-  if (fd >= 0) { close(fd); unlink(p); g_upd_writable = 1; }
-  else g_upd_writable = 0;
-}
-
-static void *upd_thread(void *arg) {
-  (void)arg;
-  upd_thread_body();
-  return NULL;
-}
-
-static void upd_check_start(void) {
-  if (!upd_check_gate()) return;
-  pthread_t th;
-  if (pthread_create(&th, NULL, upd_thread, NULL) == 0) pthread_detach(th);
-  else upd_spawn_failed();
-}
-
-// The telemetry resolver's Linux half — same shape as upd_check_start above,
-// deliberately: getaddrinfo blocks and the caller is the frame loop.
-static void *tele_thread(void *arg) {
-  (void)arg;
-  tele_resolve_body();
-  return NULL;
-}
-
-static void tele_resolve_start(void) {
-  pthread_t th;
-  if (pthread_create(&th, NULL, tele_thread, NULL) == 0) pthread_detach(th);
-  else atomic_store(&g_tele_ip, 0xFFFFFFFFu);   // no thread, no telemetry
-}
-
-// Download to MEMORY, hash THERE, only then touch the filesystem, and never
-// re-read the written file by path (the TOCTOU rule). After the verified bytes
-// exist under <exe>.new.<pid>, everything left is metadata: link the current
-// binary to <exe>.old (kept as the manual recovery copy — there is no rollback
-// button any more, see the forward declarations), rename() the new one over
-// the exe — atomic even under a running process — and execv it.
-
-// The "metadata done, become the new binary" tail. execv replaces the
-// image with no CRT teardown, so no thread join is needed here (the Windows
-// twin, win_relaunch, must join WASAPI).
-static int upd_relaunch(const char *exe) {
-  config_write(g_cfg_path, &g_cfg);
-  execv(exe, g_main_argv);
-  // execv returned = failed. The swapped file is already in place — the next
-  // manual start runs it; nothing is lost.
-  snprintf(g_upd_why, sizeof g_upd_why, "EXEC");
-  return 0;
-}
-
-static int upd_apply(void) {
-  size_t len = 0;
-  char *buf = upd_download_verified(&len);
-  if (!buf) return 0;
-  char exe[512], newp[600], old[600];
-  if (!exe_path(exe, sizeof exe)) { free(buf); return 0; }
-  snprintf(newp, sizeof newp, "%s.new.%d", exe, (int)getpid());
-  snprintf(old, sizeof old, "%s.old", exe);
-  int fd = open(newp, O_WRONLY | O_CREAT | O_EXCL, 0700);
-  if (fd < 0) {
-    free(buf);
-    snprintf(g_upd_why, sizeof g_upd_why, "WRITE");
-    return 0;
-  }
-  size_t off = 0;
-  while (off < len) {
-    ssize_t w = write(fd, buf + off, len - off);
-    if (w <= 0) { close(fd); unlink(newp); free(buf);
-                  snprintf(g_upd_why, sizeof g_upd_why, "WRITE"); return 0; }
-    off += (size_t)w;
-  }
-  free(buf);
-  int bad = fchmod(fd, 0755) != 0 || fsync(fd) != 0;
-  if (close(fd) != 0) bad = 1;
-  if (bad) { unlink(newp); snprintf(g_upd_why, sizeof g_upd_why, "WRITE"); return 0; }
-  unlink(old);
-  if (link(exe, old) != 0) { /* best effort: a failed link loses the copy, not the swap */ }
-  if (rename(newp, exe) != 0) {
-    unlink(newp);
-    snprintf(g_upd_why, sizeof g_upd_why, "RENAME");
-    return 0;
-  }
-  return upd_relaunch(exe);
-}
 
 // Time-seeded arena when --seed was not given — the server fork and the play
 // fork share the one formula (the comment "same contract as play mode" was
@@ -37519,9 +36141,6 @@ static int native_main(int w, int h, uint32_t seed) {
   player_t *player_s = &g_players[0];   // human 0 IS the local player (P1-1)
   app_start(player_s, w, h, seed);
   audio_start();
-  // Async, never blocking the start; harness and server sessions never
-  // reach this line, which IS the "server and harness never update" rule.
-  upd_check_start();
   // Boot into the menu over the LIVE arena: the match is already running
   // behind it, so SINGLEPLAYER -> START MATCH is two presses with the focus
   // starting on the first of them. Play mode only: the harness
@@ -37718,23 +36337,6 @@ static int server_main(uint32_t seed) {
       long late0 = (nw.tv_sec - next.tv_sec) * 1000000000L +
                    (nw.tv_nsec - next.tv_nsec);
       g_srv_catchup = late0 > (long)(1e9 / TICK_HZ);
-      // THE TELEMETRY BUDGETS RESET OFF THIS CLOCK, NOT OFF THE TICK COUNTER.
-      // `ticks % TICK_HZ == 0` reads like "once per second" and is not: a
-      // catch-up burst runs ticks faster than wall time, so the reset would
-      // fire more often than once per second — the cap would RISE exactly
-      // when the server is already behind, which is when it is needed most.
-      // Monotonic seconds also survive an NTP step, which time(NULL) does not,
-      // and the clock is already read here for the catch-up test, so both
-      // resets are free. They are GLOBAL, so they belong here, outside the
-      // per-lobby loop (the input budget's reset lives inside it; putting
-      // these there would run them `lobbies` times per second — idempotent,
-      // but it would read as a per-lobby cap).
-      static long tele_sec = -1, tele_day = -1;
-      if (nw.tv_sec != tele_sec) { tele_sec = nw.tv_sec; g_tele_budget = 0; }
-      if (nw.tv_sec / 86400 != tele_day) {
-        tele_day = nw.tv_sec / 86400;
-        g_tele_day_budget = 0;
-      }
     }
     net_srv_poll();                    // ONE socket, routed into the arenas
     // EVERY ARENA TICKS, IN ORDER. The body is exactly the single-arena loop
@@ -37799,7 +36401,6 @@ static int server_main(uint32_t seed) {
 }
 
 int main(int argc, char **argv) {
-  g_main_argv = argv;   // execv after a self-update keeps the launch arguments
   int w = 1280, h = 720;
   uint32_t seed = DEFAULT_SEED;
   char *script = NULL;
@@ -38193,7 +36794,10 @@ static int win_dinput_pump(pad_state_t *out, double now) {
 }
 
 static void win_dinput_load(double now) {
-  HMODULE m = LoadLibraryA("dinput8.dll");
+  // System32 only: a bare LoadLibrary also searches the exe folder, so a DLL
+  // dropped beside a downloaded game would run as us. 0x800 is
+  // LOAD_LIBRARY_SEARCH_SYSTEM32, spelled out to need no _WIN32_WINNT bump.
+  HMODULE m = LoadLibraryExA("dinput8.dll", NULL, 0x00000800);
   if (!m) return;
   pfn_DirectInput8Create create = (pfn_DirectInput8Create)(void *)
     GetProcAddress(m, "DirectInput8Create");
@@ -38236,8 +36840,8 @@ static unsigned g_xi_live;      // bit s = slot s answered on the last scan
 
 static void win_pad_load(void) {
   win_dinput_load(0.0);
-  HMODULE m = LoadLibraryA("xinput1_4.dll");           // Win8+
-  if (!m) m = LoadLibraryA("xinput9_1_0.dll");         // the OS-shipped fallback
+  HMODULE m = LoadLibraryExA("xinput1_4.dll", NULL, 0x00000800);   // Win8+
+  if (!m) m = LoadLibraryExA("xinput9_1_0.dll", NULL, 0x00000800); // OS-shipped fallback
   if (m) g_xi_get_state = (pfn_XInputGetState)(void *)GetProcAddress(m, "XInputGetState");
 }
 
@@ -38460,7 +37064,6 @@ static void win_input_clear(void) {
 }
 
 static void platform_menu_changed(void) {
-  upd_menu_recheck();   // the Windows backend has no harness path to gate
   if (g_menu_open) {
     ClipCursor(NULL);
     POINT pt;
@@ -38634,195 +37237,6 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
   return DefWindowProcA(hwnd, msg, wp, lp);
 }
 
-// ---------------------------------------------------------------------------
-// Auto-update, Windows half. Fetch is WinHTTP (in the
-// SDK, -lwinhttp); its default redirect policy already refuses https->http,
-// which is the guarantee the curl line pins by flag. The swap is the
-// rename->rename pair: a running .exe cannot be deleted but CAN be renamed,
-// so exe -> exe.old, exe.new -> exe, CreateProcess, exit. If the SECOND
-// rename fails, the still-running old process restores old -> exe before it
-// ends — after exiting nobody could. Wide APIs throughout: the updater is the
-// one place a codepage-mangled path destroys the install.
-// ---------------------------------------------------------------------------
-
-static int upd_fetch(const char *url, char *dst, size_t cap, size_t *out_len) {
-  *out_len = 0;
-  wchar_t wurl[512];
-  if (!MultiByteToWideChar(CP_UTF8, 0, url, -1, wurl, 512)) {
-    snprintf(g_upd_why, sizeof g_upd_why, "URL");
-    return 0;
-  }
-  URL_COMPONENTS uc = {.dwStructSize = sizeof uc};
-  wchar_t host[256], path[512];
-  uc.lpszHostName = host; uc.dwHostNameLength = 256;
-  uc.lpszUrlPath = path;  uc.dwUrlPathLength = 512;
-  if (!WinHttpCrackUrl(wurl, 0, 0, &uc) || uc.nScheme != INTERNET_SCHEME_HTTPS) {
-    snprintf(g_upd_why, sizeof g_upd_why, "URL");   // https only, like --proto
-    return 0;
-  }
-  int ok = 0;
-  HINTERNET ses = WinHttpOpen(L"skill-issue", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-                              WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-  HINTERNET con = NULL, req = NULL;
-  if (!ses) goto done;
-  WinHttpSetTimeouts(ses, 5000, 5000, 30000, 30000);
-  con = WinHttpConnect(ses, host, uc.nPort, 0);
-  if (!con) goto done;
-  req = WinHttpOpenRequest(con, L"GET", path, NULL, WINHTTP_NO_REFERER,
-                           WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
-  if (!req) goto done;
-  // Ask fresh: same reason as the curl side (one fixed URL, and a same-day
-  // re-cut carries the same date inside). WinHTTP holds no cache itself, but
-  // AUTOMATIC_PROXY means the request may well go through one that does.
-  if (!WinHttpSendRequest(req, L"Cache-Control: no-cache\r\nPragma: no-cache",
-                          (DWORD)-1L, NULL, 0, 0, 0) ||
-      !WinHttpReceiveResponse(req, NULL))
-    goto done;
-  DWORD status = 0, sl = sizeof status;
-  if (!WinHttpQueryHeaders(req, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &sl,
-                           WINHTTP_NO_HEADER_INDEX) || status != 200)
-    goto done;
-  size_t got = 0;
-  for (;;) {
-    DWORD n = 0;
-    if (!WinHttpReadData(req, dst + got, (DWORD)(cap - got), &n)) goto done;
-    if (n == 0) break;
-    got += n;
-    if (got == cap) {          // larger than our cap: reject, like curl's cap
-      char sink[256]; DWORD s2 = 0;
-      if (WinHttpReadData(req, sink, sizeof sink, &s2) && s2 > 0) {
-        snprintf(g_upd_why, sizeof g_upd_why, "TOO LARGE");
-        goto done;
-      }
-      break;
-    }
-  }
-  *out_len = got;
-  ok = 1;
-done:
-  if (!ok && !g_upd_why[0]) snprintf(g_upd_why, sizeof g_upd_why, "NET");
-  if (req) WinHttpCloseHandle(req);
-  if (con) WinHttpCloseHandle(con);
-  if (ses) WinHttpCloseHandle(ses);
-  return ok;
-}
-
-static void upd_wpath(wchar_t *out, size_t n, const wchar_t *exe, const wchar_t *sfx) {
-  _snwprintf(out, n, L"%s%s", exe, sfx);
-  out[n - 1] = 0;
-}
-
-static void upd_probe_fs(void) {
-  wchar_t exe[512], p[600];
-  DWORD len = GetModuleFileNameW(NULL, exe, 512);
-  if (!len || len >= 512) { g_upd_writable = 0; return; }
-  _snwprintf(p, 600, L"%s.new.probe.%lu", exe, (unsigned long)GetCurrentProcessId());
-  p[599] = 0;
-  HANDLE h = CreateFileW(p, GENERIC_WRITE, 0, NULL, CREATE_NEW,
-                         FILE_ATTRIBUTE_NORMAL, NULL);
-  if (h != INVALID_HANDLE_VALUE) {
-    CloseHandle(h);
-    DeleteFileW(p);
-    g_upd_writable = 1;
-  } else g_upd_writable = 0;
-}
-
-static DWORD WINAPI upd_thread(LPVOID arg) {
-  (void)arg;
-  upd_thread_body();
-  return 0;
-}
-
-static void upd_check_start(void) {
-  if (!upd_check_gate()) return;
-  HANDLE th = CreateThread(NULL, 0, upd_thread, NULL, 0, NULL);
-  if (th) CloseHandle(th);
-  else upd_spawn_failed();
-}
-
-// The telemetry resolver's Windows half — same shape as upd_check_start above.
-// The Winsock net_resolve has no numeric fast path at all, so this thread is
-// the only thing keeping a dead resolver off the first rendered frame.
-static DWORD WINAPI tele_thread(LPVOID arg) {
-  (void)arg;
-  tele_resolve_body();
-  return 0;
-}
-
-static void tele_resolve_start(void) {
-  HANDLE th = CreateThread(NULL, 0, tele_thread, NULL, 0, NULL);
-  if (th) CloseHandle(th);
-  else atomic_store(&g_tele_ip, 0xFFFFFFFFu);   // no thread, no telemetry
-}
-
-// The one "metadata done, become the new binary" step. On success the
-// WASAPI thread is
-// stopped and joined BEFORE exit(0) — WinMain's own teardown comment names
-// the race: exiting while the audio thread sits inside a WASAPI/COM call is
-// resolved by loader luck. The join runs only after CreateProcessW succeeded,
-// so a failed relaunch keeps its audio alive.
-static int win_relaunch(const wchar_t *exe) {
-  config_write(g_cfg_path, &g_cfg);
-  STARTUPINFOW si = {.cb = sizeof si};
-  PROCESS_INFORMATION pi;
-  if (CreateProcessW(exe, GetCommandLineW(), NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) {
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-    atomic_store(&g_audio_run, 0);
-    if (g_audio_h) { WaitForSingleObject(g_audio_h, 800); CloseHandle(g_audio_h); }
-    exit(0);
-  }
-  snprintf(g_upd_why, sizeof g_upd_why, "EXEC");
-  return 0;   // swapped file is in place; the next manual start runs it
-}
-
-static int upd_apply(void) {
-  size_t len = 0;
-  char *buf = upd_download_verified(&len);
-  if (!buf) return 0;
-  wchar_t exe[512], newp[600], old[600];
-  DWORD elen = GetModuleFileNameW(NULL, exe, 512);
-  if (!elen || elen >= 512) { free(buf); snprintf(g_upd_why, sizeof g_upd_why, "PATH"); return 0; }
-  _snwprintf(newp, 600, L"%s.new.%lu", exe, (unsigned long)GetCurrentProcessId());
-  newp[599] = 0;
-  upd_wpath(old, 600, exe, L".old");
-  HANDLE h = CreateFileW(newp, GENERIC_WRITE, 0, NULL, CREATE_NEW,
-                         FILE_ATTRIBUTE_NORMAL, NULL);
-  if (h == INVALID_HANDLE_VALUE) {
-    free(buf);
-    snprintf(g_upd_why, sizeof g_upd_why, "WRITE");
-    return 0;
-  }
-  DWORD off = 0;
-  int bad = 0;
-  while (off < (DWORD)len) {
-    DWORD w = 0;
-    if (!WriteFile(h, buf + off, (DWORD)len - off, &w, NULL) || w == 0) { bad = 1; break; }
-    off += w;
-  }
-  free(buf);
-  if (!bad) bad = !FlushFileBuffers(h);
-  CloseHandle(h);
-  if (bad) {
-    DeleteFileW(newp);
-    snprintf(g_upd_why, sizeof g_upd_why, "WRITE");
-    return 0;
-  }
-  // Metadata-only from here: rename -> rename, restore on failure.
-  if (!MoveFileExW(exe, old, MOVEFILE_REPLACE_EXISTING)) {
-    DeleteFileW(newp);
-    snprintf(g_upd_why, sizeof g_upd_why, "RENAME");
-    return 0;
-  }
-  if (!MoveFileExW(newp, exe, MOVEFILE_REPLACE_EXISTING)) {
-    MoveFileExW(old, exe, MOVEFILE_REPLACE_EXISTING);   // restore while we still can
-    DeleteFileW(newp);
-    snprintf(g_upd_why, sizeof g_upd_why, "RENAME");
-    return 0;
-  }
-  return win_relaunch(exe);
-}
 
 int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
   (void)prev; (void)cmdline; (void)show;
@@ -38901,7 +37315,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show) {
             ((uint32_t)(seed_qpc.QuadPart >> 32) * 2654435761u) ^
             GetCurrentProcessId());
   g_audio_h = CreateThread(NULL, 0, audio_thread, NULL, 0, NULL);
-  upd_check_start();   // async; never blocks the start
   ui_open_menu();      // boot into the menu over the live arena, as on Linux
   home_enter(local_player());   // ...as the BOOT SCREEN, as on Linux
   boot_connect_kick();   // --connect, same as Linux

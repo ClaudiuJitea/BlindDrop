@@ -5,12 +5,10 @@ screenshots/
 .agents/
 .claude
 .codex/
-.codehamr/
 .pi/
 post/
 tools/*
 !tools/ci-proofs.sh
-!tools/server-report.awk
 CLAUDE.md
 AGENTS.md
 docs/
