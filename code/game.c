@@ -14380,6 +14380,20 @@ static const char *WORLD_FS =
   "  rough = clamp(vMat.x + (h2 - 0.5) * 0.16 * uDetail, 0.045, 1.0);\n"
   "  } else rough = clamp(vMat.x, 0.045, 1.0);\n"
   "  float metal = vMat.y, ao = vMat.z;\n"
+  // Negative metalness flags the viewmodel sleeves. The pattern is anchored to
+  // the weapon's frame, so it rides with the arms instead of crawling over them.
+  "  if (metal < -0.5) {\n"
+  "    metal = 0.0;\n"
+  "    vec3 cq = vWorld - uMdlO;\n"
+  "    vec2 cp = vec2(dot(cq, uMdlX) + cq.y * 0.8, dot(cq, uMdlZ)) * 24.0;\n"
+  "    float c1 = vnoise2(cp + vnoise2(cp * 0.6) * 1.4);\n"
+  "    float c2 = vnoise2(cp * 0.55 + 17.0);\n"
+  "    vec3 cc = vec3(0.040, 0.046, 0.058);\n"
+  "    cc = mix(cc, vec3(0.190, 0.160, 0.115), smoothstep(0.46, 0.50, c2));\n"
+  "    cc = mix(cc, vec3(0.012, 0.014, 0.018), smoothstep(0.55, 0.59, c1));\n"
+  "    cc = mix(cc, vec3(0.095, 0.112, 0.140), smoothstep(0.42, 0.38, c1));\n"
+  "    alb = cc * clamp(dot(vCol, vec3(0.3333)) * 2.0, 0.0, 1.2);\n"
+  "  }\n"
   // --- WEAPON MICRO-STRUCTURE, IN THE WEAPON'S OWN FRAME --------------------
   // A finish is what separates steel from a moulding, and there was none of it
   // anywhere in the stream: one roughness and one albedo per PART means a
@@ -22605,7 +22619,8 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
   // extremes are pushed apart rather than everything raised: a lighter gun
   // against a light arena loses its silhouette, which is the failure the
   // paragraph above already paid for once.
-  v3 body  = {{0.152f, 0.163f, 0.178f}};  // dark polymer (dielectric), COOL
+  v3 acc   = {{1.000f, 0.480f, 0.070f}};  // blaze accent: the brand on the weapon
+  v3 body  = {{0.690f, 0.575f, 0.415f}};  // dark polymer (dielectric), COOL
   // ...AND FOR A METAL THE ALBEDO IS ITS SPECULAR REFLECTANCE, F0, not a paint
   // colour — which is the term these two were being authored as. At 0.288
   // display the parkerized upper was F0 = 0.083 LINEAR: less reflective than
@@ -22619,7 +22634,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
   // figure because this arena's ground IS warm sand and a rifle that mirrors it
   // at 0.5 loses exactly the silhouette the palette paragraph above was written
   // to protect. 0.365 display = 0.133 linear, 0.520 = 0.270.
-  v3 upper = {{0.365f, 0.359f, 0.344f}};  // parkerized alloy: dark, but metal
+  v3 upper = {{0.300f, 0.310f, 0.335f}};  // parkerized alloy: dark, but metal
   v3 steel = {{0.520f, 0.502f, 0.462f}};  // bare steel: reflectance, not paint
   v3 black = {{0.128f, 0.126f, 0.124f}};  // rubber / dead-black — nothing real
                                           // sits at 0.005 linear
@@ -22631,8 +22646,8 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
   // keeping the thing the borrowed one was for: ONE VALUE STEP lighter than the
   // magwell it hangs out of, so a reload has a silhouette, in the furniture's
   // own cool family rather than the receiver's warm one.
-  v3 mag   = {{0.232f, 0.246f, 0.263f}};  // magazine body: polymer, one step up
-  v3 chas  = {{0.298f, 0.330f, 0.268f}};  // SR chassis polymer: the AWM's
+  v3 mag   = {{0.130f, 0.135f, 0.145f}};  // magazine body: polymer, one step up
+  v3 chas  = {{0.655f, 0.545f, 0.395f}};  // SR chassis polymer: the AWM's
                                           // olive-drab — the one color that
                                           // says "precision rifle" on sight
   v3 glass = {{0.045f, 0.055f, 0.070f}};  // coated lens: dark pupil, bright rim
@@ -22732,9 +22747,9 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       // exactly where the eye rests over the support hand — the fore rail
       // stays a clean unbroken line.
       GBOX(0, 0.0415f, -0.005f + 0.021f * (float)r, 0.0104f, 0.0020f, 0.0042f, upper);
-    GBOX(0.0145f, -0.004f, 0.040f, 0.0030f, 0.0044f, 0.0050f, black);  // bolt catch
+    GBOX(0.0145f, -0.004f, 0.040f, 0.0030f, 0.0044f, 0.0050f, acc);  // bolt catch
     GBOX(0.0168f, 0.0210f, 0.0275f, 0.0028f, 0.0042f, 0.0062f, upper);  // brass deflector
-    GBOX(-0.0145f, -0.006f, 0.078f, 0.0030f, 0.0038f, 0.0042f, black); // mag release
+    GBOX(-0.0145f, -0.006f, 0.078f, 0.0030f, 0.0038f, 0.0042f, acc); // mag release
     GBOX(-0.0155f, 0.028f, 0.056f, 0.0030f, 0.0040f, 0.0060f, upper);  // forward assist
     mat_set(MAT_STEEL_R, MAT_STEEL_M);
     // THE CHARGING HANDLE MOVES. The AR's reload went visually dead from the
@@ -22760,7 +22775,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // Flared feed collar, proud of the well on every side — the aggressive
     // competition-magwell silhouette, and a real thickness step (>2.6 mm
     // through the well's top face) so nothing grazes.
-    GBOX(0, -0.0122f, 0.1085f, 0.0158f, 0.0036f, 0.0310f, black); // magwell flare
+    GBOX(0, -0.0122f, 0.1085f, 0.0158f, 0.0036f, 0.0310f, acc); // magwell flare
     // ---- stock group ----
     // THE BUFFER TUBE DID NOT COME OUT OF THE MIDDLE OF THE RECEIVER, and that
     // is a y offset the whole stock group carries. The tube's axis sat at 0.014
@@ -22813,7 +22828,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // behind the receiver moved with it, so the stock is longer rather than
     // detached.
     GBOX(0,  0.017f, -0.203f, 0.0142f, 0.0265f, 0.011f, black);  // butt pad
-    GBOX(0,  0.017f, -0.2175f, 0.0148f, 0.0242f, 0.0045f, body); // pad rib plate
+    GBOX(0,  0.017f, -0.2175f, 0.0148f, 0.0242f, 0.0045f, acc); // pad rib plate
     mat_set(MAT_POLY_R, 0.0f);
     // HK-SLIDER STOCK (ref: commons HK416N): ~5 cm of bare buffer tube shows
     // behind the receiver, then the sliding stock BODY takes over — nose
@@ -23321,7 +23336,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // butt block's own top plane y=0.027 — the shared-top z-fight again)
     GBOX(0, -0.0040f, -0.2405f, 0.0122f, 0.0290f, 0.0075f, black); // butt pad
     mat_set(MAT_POLY_R, 0.0f);
-    GBOX(0, -0.0040f, -0.2340f, 0.0106f, 0.0270f, 0.0026f, chas);  // pad spacer
+    GBOX(0, -0.0040f, -0.2340f, 0.0106f, 0.0270f, 0.0026f, acc);  // pad spacer
     // Fore-end in the AR's design language: no bolted-on rails where the
     // hand lives — a muscular shoulder at the receiver flowing through a
     // slight palm swell at the hold station into the slim AWM nose. The
@@ -23999,14 +24014,25 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   // it was designed as. Still far under the old bone-white skin wedge (0.648)
   // that made the face the brightest thing on the figure.
   v3 bala  = {{0.318f, 0.309f, 0.282f}};
+  // OPPOSING FORCE: black fatigues, sand carrier, crimson shell, so a figure pops
+  // off every arena floor at range under all five skies.
+  olive = (v3){{0.335f, 0.335f, 0.365f}};
+  dark  = (v3){{0.365f, 0.345f, 0.350f}};
+  helm  = (v3){{0.760f, 0.205f, 0.150f}};
+  nyl   = (v3){{0.660f, 0.560f, 0.415f}};
+  web   = (v3){{0.235f, 0.225f, 0.235f}};
+  rub   = (v3){{0.255f, 0.255f, 0.270f}};
+  gm2   = (v3){{1.900f, 0.420f, 0.180f}};   // lit goggles
+  bala  = (v3){{0.270f, 0.265f, 0.285f}};
   if (palette == 1) {  // the player: the same kit in slate blue — the SAME
     // value ramp as the olive design (boots darkest, carrier light, helmet
     // peak), only the hue family changes.
-    olive = (v3){{0.352f, 0.394f, 0.498f}};
-    dark  = (v3){{0.278f, 0.310f, 0.398f}};
-    helm  = (v3){{0.404f, 0.442f, 0.542f}};
-    web   = (v3){{0.202f, 0.226f, 0.288f}};
-    boot  = (v3){{0.158f, 0.164f, 0.196f}};
+    olive = (v3){{0.335f, 0.375f, 0.440f}};
+    dark  = (v3){{0.290f, 0.320f, 0.380f}};
+    helm  = (v3){{0.900f, 0.480f, 0.120f}};   // the brand's blaze orange
+    web   = (v3){{0.150f, 0.160f, 0.190f}};
+    boot  = (v3){{0.130f, 0.130f, 0.150f}};
+    gm2   = (v3){{0.360f, 1.700f, 2.000f}};   // lit goggles, cyan
     // The three tones the palette used to leave behind, and leaving them behind
     // was not neutral — it was a different figure. On the bot the carrier is
     // separated from the uniform by HUE (coyote against olive: chromaticity
@@ -24019,9 +24045,9 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     // ball joint this file already killed once at the shoulder.
     // Wolf grey carrier (chroma distance 0.075, value 1.155x — the bot's 0.070
     // and 1.135x), pads and balaclava pulled into the blue family.
-    nyl   = (v3){{0.452f, 0.452f, 0.470f}};
-    rub   = (v3){{0.206f, 0.216f, 0.246f}};
-    bala  = (v3){{0.300f, 0.312f, 0.348f}};
+    nyl   = (v3){{0.700f, 0.610f, 0.470f}};
+    rub   = (v3){{0.160f, 0.168f, 0.190f}};
+    bala  = (v3){{0.260f, 0.275f, 0.305f}};
   }
   if (flash01 > 0) {  // hit flash: every surface washes toward the flash color
     olive = v3_lerp(olive, flash_col, flash01);
@@ -24066,8 +24092,8 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   // step; against the dark rifle the separation comes from ROUGHNESS
   // (MAT_GLOVE_R 0.72 vs the weapon's 0.30-0.55) and the hero rim, so the
   // tone stays a charcoal with a breath of warmth rather than a void black.
-  v3 glove = palette == 1 ? (v3){{0.118f, 0.112f, 0.108f}}
-                          : (v3){{0.148f, 0.141f, 0.135f}};
+  v3 glove = palette == 1 ? (v3){{0.470f, 0.385f, 0.270f}}   // coyote tan
+                          : (v3){{0.160f, 0.155f, 0.165f}};
   if (flash01 > 0) glove = v3_lerp(glove, flash_col, flash01);
   kit_t kt;
   kt.olive = olive;
@@ -26161,7 +26187,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // on the viewmodel before this was compensated at all). That factor lives
     // here, once, instead of in a second set of colours that can drift.
     kit_t vkt = fig_kit(1, 0.0f, (v3){{1, 1, 1}});
-    v3 sleeve = v3_scale(vkt.sleeve, 1.055f);   // the player's own slate uniform
+    v3 sleeve = {{0.5f, 0.5f, 0.5f}};  // camo sleeve: this only carries the shading
     v3 glove  = v3_scale(vkt.glove, 1.055f);    // ...and his own gloves
     // The cuff belongs to the GLOVE, not to the sleeve. In the sleeve's own
     // slate it read as a stripe painted on the arm; in the glove's leather two
@@ -26438,7 +26464,36 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       // fig_forearm. `back` above is this view's contribution: the wrist's own
       // two rotations off the palm axis. NULL elbow, because a viewmodel arm
       // simply leaves the frame at its authored length.
+      mat_set(MAT_CLOTH_R, -1.0f);   // camo flag, see the world shader
       fig_forearm(hd[h].wrist, back, pd, gx, hd[h].side, sleeve, gnt, NULL, 12);
+      // Forearm armour. First person only, so it costs the shared figure nothing.
+      // The frame sits on the arm's outer face, the side the player actually sees.
+      {
+        v3 ax = v3_norm(back);
+        v3 up0 = v3_sub(upv, v3_scale(ax, v3_dot(upv, ax)));
+        v3 on = v3_norm(up0);
+        v3 os = v3_norm(v3_cross(ax, on));
+        v3 w0 = hd[h].wrist;
+        #define ARMP(t, a, b) v3_add(w0, v3_add(v3_scale(ax, t), \
+                              v3_add(v3_scale(on, a), v3_scale(os, b))))
+        v3 cf = {{0.205f, 0.215f, 0.235f}}, st = {{0.075f, 0.078f, 0.086f}};
+        v3 tan = {{0.620f, 0.510f, 0.360f}}, bl = {{1.000f, 0.480f, 0.070f}};
+        v3 scr = {{1.150f, 0.640f, 0.180f}};
+        mat_set(0.42f, 0.0f);
+        scene_box(ARMP(0.178f, 0.0405f, 0.0f), v3_scale(ax, 0.052f),
+                  v3_scale(on, 0.0060f), v3_scale(os, 0.0255f), cf);    // rear plate
+        scene_box(ARMP(0.112f, 0.0355f, 0.0f), v3_scale(ax, 0.030f),
+                  v3_scale(on, 0.0056f), v3_scale(os, 0.0225f), tan);   // fore plate
+        scene_box(ARMP(0.178f, 0.0477f, 0.0f), v3_scale(ax, 0.040f),
+                  v3_scale(on, 0.0020f), v3_scale(os, 0.0034f), bl);    // accent spine
+        mat_set(0.40f, 0.0f);
+        scene_box(ARMP(0.058f, 0.0298f, 0.0f), v3_scale(ax, 0.0215f),
+                  v3_scale(on, 0.0060f), v3_scale(os, 0.0175f), st);    // wrist computer
+        mat_set(0.25f, 0.0f);
+        scene_box(ARMP(0.058f, 0.0342f, 0.0f), v3_scale(ax, 0.0120f),
+                  v3_scale(on, 0.0026f), v3_scale(os, 0.0095f), scr);   // its screen
+        #undef ARMP
+      }
     }
     mat_set(MAT_PARK_R, MAT_PARK_M);
     probe(NULL);

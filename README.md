@@ -23,6 +23,7 @@
 - **Dropped in blind.** Every match generates a new arena, along with its weapons, characters and sounds, so nobody starts with map knowledge.
 - **Five skies.** Every arena drops into High Noon, Golden Hour, Ember Dusk, Cold Dawn or Stormfront, with its own light, clouds and color grade. Everyone in a match sees the same one.
 - **Two guns, everyone gets both.** A hitscan rifle and a bolt sniper. No loadouts, unlocks or attachments.
+- **Built to be seen.** Enemies wear charcoal with crimson helmets, players wear slate with blaze orange, and your own arms carry camo sleeves and forearm armor.
 - **Movement you can get good at.** Air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots that make solo worthwhile.** They hear you, remember you and push.
 - **One small executable.** Plain C with no engine and no asset files.
