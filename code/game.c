@@ -26588,6 +26588,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       #define VD(a, b, c) v3_add(v3_scale(gx, a), v3_add(v3_scale(gy, b), v3_scale(gz, c)))
       v3 ro = v3_sub(hd[0].gc, VP(0.0f, -0.0500f, -0.0078f));
       v3 lo = v3_sub(hd[1].gc, VP(0.0f,  0.0190f,  0.3050f));
+      lo = v3_add(lo, v3_scale(gy, -0.022f * ads));   // the fingers clear the sight picture
       model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
       // The back of the support hand turns to face the eye. Built along the gun it
       // would be foreshortened to a strip, since the gun points away from the view.
