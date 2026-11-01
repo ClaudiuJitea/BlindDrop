@@ -289,33 +289,43 @@ def pad(a, b, out, r=.0088, lift=.0086, col=None):
     soft(o); finish(o, col or PAD, .56, 0, 0)
 
 def hand_l():
-    """Support hand in a C-clamp: fingers curl up and over the handguard."""
+    """Support hand. Every digit is routed around the outside of the handguard
+    section, so a finger cannot pass through the gun whatever the view."""
     clear()
-    Z = (.262, .284, .306, .328)
+    CY = .0200                                      # handguard axis height
+    def cyl(deg, r, z):
+        a_ = radians(deg); return V3(r*cos(a_), CY + r*sin(a_), z)
     W = V3(-.060, -.112, .262)
-    X = V3(-1, 0, 0)
     parts = []; rows = []
-    for i, z in enumerate(Z):
-        arc = (-.0060, .0012, .0030, -.0012)[i]     # knuckles follow a curve
-        fan = (-.0065, -.0022, .0022, .0065)[i]     # fingers spread a little
-        mcp = V3(-.0420 + arc*.3, -.0100 + arc, z)
+    #            little ring   middle index
+    TH0 =       (252.,  234.,  216.,  199.)         # knuckle bearing round the section
+    Z0  =       (.2520, .2805, .3090, .3375)
+    TH1 =       (128.,  116.,  110.,  116.)         # fingertip bearing, clear of the rail
+    RAD =       (.0098, .0104, .0108, .0102)
+    for i in range(4):
+        R_ = .0245 + RAD[i] + .0006                 # lies on the handguard's skin
+        mcp = cyl(TH0[i], R_ + .0050, Z0[i])
         base = W + V3(0, 0, -.0240 + .0160*i)
-        parts.append(tube([(base, .0165), ((base+mcp)/2 + V3(-.002,0,0), .0160), (mcp, .0145)]))
-        r = (.0112, .0122, .0126, .0120)[i]
-        l = (.86, .96, 1.0, .96)[i]
-        pip = mcp + V3(.0020, .0290*l, fan)
-        dip = pip + V3(.0190, .0200*l, fan*.7)
-        tip = dip + V3(.0230, .0020*l, fan*.4)
-        parts.append(tube([(mcp, r*1.12), (pip, r*1.06), (dip, r*.98), (tip, r*.84)]))
-        rows.append((mcp, pip, dip))
-    th = [(V3(-.0500,-.0800,.2800), .0200), (V3(-.0320,-.0440,.3300), .0170), (V3(-.0090,-.0220,.3520), .0138), (V3(.0090,-.0090,.3500), .0112)]
+        parts.append(tube([(base, .0165), ((base+mcp)/2 + V3(-.003,-.002,0), .0160), (mcp, .0145)]))
+        pts = []
+        for k, u in enumerate((0.0, .33, .66, 1.0)):
+            d = TH0[i] + (TH1[i] - TH0[i]) * u
+            rr = RAD[i] * (1.02, 1.0, .96, .84)[k]
+            pts.append((cyl(d, R_ + (.0050 if k == 0 else 0.0), Z0[i] + .0030*(i-1.5)*u), rr))
+        parts.append(tube(pts))
+        rows.append((pts, R_))
+    # the thumb runs under the handguard and up the far side
+    th = [(V3(-.0500,-.0800,.2860), .0200), (cyl(262., .0450, .3220)+V3(0,-.0040,0), .0165), (cyl(305., .0392, .3360), .0132), (cyl(345., .0376, .3420), .0108)]
     parts.append(tube(th))
     parts.append(tube([(W + V3(0,0,-.018), .0230), (W + V3(0,0,.018), .0230)]))
     merge_glove(parts)
-    for mcp, pip, dip in rows:
-        flat(mcp + V3(-.0132,.0015,0), (0,1,0), (-1,.15,0), .0062, .0078, .0022, b=.0016)   # knuckle
-        o_ = (pip + dip)/2 - V3(0,.020,(pip.z+dip.z)/2)
-        flat((pip+dip)/2 + o_.normalized()*.0108, dip-pip, o_, .0060, .0068, .0015, b=.0011)
+    for pts, R_ in rows:
+        for a_, b_ in ((0, 1), (1, 2)):
+            c = (pts[a_][0] + pts[b_][0]) / 2
+            o_ = V3(c.x, c.y - CY, 0)
+            flat(c + o_.normalized()*(pts[a_][1]*1.06), pts[b_][0]-pts[a_][0], o_, .0062, .0072, .0016, b=.0011)
+        o_ = V3(pts[0][0].x, pts[0][0].y - CY, 0)
+        flat(pts[0][0] + o_.normalized()*.0128, V3(0,0,1).cross(o_), o_, .0064, .0080, .0022, b=.0016)
     flat(W + V3(-.0225,.0130,.0030), (0,0,1), (-.9,.1,-.3), .0250, .0072, .0024, DARK)      # wrist strap
 
 def hand_r():

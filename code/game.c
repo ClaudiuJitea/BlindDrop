@@ -26611,17 +26611,10 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       v3 lo = v3_sub(hd[1].gc, VP(0.0f,  0.0190f,  0.3050f));
       lo = v3_add(lo, v3_scale(gy, -0.022f * ads));   // the fingers clear the sight picture
       model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
-      // The back of the support hand turns to face the eye. Built along the gun it
-      // would be foreshortened to a strip, since the gun points away from the view.
-      v3 lx = VD(0.60f, 0.0f, 0.80f), lz = VD(-0.80f, 0.0f, 0.60f);
-      v3 lpiv = v3_add(VP(-0.0080f, -0.0060f, 0.2820f), lo);
-      v3 lo2 = v3_sub(lpiv, v3_add(v3_scale(lx, -0.0420f), v3_add(v3_scale(gy, -0.0060f),
-                                                                  v3_scale(lz, 0.2950f))));
-      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, lo2, lx, gy, lz);
+      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
       for (int h = 0; h < 2; h++) {
         v3 wr = h == 0 ? v3_add(VP(0.058f, -0.100f, -0.098f), ro)
-                       : v3_add(lo2, v3_add(v3_scale(lx, -0.060f), v3_add(v3_scale(gy, -0.112f),
-                                                                          v3_scale(lz, 0.262f))));
+                       : v3_add(VP(-0.060f, -0.112f, 0.262f), lo);
         v3 ax = v3_norm(h == 0 ? VD(0.40f, -0.62f, -0.68f) : VD(-0.48f, -0.80f, -0.34f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
