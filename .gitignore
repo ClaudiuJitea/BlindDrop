@@ -21,4 +21,5 @@ trailer
 post.md
 *.mp4
 opencode.json
-node_modules/
+node_modules/.devcontainer/
+.vscode/

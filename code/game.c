@@ -459,7 +459,8 @@ static float rng_range(float lo, float hi) { return rng_rangef(&g_rng, lo, hi); 
 // order, so the enum IS the menu layout.
 typedef enum {
   IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT, IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R,
-  IN_FIRE, IN_ADS, IN_RELOAD, IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SCORE, IN_VIEW,
+  IN_FIRE, IN_ADS, IN_RELOAD, IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5,
+  IN_SCORE, IN_VIEW,
   IN_COUNT
 } action_t;
 
@@ -494,6 +495,9 @@ static const action_def_t ACTION_DEF[IN_COUNT] = {
   [IN_SWAP]    = {"bind_swap",       "x",      "SWAP WPN",         "swap",       "pad_y"},
   [IN_SLOT1]   = {"bind_slot1",      "1",      "WEAPON 1 AR",      "slot1",      "pad_left"},
   [IN_SLOT2]   = {"bind_slot2",      "2",      "WEAPON 2 SNIPER",  "slot2",      "pad_right"},
+  [IN_SLOT3]   = {"bind_slot3",      "3",      "WEAPON 3 PISTOL",  "slot3",      "none"},
+  [IN_SLOT4]   = {"bind_slot4",      "4",      "WEAPON 4 KNIFE",   "slot4",      "none"},
+  [IN_SLOT5]   = {"bind_slot5",      "5",      "WEAPON 5 GRENADE", "slot5",      "none"},
   [IN_SCORE]   = {"bind_score",      "tab",    "SCOREBOARD",       "score",      "pad_select"},
   [IN_VIEW]    = {"bind_view",       "v",      "VIEW 1ST/3RD",     "view",       "pad_down"},
 };
@@ -539,7 +543,7 @@ static const param_def_t MV_DEF[MV_COUNT] = {
 // owns a row in g_cfg.wp, persisted as "<prefix>_<key>" (ar_rpm, sr_rpm, ...)
 // and edited live in the WEAPON tab's per-weapon editor. Structural identity
 // (mag, damage, fire mode, reload) lives in WPN_DEF below, in code.
-typedef enum { WPN_AR, WPN_SR, WPN_COUNT } wpn_id_t;
+typedef enum { WPN_AR, WPN_SR, WPN_PT, WPN_KN, WPN_GR, WPN_COUNT } wpn_id_t;
 
 typedef enum {
   WP_RPM, WP_KICK_UP, WP_KICK_SIDE, WP_RECOVER_MS, WP_SPREAD, WP_BLOOM,
@@ -584,6 +588,14 @@ static const float WP_DEFAULTS[WPN_COUNT][WP_COUNT] = {
   // minimum interval between two trigger pulls — 60 ms, i.e. "as fast as you
   // can click". Anything lower was felt as the gun eating deliberate shots.
   [WPN_SR] = {1000, 1.80f, 0.20f, 500, 0.03f, 0.03f, 200, 80, 1.00f, 1.0f},
+  // A sidearm: quick to the eye and sharp in the hand, every shot its own snap.
+  [WPN_PT] = {420, 0.70f, 0.18f, 170, 0.08f, 0.09f, 130, 88, 0.80f, 1.0f},
+  // The knife spends only three of these. ADS TIME is how fast the guard comes
+  // up, VIEW PUNCH how hard a landed swing jolts the view and SWAY its idle
+  // float; the swing itself is timed by MELEE below, not by rpm.
+  [WPN_KN] = {60, 0.0f, 0.0f, 200, 0.0f, 0.0f, 110, 100, 0.40f, 1.0f},
+  // Only SWAY matters to a grenade: timing and flight are the NADE_* numbers.
+  [WPN_GR] = {60, 0.0f, 0.0f, 200, 0.0f, 0.0f, 110, 100, 0.40f, 1.0f},
 };
 
 // Structural weapon identity — not sliders: changing these changes WHAT the
@@ -649,6 +661,18 @@ enum {
   // stream was introduced to remove, reintroduced through the back door.
   SFX_FLESH,                         // a round arriving in a MAN
   SFX_RELOAD_AR_TAC,                 // ...and the AR's tactical reload
+  SFX_FIRE_PT, SFX_RELOAD_PT,        // the pistol
+  SFX_KNIFE_SWING, SFX_KNIFE_WALL,   // a blade through air, and into a wall
+  SFX_KNIFE_BLOCK,                   // steel on steel
+  SFX_NADE_PIN, SFX_NADE_BOUNCE,     // the pin, and steel skipping on the ground
+  SFX_BLAST, SFX_BLAST_FAR,          // a detonation, close and across the arena
+  SFX_NADE_SPOON, SFX_NADE_EQUIP,    // the lever's ping, and a glove closing on it
+  // No two shots are the same explosion, so each gun has a set of takes (see
+  // sfx_shot_id). The slap is what the nearest wall sends back, placed at run time.
+  SFX_FIRE_AR2, SFX_FIRE_AR3, SFX_FIRE_AR4, SFX_FIRE_AR5,
+  SFX_FIRE_SR2, SFX_FIRE_SR3,
+  SFX_FIRE_PT2, SFX_FIRE_PT3, SFX_FIRE_PT4,
+  SFX_FAR_PT, SFX_SLAP,
   SFX_COUNT
 };
 
@@ -663,9 +687,67 @@ static const wpn_def_t WPN_DEF[WPN_COUNT] = {
   // 150, and the sniper's through-wall body shot is a kill.
   [WPN_AR] = {"AR",     "ar", 30,  26, 2, 152, 124, 1, 0.12f, SFX_FIRE_AR,
               SFX_RELOAD_AR, 0.045f, 900.0f},
-  [WPN_SR] = {"SNIPER", "sr",  5, 150, 2, 214, 214, 0, 3.00f, SFX_FIRE_SR,
+  // 0.60 off the scope, not 3.00: at 3 degrees the crosshair opened as wide as a
+  // fifth of the screen and a shot at 20 m could land a metre from it. Still twice
+  // the pistol, so the scope remains the way to place a round.
+  [WPN_SR] = {"SNIPER", "sr",  5, 150, 2, 214, 214, 0, 0.60f, SFX_FIRE_SR,
               SFX_RELOAD_SR, 0.130f, 840.0f},
+  [WPN_PT] = {"PISTOL", "pt", 15,  34, 2, 118,  96, 0, 0.32f, SFX_FIRE_PT,
+              SFX_RELOAD_PT, 0.050f, 370.0f},
+  // One "round" that is never spent, so a reload can never start and the empty
+  // checks every weapon path shares stay true without a knife exception.
+  // dmg is unused: each swing in MELEE carries its own.
+  [WPN_KN] = {"KNIFE",  "kn",  1,   0, 2,   1,   1, 1, 0.00f, SFX_KNIFE_SWING,
+              SFX_KNIFE_SWING, 0.030f, 0.0f},
+  // `mag` is the grenades you spawn with. They never reload.
+  [WPN_GR] = {"GRENADE", "gr", 2,   0, 1,   1,   1, 0, 0.00f, SFX_NADE_PIN,
+              SFX_NADE_PIN, 0.030f, 0.0f},
 };
+
+// THE GRENADE. A fragmentation grenade on a 3.5 s fuse that starts as the pin comes
+// out: hold FIRE to pull it and cook, release to throw, and hold AIM as you release
+// to lob it underhand. Hold it past the fuse and it goes off in your hand.
+#define NADE_FUSE      420      // ticks
+#define NADE_PIN_T     20       // the pin takes this long; a tap still pulls it
+#define NADE_THROW_T   56       // the whole throw
+#define NADE_RELEASE_T 16       // ...and the tick the hand opens
+#define NADE_SPEED     16.5f    // m/s overhand, about a soldier's throw
+#define NADE_LOB       6.5f     // m/s underhand
+#define NADE_GRAVITY   9.81f
+#define NADE_DRAG      0.0009f  // per tick, a small fast sphere barely feels air
+#define NADE_BOUNCE    0.34f    // steel on hard ground: a dead thud, not a ball
+#define NADE_FRICTION  0.62f    // tangential speed kept per bounce
+#define NADE_ROLL      0.986f   // per tick while rolling
+#define NADE_R         0.036f   // collision radius
+// THE BLAST. Inside BLAST_CORE nobody lives; past it fragments thin out with
+// distance to nothing at BLAST_R. Everything is measured to the body, and each
+// of three points on it needs a clear line, so cover really is cover: a man with
+// only his head showing takes a third of it.
+#define BLAST_R        9.0f
+#define BLAST_CORE     2.0f
+#define BLAST_DMG      200.0f
+#define BLAST_SHOVE    11.0f    // m/s of throw at the centre
+
+// THE KNIFE'S THREE SWINGS. A chain alternates forehand and backhand slashes and
+// closes on a thrust; a pause longer than MELEE_CHAIN_TICKS restarts it. Ticks
+// are 1/120 s. The strike window is when the blade is actually moving through
+// the target, and the sim sweeps real rays across the same arc the animation
+// draws, from a0 to a1 (radians of yaw, + = right) and p0 to p1 (pitch), so a
+// slash hits what it visibly crosses.
+typedef struct {
+  int   total, strike0, strike1, dmg;
+  float reach, a0, a1, p0, p1;
+} melee_def_t;
+static const melee_def_t MELEE[3] = {
+  {54, 14, 22, 50, 1.90f,  0.62f, -0.62f,  0.12f, -0.16f},   // forehand, R -> L
+  {54, 14, 22, 50, 1.90f, -0.62f,  0.62f, -0.14f,  0.14f},   // backhand, L -> R
+  {72, 24, 30, 75, 2.25f,  0.00f,  0.00f,  0.00f,  0.00f},   // thrust: reach, not arc
+};
+#define MELEE_CHAIN_TICKS 42   // pause that restarts the chain
+#define MELEE_PARRY_TICKS 26   // a guard raised within 217 ms of the hit PARRIES
+#define MELEE_STAGGER_TICKS 66 // 0.55 s the parried attacker cannot act
+#define MELEE_GUARD_ARC 0.26f  // cos(75 deg): the guard covers the front only
+#define MELEE_CHIP 10          // a blocked (not parried) hit still costs this
 
 // The reload's two defining beats as fractions of reload_ticks. The audio
 // events and the viewmodel's punch impulses are two consumers of one timeline —
@@ -690,6 +772,9 @@ static const float RELOAD_BEAT[WPN_COUNT][2] = {
   // stripper load, where the two loudest events were "bolt forward" and "bolt
   // down" and there was no magazine at all.
   {0.560f, 0.955f},
+  {0.560f, 0.960f},   // pistol: the magazine seats, then the slide drops
+  {0.560f, 0.960f},   // knife: never reloads; the row keeps the table total
+  {0.560f, 0.960f},   // grenade: likewise
 };
 
 // The magazine's insert parameter, 0 at the start of the travel window and 1 at
@@ -773,7 +858,7 @@ static int g_server;
 // startup — a chain that holds nowhere by itself, and whose upper end is the
 // one the old cap_hard=10 quietly violated (the binary has no ninth human).
 static struct {   // consumed by the Linux server half only
-  int port, cap_bots, cap_public, skill, fraglimit, lobbies;
+  int port, cap_bots, cap_public, skill, fraglimit, lobbies, mode, rounds, map;
   long ticks;          // 0 = run forever; N = exit after N ticks (test/RSS runs)
 // DESIGNATED, and not merely as a style preference. This was positional, and
 // adding `lobbies` to the int line above put it BEFORE `ticks` while the
@@ -788,7 +873,8 @@ static struct {   // consumed by the Linux server half only
 // in game.log after it. A positional initializer over a struct whose field list
 // is edited is a silent trap, and this one only has to be sprung once.
 } g_srv = {.port = NET_PORT_DEF, .cap_bots = 2, .cap_public = 6,
-           .skill = 1, .fraglimit = 12, .lobbies = 1, .ticks = 0};
+           .skill = 1, .fraglimit = 12, .lobbies = 1, .mode = 0, .rounds = 3,
+           .ticks = 0};
 
 // WHICH entity is "me" — the one identity that is allowed to differ per
 // process: 0 in singleplayer, the own id on a networked client,
@@ -847,6 +933,33 @@ static int ent_next(int e) {
 // instead (see config_defaults' sp_diff).
 static const param_def_t SP_BOTS_DEF = {"sp_bots",      "BOTS",        1, 1, MAX_BOTS, 1};
 static const param_def_t SP_FRAG_DEF = {"sp_fraglimit", "FRAG LIMIT", 10, 1, 1000,     1};
+// LAST MAN STANDING plays to rounds, not frags: a frag limit of 10 read as "ten
+// rounds" is a forty-minute match. Its own slider, its own key.
+static const param_def_t SP_ROUNDS_DEF = {"sp_rounds",  "ROUNDS TO WIN", 3, 1, 20,     1};
+
+// GAME MODES. One enum, one name table, one wire value (NP_SCORES carries it as
+// a byte, so the order is protocol: append, never reorder). Every rule a mode
+// changes is asked through the mode_* helpers next to match_t, never by
+// comparing g_match.mode at a call site — that is how the weapon gate, the
+// respawn gate and the win condition stay in one place.
+typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_COUNT } game_mode_t;
+static const char *const GM_NAMES[GM_COUNT] = {
+  "DEATHMATCH", "GUN GAME", "SNIPERS ONLY", "KNIVES + NADES", "LAST MAN STANDING"};
+static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms"};
+// GUN GAME's ladder: GG_RUNG_KILLS kills with each weapon promote you to the
+// next, and one kill with the last (the knife) wins — nine kills, about a
+// deathmatch's ten. At one kill a rung a six-bot match was over in fifteen
+// seconds. The grenade rung never runs dry (mode_nade_refill) and a KNIFE kill
+// knocks the victim back a whole rung.
+static const int GG_LADDER[] = {WPN_AR, WPN_PT, WPN_SR, WPN_GR, WPN_KN};
+#define GG_LEVELS ((int)(sizeof GG_LADDER / sizeof GG_LADDER[0]))
+#define GG_RUNG_KILLS 2
+static int map_parse(const char *s);        // the MAP setting; both live with
+static const char *map_pick_key(int pick);  // MAP_DEFS, by map_generate
+static int gm_parse(const char *s) {
+  for (int i = 0; i < GM_COUNT; i++) if (!strcmp(s, GM_KEYS[i])) return i;
+  return -1;
+}
 
 // ---------------------------------------------------------------------------
 // Gamepad — shared vocabulary and processing. The platform backends (evdev on
@@ -1260,6 +1373,9 @@ typedef struct {
   int   sp_bots;             // deathmatch opponents, range in SP_BOTS_DEF
   int   sp_diff;             // bot difficulty: 0 easy, 1 normal, 2 hard
   int   sp_frag;             // frag limit, range in SP_FRAG_DEF
+  int   sp_mode;             // game_mode_t; applies at the next (re)start
+  int   sp_rounds;           // LAST MAN STANDING rounds to win, SP_ROUNDS_DEF
+  int   sp_map;              // a MAP_DEFS index, or MAP_ROTATE; next (re)start
   char  name[12];            // player name; glyph policy lives in name_glyph
   int   third_person;        // camera: 0 = first person, 1 = shoulder cam
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
@@ -1337,6 +1453,7 @@ static config_t config_defaults(void) {
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
                 .sp_frag = (int)SP_FRAG_DEF.def, .name = "PLAYER",
+                .sp_mode = GM_DM, .sp_rounds = (int)SP_ROUNDS_DEF.def, .sp_map = 0,
                 // LINEAR (0), changed from STANDARD 2026-08-19. The power curve
                 // was chosen to widen the precision band most thumbs live in —
                 // but it does that by making the stick's OUTPUT non-linear in
@@ -1396,6 +1513,10 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "%s %.2f\n", VOL_DEF.key, (double)c->vol);
   fprintf(f, "sp_bots %d\nsp_difficulty %d\nsp_fraglimit %d\nplayer_name %s\n",
           c->sp_bots, c->sp_diff, c->sp_frag, c->name);
+  fprintf(f, "sp_mode %s\n%s %d\n", GM_KEYS[c->sp_mode >= 0 && c->sp_mode < GM_COUNT
+                                             ? c->sp_mode : GM_DM],
+          SP_ROUNDS_DEF.key, c->sp_rounds);
+  fprintf(f, "sp_map %s\n", map_pick_key(c->sp_map));
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
@@ -1581,6 +1702,17 @@ static void config_load_or_create(const char *path, config_t *c) {
       else                    c->sp_frag = parse_int_def(parse_long(val, c->sp_frag),
                                                          &SP_FRAG_DEF);
     }
+    else if (!strcmp(key, "sp_mode")) {
+      int m = gm_parse(val);
+      if (m >= 0) c->sp_mode = m;
+    }
+    else if (!strcmp(key, "sp_map")) {
+      int m = map_parse(val);
+      if (m >= 0) c->sp_map = m;
+    }
+    else if (!strcmp(key, SP_ROUNDS_DEF.key)) {
+      c->sp_rounds = parse_int_def(parse_long(val, c->sp_rounds), &SP_ROUNDS_DEF);
+    }
     else if (!strcmp(key, "player_name")) {
       int n = 0;
       for (const char *q = val; *q && n < (int)sizeof c->name - 1; q++) {
@@ -1744,14 +1876,32 @@ static uint32_t net_now_ms(void);               // monotonic ms for timeouts/RTT
 // AND the render mesh; themes color them.
 // ---------------------------------------------------------------------------
 
-#define ARENA_HALF   24.0f
+// THE ARENA'S HALF-SIZE IS A PROPERTY OF THE MAP. 24 m (a 48 m square) for
+// ARENA and the open handmade maps; the large tactical maps set their own in
+// MAP_DEFS, and map_generate publishes it here per lobby before it lays a
+// single box. Read through the accessor so a lobby that has not generated yet
+// still answers the historical 24 rather than 0.
+#define ARENA_HALF_DEF 24.0f
+static float g_arena_half_all[SRV_LOBBIES];
+static inline float arena_half(void) {
+  float h = g_arena_half_all[g_lobby];
+  return h > 0.0f ? h : ARENA_HALF_DEF;
+}
+#define ARENA_HALF (arena_half())
+// STEP-UP, also per map. 0 on every map that existed before it (the collision
+// has never auto-climbed, and their proofs and pacing are measured that way —
+// see wall_rubble); the tactical maps have stairs, and a stair you must JUMP
+// every 30 cm of is not a stair. A body walking into a box whose top is within
+// this height of its feet, with headroom above it, is lifted onto it.
+static float g_step_h_all[SRV_LOBBIES];
+#define STEP_H (g_step_h_all[g_lobby])
 // Raised from 96 with the wall-damage pass: a broken wall is up to four
 // abutting pieces plus three rubble blocks where it used to be one box, and all
 // of them are real cover that has to be in the collision set. int16 carries the
 // solid index on the wire (net_ev_from_live) and the world hash is over the
 // USED entries, so the ceiling itself is free — what it costs is 16 lobbies x
 // 32 x 40 bytes of server memory.
-#define MAX_SOLIDS   160
+#define MAX_SOLIDS   8192  // 160 suited the 48 m arena; a dressed 104 m town needs thousands
 
 // `pen` = a round may cross this box if its budget stretches that far. Cover and
 // crates are shootable-through material; the arena SHELL is not cover, it is the
@@ -1771,6 +1921,16 @@ static uint32_t g_map_seed_all[SRV_LOBBIES];
 #define g_map_seed (g_map_seed_all[g_lobby])
 static int      g_world_dirty_all[SRV_LOBBIES];
 #define g_world_dirty (g_world_dirty_all[g_lobby])
+// WHICH MAP. 0 is the procedural ARENA (a fresh layout per seed); 1.. are the
+// handmade maps in MAP_DEFS. It is half of the world's identity — the seed
+// still drives the tints, the wind and every RNG stream — so it travels with
+// the seed everywhere the seed travels (ACCEPT, every snapshot) and both are
+// adopted together. g_map_pick is the MAP setting that chose it (a map id, or
+// MAP_ROTATE), latched at the last (re)start.
+static int      g_map_id_all[SRV_LOBBIES];
+#define g_map_id (g_map_id_all[g_lobby])
+static int      g_map_pick_all[SRV_LOBBIES];
+#define g_map_pick (g_map_pick_all[g_lobby])
 
 static const v3 SPAWN_POS = {{0.0f, 0.0f, 18.0f}};
 
@@ -1778,6 +1938,139 @@ static void map_add(v3 mn, v3 mx, v3 col) {
   if (g_num_solids >= MAX_SOLIDS) return;
   g_solids[g_num_solids++] = (solid_t){mn, mx, col, 1};
 }
+
+// ---------------------------------------------------------------------------
+// THE SOLID INDEX. Every collision sweep, sight line, trace and foot clamp in
+// this file is a loop over ALL the solids, which was right at 30-160 boxes and
+// is not at the thousands a dressed tactical map carries. So a map with more
+// than BP_MIN solids gets a uniform 4 m grid over the floor plan, each cell
+// listing the solids whose footprint touches it, and the hot loops iterate the
+// candidates a region or a ray can touch instead.
+//
+// THE LOOPS DO NOT CHANGE. The iterator hands out candidate indices in
+// ASCENDING order — a bitmap, scanned low to high — so a loop that breaks on
+// its first hit, or prefers the lower index on a tie, decides exactly what the
+// full scan would have; it simply never visits a solid that could not matter.
+// At or below BP_MIN the iterator walks 0..n-1 itself, so every map that
+// existed before it runs the same code path, bit for bit.
+// ---------------------------------------------------------------------------
+#define BP_CELL    4.0f
+#define BP_MIN     300
+#define BP_MAXC    32                    // cells per side: up to a 128 m map
+#define BP_IDX_MAX 131072
+#define BP_WORDS   (MAX_SOLIDS / 32)
+typedef struct {
+  int      ok, nc;
+  float    org;                          // world coordinate of cell 0's edge
+  uint32_t start[BP_MAXC * BP_MAXC + 1];
+  uint16_t idx[BP_IDX_MAX];
+} bp_grid_t;
+static bp_grid_t g_bp_all[SRV_LOBBIES];
+#define g_bp (g_bp_all[g_lobby])
+
+static int bp_c(float w) {
+  int c = (int)floorf((w - g_bp.org) / BP_CELL);
+  return c < 0 ? 0 : c >= g_bp.nc ? g_bp.nc - 1 : c;
+}
+
+static void bp_build(void) {
+  g_bp.ok = 0;
+  if (g_num_solids <= BP_MIN) return;
+  float ext = ARENA_HALF + 1.0f;
+  g_bp.org = -ext;
+  g_bp.nc = (int)ceilf(2.0f * ext / BP_CELL);
+  if (g_bp.nc > BP_MAXC) return;
+  int nc = g_bp.nc, total = 0;
+  static uint32_t cnt[BP_MAXC * BP_MAXC];
+  memset(cnt, 0, sizeof cnt);
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *sd = &g_solids[i];
+    for (int z = bp_c(sd->min.z); z <= bp_c(sd->max.z); z++)
+      for (int x = bp_c(sd->min.x); x <= bp_c(sd->max.x); x++) { cnt[z * nc + x]++; total++; }
+  }
+  if (total > BP_IDX_MAX) return;        // stays off: the full scans still work
+  g_bp.start[0] = 0;
+  for (int c = 0; c < nc * nc; c++) g_bp.start[c + 1] = g_bp.start[c] + cnt[c];
+  memset(cnt, 0, sizeof cnt);
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *sd = &g_solids[i];
+    for (int z = bp_c(sd->min.z); z <= bp_c(sd->max.z); z++)
+      for (int x = bp_c(sd->min.x); x <= bp_c(sd->max.x); x++) {
+        int c = z * nc + x;
+        g_bp.idx[g_bp.start[c] + cnt[c]++] = (uint16_t)i;
+      }
+  }
+  g_bp.ok = 1;
+}
+
+typedef struct { int full, n, wi; uint32_t cur; uint32_t w[BP_WORDS]; } bp_iter_t;
+
+static void bp_mark_cell(bp_iter_t *it, int c) {
+  for (uint32_t k = g_bp.start[c]; k < g_bp.start[c + 1]; k++) {
+    unsigned i = g_bp.idx[k];
+    it->w[i >> 5] |= 1u << (i & 31);
+  }
+}
+static void bp_iter_init(bp_iter_t *it) {
+  it->n = g_num_solids;
+  it->full = !g_bp.ok;
+  it->wi = 0;
+  it->cur = 0;
+  if (!it->full) memset(it->w, 0, sizeof(uint32_t) * (size_t)((it->n + 31) >> 5));
+}
+static bp_iter_t *bp_box(bp_iter_t *it, float x0, float z0, float x1, float z1) {
+  bp_iter_init(it);
+  if (it->full) return it;
+  for (int z = bp_c(z0); z <= bp_c(z1); z++)
+    for (int x = bp_c(x0); x <= bp_c(x1); x++) bp_mark_cell(it, z * g_bp.nc + x);
+  it->cur = it->w[0];
+  return it;
+}
+// The cells a ray's floor-plan shadow crosses over [0, len] (Amanatides-Woo).
+static bp_iter_t *bp_ray(bp_iter_t *it, v3 o, v3 d, float len) {
+  bp_iter_init(it);
+  if (it->full) return it;
+  int nc = g_bp.nc, x = bp_c(o.x), z = bp_c(o.z);
+  int sx = d.x > 0 ? 1 : -1, sz = d.z > 0 ? 1 : -1;
+  float ax = fabsf(d.x), az = fabsf(d.z);
+  float nbx = g_bp.org + (float)(x + (sx > 0)) * BP_CELL;
+  float nbz = g_bp.org + (float)(z + (sz > 0)) * BP_CELL;
+  float tmx = ax > 1e-7f ? (nbx - o.x) / d.x : 1e30f;
+  float tmz = az > 1e-7f ? (nbz - o.z) / d.z : 1e30f;
+  float tdx = ax > 1e-7f ? BP_CELL / ax : 1e30f, tdz = az > 1e-7f ? BP_CELL / az : 1e30f;
+  for (int guard = 0; guard < 4 * BP_MAXC; guard++) {
+    bp_mark_cell(it, z * nc + x);
+    float tn = fminf(tmx, tmz);
+    if (tn > len) break;
+    if (tmx < tmz) { x += sx; tmx += tdx; } else { z += sz; tmz += tdz; }
+    if (x < 0 || z < 0 || x >= nc || z >= nc) break;
+  }
+  it->cur = it->w[0];
+  return it;
+}
+static int bp_next(bp_iter_t *it, int *out) {
+  if (it->full) {
+    if (it->wi >= it->n) return 0;
+    *out = it->wi++;
+    return 1;
+  }
+  int nw = (it->n + 31) >> 5;
+  while (!it->cur) {
+    if (++it->wi >= nw) return 0;
+    it->cur = it->w[it->wi];
+  }
+  int b = __builtin_ctz(it->cur);
+  it->cur &= it->cur - 1;
+  *out = (it->wi << 5) + b;
+  return 1;
+}
+// `for` sugar: BP_BOX(i, x0, z0, x1, z1) { ... } visits candidate solid i.
+// break/continue behave as in the plain loop they replace.
+#define BP_LOOP(i, INIT) \
+  for (bp_iter_t i##_it, *i##_p = (INIT); i##_p; i##_p = NULL) \
+    for (int i; bp_next(i##_p, &i);)
+#define BP_BOX(i, x0, z0, x1, z1) BP_LOOP(i, bp_box(&i##_it, x0, z0, x1, z1))
+#define BP_RAY(i, o, d, len)      BP_LOOP(i, bp_ray(&i##_it, o, d, len))
 
 // Perimeter = 4 wall bases + 4 accent bands, always solids 0..7.
 #define PERIM_SOLIDS 8
@@ -2105,13 +2398,1179 @@ static uint64_t rng_gun_seed(uint32_t seed, int h) {
          (uint64_t)h * 0x9E3779B97F4A7C15u;
 }
 
+// ---------------------------------------------------------------------------
+// HANDMADE MAPS. Same 48 m shell, same box-only vocabulary, same rules the
+// generator obeys: 180-degree rotational symmetry (mk mirrors every box, mk1 is
+// for the few pieces centred on the origin, which would otherwise be added
+// twice and z-fight), nothing taller than a JUMP HEIGHT step without a step
+// up to it, and no two same-facing faces sharing a plane (`mapcheck`). Bots have
+// no pathing, so every enclosure is open on at least two sides and doorways
+// are wide. The fixed spawn point (0, 18) — SPAWN_POS, where a session's first
+// life stands before any respawn — is kept clear on every map.
+// ---------------------------------------------------------------------------
+static void mk(float x0, float z0, float x1, float z1, float y0, float y1, v3 c) {
+  map_add_sym((v3){{x0, y0, z0}}, (v3){{x1, y1, z1}}, c);
+}
+static void mk1(float x0, float z0, float x1, float z1, float y0, float y1, v3 c) {
+  map_add((v3){{x0, y0, z0}}, (v3){{x1, y1, z1}}, c);
+}
+
+// FOUNDRY — a gantry you can stand on or run under, furnace stacks for
+// landmarks, and two side halls you enter at either end or through the middle.
+static void map_foundry(void) {
+  const theme_t *t = &g_theme;
+  // The gantry deck (1.9 m clear underneath) on four legs, a stair at each end.
+  mk1(-5.0f, -2.0f, 5.0f, 2.0f, 1.90f, 2.20f, t->crate_b);
+  mk(4.2f, 1.2f, 4.8f, 1.8f, 0.0f, 1.90f, t->cover);
+  mk(4.2f, -1.8f, 4.8f, -1.2f, 0.0f, 1.90f, t->cover);
+  mk(5.2f, -1.4f, 6.2f, 1.4f, 0.0f, 1.45f, col_tint(t->crate_b, 0.94f, 1.0f));
+  mk(6.2f, -1.4f, 7.2f, 1.4f, 0.0f, 0.72f, t->crate_a);
+  // Furnace stacks, each with a collar.
+  mk(9.0f, -11.0f, 11.0f, -9.0f, 0.0f, 4.6f, t->mid);
+  mk(8.8f, -11.2f, 11.2f, -8.8f, 1.3f, 1.6f, t->cover);
+  // The side halls: one wall each side of the middle door, both halls.
+  mk(13.0f, -14.0f, 13.6f, -4.0f, 0.0f, 2.6f, t->wall);
+  mk(13.0f, 4.0f, 13.6f, 14.0f, 0.0f, 2.6f, t->wall);
+  mk(17.0f, -8.0f, 18.4f, -6.6f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(18.4f, -7.7f, 19.0f, -6.9f, 0.0f, 0.55f, t->crate_b);
+  mk(19.5f, 2.0f, 20.7f, 3.2f, 0.0f, 1.0f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(19.8f, 2.3f, 20.4f, 2.9f, 0.98f, 1.45f, t->crate_b);
+  mk(16.0f, 10.0f, 21.0f, 10.5f, 0.0f, 1.0f, t->cover);
+  // The yards at either end: a conveyor to shoot over, a stacked container.
+  mk(-8.0f, 15.0f, 2.0f, 15.6f, 0.0f, 1.05f, t->cover);
+  mk(-16.0f, 16.0f, -12.0f, 19.0f, 0.0f, 2.5f, col_tint(t->crate_a, 0.9f, 1.0f));
+  mk(-15.6f, 16.4f, -12.4f, 18.6f, 2.5f, 4.9f, col_tint(t->crate_b, 0.9f, 1.0f));
+  // Crates either side of the gantry.
+  mk(2.0f, 5.0f, 3.2f, 6.2f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(-7.0f, 6.0f, -6.0f, 8.0f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
+}
+
+// A market stall: counter, two posts at the back, an awning over both. ax 0
+// runs the counter along x with its back to +z; ax 1 along z, back to +x.
+static void stall(float cx, float cz, int ax, v3 awn) {
+  const theme_t *t = &g_theme;
+#define ST(a0, b0, a1, b1, y0, y1, c) \
+  (ax ? mk(cx + (b0), cz + (a0), cx + (b1), cz + (a1), y0, y1, c) \
+      : mk(cx + (a0), cz + (b0), cx + (a1), cz + (b1), y0, y1, c))
+  ST(-1.20f, -0.40f, 1.20f, 0.40f, 0.0f, 1.0f, col_tint(t->crate_a, 0.93f, 1.07f));
+  ST(-1.38f, 0.82f, -1.22f, 0.98f, 0.0f, 2.30f, t->crate_b);
+  ST(1.22f, 0.82f, 1.38f, 0.98f, 0.0f, 2.30f, t->crate_b);
+  ST(-1.50f, -0.70f, 1.50f, 1.30f, 2.30f, 2.42f, awn);
+#undef ST
+}
+
+// BAZAAR — four buildings make a plus of streets through a fountain square,
+// stalls crowd the streets and the outer ring, and two rooftops are reachable
+// by a stair: close quarters everywhere except from the roofs.
+static void map_bazaar(void) {
+  const theme_t *t = &g_theme;
+  mk(5.0f, 5.0f, 11.0f, 11.0f, 0.0f, 3.2f, col_tint(t->wall, 0.92f, 0.98f));
+  mk(-11.0f, 5.0f, -5.0f, 11.0f, 0.0f, 3.2f, col_tint(t->cover, 0.95f, 1.05f));
+  mk(3.4f, 9.0f, 4.2f, 10.4f, 0.0f, 1.05f, t->crate_a);           // roof stair
+  mk(4.2f, 9.0f, 5.0f, 10.4f, 0.0f, 2.10f, t->crate_b);
+  mk(5.3f, 5.05f, 10.7f, 5.45f, 3.2f, 3.9f, t->crate_b);          // parapet
+  mk1(-1.6f, -1.6f, 1.6f, 1.6f, 0.0f, 0.8f, t->crate_b);          // fountain
+  mk1(-0.4f, -0.4f, 0.4f, 0.4f, 0.0f, 3.0f, t->mid);
+  stall(-2.5f, 8.0f, 1, t->band_s);
+  stall(8.0f, -2.5f, 0, t->band_n);
+  stall(17.0f, 1.0f, 1, t->mid);
+  stall(17.0f, 9.0f, 1, t->band_s);
+  stall(15.0f, -16.0f, 0, t->band_n);
+  stall(2.0f, 16.0f, 0, t->mid);
+  mk(12.5f, -3.0f, 13.0f, 3.0f, 0.0f, 1.0f, t->cover);            // barriers
+  mk(20.0f, -7.0f, 21.2f, -5.8f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(-21.0f, 6.0f, -19.8f, 7.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
+}
+
+// OUTPOST — three lanes split by long walls with offset gaps, a tower in the
+// middle, a gated bunker at each end and a climbable container in each side
+// lane: long sightlines, built for the sniper.
+static void map_outpost(void) {
+  const theme_t *t = &g_theme;
+  mk1(-1.5f, -1.5f, 1.5f, 1.5f, 0.0f, 5.0f, t->mid);
+  mk(-8.3f, -12.0f, -7.7f, -4.0f, 0.0f, 2.8f, t->wall);
+  mk(-8.3f, 1.5f, -7.7f, 12.0f, 0.0f, 2.8f, t->wall);
+  // Bunkers: two platforms either side of a gate, parapets in front, a step up
+  // at each outer end.
+  mk(-6.0f, 17.0f, -1.0f, 21.0f, 0.0f, 1.6f, t->cover);
+  mk(1.0f, 17.0f, 6.0f, 21.0f, 0.0f, 1.6f, t->cover);
+  mk(-5.8f, 16.6f, -1.2f, 17.0f, 0.0f, 2.6f, t->crate_b);
+  mk(1.2f, 16.6f, 5.8f, 17.0f, 0.0f, 2.6f, t->crate_b);
+  mk(6.0f, 18.0f, 7.0f, 20.0f, 0.0f, 0.8f, t->crate_a);
+  mk(-7.0f, 18.0f, -6.0f, 20.0f, 0.0f, 0.8f, t->crate_a);
+  // Middle lane cover.
+  mk(-3.0f, 8.0f, 1.0f, 8.5f, 0.0f, 1.0f, t->cover);
+  mk(3.0f, -6.0f, 4.2f, -4.8f, 0.0f, 1.15f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(-4.5f, 13.0f, -3.3f, 14.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
+  // Side lanes: the container perch (two steps up), a low wall, crates.
+  mk(17.0f, -12.0f, 19.4f, -6.0f, 0.0f, 2.5f, col_tint(t->crate_a, 0.9f, 1.0f));
+  mk(17.2f, -11.5f, 19.2f, -8.5f, 2.5f, 5.0f, col_tint(t->crate_b, 0.9f, 1.0f));
+  mk(19.4f, -8.0f, 20.4f, -6.6f, 0.0f, 0.85f, t->crate_b);
+  mk(19.4f, -9.4f, 20.4f, -8.0f, 0.0f, 1.70f, t->crate_b);
+  mk(12.0f, -2.0f, 12.5f, 5.0f, 0.0f, 1.0f, t->cover);
+  mk(14.0f, 12.0f, 15.2f, 13.2f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
+  mk(15.2f, 12.3f, 15.8f, 12.9f, 0.0f, 0.55f, t->crate_b);
+  mk(21.0f, 0.0f, 22.2f, 1.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
+}
+
+// ---------------------------------------------------------------------------
+// THE TACTICAL MAPS — large two-sided layouts in the counter-terrorism-shooter
+// tradition: a T spawn (south) and a CT spawn (north), two bomb sites, and the
+// three-lane structure between them (a long flank, a contested middle, a
+// tunnel run), with chokepoints, roofed passages, stairs and raised ground.
+// No team mode exists yet; the spawn zones are recorded so one can use them.
+//
+// They are AUTHORED AS A GRID, 52 x 52 cells of 2 m (104 m square), one char a
+// cell, and built by merging each run of equal cells into the largest box that
+// fits — so a layout reads as a plan in the source and stays in the low
+// hundreds of solids. Legend (MAPGRID_TILES):
+//   #  building, 8 m          %  building, 5 m        w  wall, 3.2 m
+//   r  roof over open floor (3.4-3.9 m)   ^  catwalk over open floor (2.4-2.8 m)
+//   1..6  raised floor / stair step, top 0.4 m x digit (STEP_H climbs one)
+//   c  crate 1.1 m   C  crate stack 2.2 m   =  low wall 1.05 m
+//   A B  bomb-site floor paint   T K  T / CT spawn zone   .  floor
+// Merged boxes never overlap (the merge partitions the grid), so mapcheck's
+// same-facing-coplanar rule holds by construction; the insets keep crates and
+// low walls off their neighbours' faces.
+// ---------------------------------------------------------------------------
+#define MAPGRID_N 52
+static const char *const MAP_CITADEL[MAPGRID_N] = {
+  "####################################################",
+  "##################................##################",
+  "######...............KKKKKKKKKK................#####",
+  "######...............KKKKKKKKKK................#####",
+  "######...............KKKKKKKKKK................#####",
+  "######.........................................#####",
+  "######.........................................#####",
+  "######....########HHHHH......#############.....#####",
+  "###333333321......HHHHH......#####...............###",
+  "###333333321......HHHHH......#####.......cc......###",
+  "###333333321A.....HHHHH..........................###",
+  "###..AAAAAAAACC...HHHHH........c.....BBBBBBBBB...###",
+  "###..AAAAAAAACC...HHHHH..............BBBBBBBBB...###",
+  "###..AAAAAAAA.....HHHHH......#####..CCBBBBBBBB...###",
+  "###..AAAAAAAA.....#####XX..XX#####..CCBBBBBBBB...###",
+  "###..AccAAAAA.....#####......#####...BBBBBBBBB...###",
+  "###............cc.#####......#####...BBBBBBBBB...###",
+  "###...............#####......#####...BBBBBBBBB...###",
+  "###...............#####......XXXXXXXXX...........###",
+  "###...........====...........XXXXXXXXX......cc111###",
+  "###.....HHHHHH333333321......XXXXXXXXX......cc222###",
+  "###.....HHHHHH333333321......XXXXXXXXX........333###",
+  "###.....HHHHHH.............c....XXXXXX........333###",
+  "###.....HHHHHH#########....c....XXXXXX........333###",
+  "###....c##%%%%%%%%%%%##.........XXXXXX........333###",
+  "###....c##%%%%%%%%%%%##.........XXXXXX........333###",
+  "###.....##%%%%%%%%%%%##.........XXXXXX##.....#######",
+  "###.....##%%%%%%%%%%%##.........XXXXXX##rrrrr#######",
+  "###.....##%%%%%%%%%%%##.........XXXXXX##rrrrr#######",
+  "###XX..X##%%%%%%%%%%%##......###########rrrrr#######",
+  "###.....##%%%%%%%%%HHHH.cc...###########rrrrr#######",
+  "###.....##%%%%%%%%%HHHH.cc...rrrrrrrrrrrrrrrr#######",
+  "###.....##%%%%%%%%%HHHH......rrrrrrrrrrrrrrrr#######",
+  "###.....##%%%%%%%%%HHHH......rrrrrrrrrrrrrrrr#######",
+  "###.c...##%%%%%%%%%HHHH......###########rrrrr#######",
+  "###.c...##%%%%%%%%%HHHH......###########rrrrr#######",
+  "###.....##%%%%%%%%%HHHH......###########rrrrr#######",
+  "###.....##%%%%%%%%%HHHH......#####HHHHHH.....#######",
+  "###.....##%%%%%%%%%HHHH......#####HHHHHH.....#######",
+  "###.....###############......#####HHHHHH.....#######",
+  "###...............#####......#####...........#######",
+  "###...............#####......#####...........#######",
+  "###...............#####......#####...........#######",
+  "###...............#####......#####...........#######",
+  "###..........................................#######",
+  "################....................################",
+  "##########%%%%%#...TTTTTTTTTTTTTT...##%%%%%%%%%#####",
+  "##########%%%%%#...TTTTTTTTTTTTTT...##%%%%%%%%%#####",
+  "##########%%%%%#...TTTTTTTTTTTTTT...##%%%%%%%%%#####",
+  "##########%%%%%#...TTTTTTTTTTTTTT...##%%%%%%%%%#####",
+  "##########%%%%%#....................##%%%%%%%%%#####",
+  "####################################################",
+};
+static const char *const MAP_HARBOR[MAPGRID_N] = {
+  "WW##################################################",
+  "WW#..............................................###",
+  "WW#.................KKKKKKKKKKKK.................###",
+  "WW#.................KKKKKKKKKKKK.................###",
+  "WW#.................KKKKKKKKKKKK.................###",
+  "WW#..............................................###",
+  "WW#.......###########........#############.......###",
+  "WW#..........................##rrrrrrrrrrrrr....r###",
+  "WW#..CC......................##rrrrrrrrrrrrrrrrrr###",
+  "WW#..CC.......CC.............##rrCCrrrrrrrrrrrrrr###",
+  "WW#..CCAAAAAAACC.............##rrCCBBBBBBBBBBrrrr###",
+  "WW#...AAAAAAAACC.............##rrrrBBBBBBBBBBrrrr###",
+  "WW#1..AAAAAAAAAA.............##rrrrBBBBBBBBBBrrrr###",
+  "WW#2..AAACCAAAAA...........11..rrrrBBBBBBBBBBrrrr###",
+  "WW#3..AAACCAAAAA...........22..rrrrBBBBBBBBBBrrrr###",
+  "WW#4..AAACCAAAAA...........22..rrrrBBBBBBBBBBCCrr###",
+  "WW#5..AAAAAAAAAA.CC......CC22..rrrrBBBBBBBBBBCCrr###",
+  "WW#6..AAAAAAAAAA.CC......CC22##rrrrBBBBBBBBBBCCrr###",
+  "WW#6..AAAAAAAAAA.CC........22##rrrrBBBBBBBBBBrrrr###",
+  "WW#^CC.....................22##rrrrrrrrccrrrrrrrr###",
+  "WW#^CC.....cc..............22##rrrrrrrrrrrrrrrrrr###",
+  "WW#^CC.....................22##rrrrrrrrrrrrrrrrrr###",
+  "WW#^.......................11##rrrrrrrrrrrrrrrrrr###",
+  "WW...################........########.....#......###",
+  "WW...################........########.....#.......##",
+  "WW...........................########.....#.......##",
+  "WW...........................########.....#....CC.##",
+  "WW..c........................########.....#....CC.##",
+  "WW..c################........rrrrrrrr.....#.......##",
+  "WW...################........rrrrrrrr.....#.......##",
+  "WW........###########........rrrrrrrr.....#.......##",
+  "WW........###########........##############.......##",
+  "WW........###########........##############.......##",
+  "WW........###########........#HHHHHHHHHHH##ww..www##",
+  "WW...###%%%%%%%%%%%##......c.#HHHHHHHHHHH##.......##",
+  "WW...###%%%%%%%%%%%##......c.#HHHHHHHHHHH##.......##",
+  "WWc..###%%%%%%%%%%%##........#%%%%%%%%%%%##.......##",
+  "WWc..###%%%%%%%%%%%##........#%%%%%%%%%%%##.......##",
+  "WW...###%%%%%%%%%%%##........#%%%%%%%%%%%##.c.....##",
+  "WW...###%%%%%%%%%%%##........#%%%%%%%%%%%##.c.....##",
+  "WW...###%%%%%%%%%%%##........#%%%%%%%%%%%##.......##",
+  "WW...###%%%%%%%%%%%##........#%%%%%%%%%%%##.......##",
+  "WW...################........##############.......##",
+  "WW...################........##############.......##",
+  "WW..............................................####",
+  "WW##............................................####",
+  "WW##..............TTTTTTTTTTTTTTTT..............####",
+  "WW##..............TTTTTTTTTTTTTTTT..............####",
+  "WW##..............TTTTTTTTTTTTTTTT..............####",
+  "WW##..............TTTTTTTTTTTTTTTT..............####",
+  "WW##............................................####",
+  "WW##################################################",
+};
+static const char *const MAP_REFINERY[MAPGRID_N] = {
+  "####################################################",
+  "#############..........................#############",
+  "#############.......KKKKKKKKKKKK.......#############",
+  "#############.......KKKKKKKKKKKK.......#############",
+  "#############.......KKKKKKKKKKKK.......#############",
+  "#############..........................#############",
+  "###....................................#############",
+  "###................XXX........###................###",
+  "###..AAAAAAAAAAAA..XXX........###................###",
+  "###..AAAAAAAAAAAA..XXX........###................###",
+  "###..AAOOOAAAAAAA..###........###...BBBBBBBBBB...###",
+  "###..AAOOOAAAAAAA..###........###...BBBBBBBBCC...###",
+  "###..AAOOOAAAAAAA..###..c.....###...BBB###BBCC...###",
+  "###..AAAAAAAAAAAA..###..c.....###...BBB###BBBB...###",
+  "###..AAAAAAAOOOAA..###........###...BBB###BBBB...###",
+  "###..AAAAAAAOOOAA..###........###...BBBBBBBBBB...###",
+  "###..AAAAAAAOOOAA..###........###...BccBBBBBBB111###",
+  "###.CCAAAAAAAAAAA..###........###...BBBBBBBBBB222###",
+  "###.CCAAAAAAAAAAA..###........###...BBBBBBBBBB333###",
+  "###................###........###.............333###",
+  "###................###........###.............333###",
+  "###.......############........###.............333###",
+  "###.................................##rrrrrrr#######",
+  "###.................................##rrrrrrr#######",
+  "###...............3456^^^^^^^^654321##rrrrrrr#######",
+  "###.......######123456^^^^^^^^654321##rrrrrrr#######",
+  "###.......######....................##rrrrrrr#######",
+  "###.......#XXXXXXXXX................##rrrrrrr#######",
+  "###.......#XXXXXXXXX##........########rrrrrrr#######",
+  "###.......#XXXXXXXXX##........########rrrrrrr#######",
+  "###www..ww#XXXXXXXXX##........rrrrrrrr.......#######",
+  "###.......#XXXXXXXXX##........rrrrrrrr.......#######",
+  "###.......#XXXXXXXXX##........rrrrrrrr.......#######",
+  "###.......#XXXXXXXXX##.....cc.########.......#######",
+  "###.......#XXXXXXXXX##........#HHHHHH#.......#######",
+  "###..c....#XXXXXXXXX##........#HHHHHH#.......#######",
+  "###..c....#XXXXXXXXX##........#HHHHHH#...CC..#######",
+  "###.......#XXXXXXXXX##........#HHHHHH#...CC..#######",
+  "###.......############.C......#HHHHHH#.......#######",
+  "###...........########.C......#HHHHHH#.......#######",
+  "###...........########........#HHHHHH#.......#######",
+  "###...........########........###............#######",
+  "###...........########........###............#######",
+  "###...............####........###............#######",
+  "###...............####........###............#######",
+  "##########............................##############",
+  "##############......TTTTTTTTTTTT......##############",
+  "##############......TTTTTTTTTTTT......##############",
+  "##############......TTTTTTTTTTTT......##############",
+  "##############......TTTTTTTTTTTT......##############",
+  "##############........................##############",
+  "####################################################",
+};
+
+// ---------------------------------------------------------------------------
+// PREFABS — the architecture the tactical maps are dressed with. Everything is
+// still boxes (the collision set IS the render mesh), so a building is
+// assembled the way a set builder would: a core, a facade skin with real
+// openings, trim, and roof furniture. Three rules shape every piece below.
+//
+//  1. NOTHING AT BODY HEIGHT LEAVES THE WALL PLANE. A box that sticks out 3 cm,
+//     or a recess 12 cm deep, is a ledge a body sliding along the wall catches
+//     on. So below 2.3 m a facade is flush — ground-floor windows and doors are
+//     colour, not depth — and every relief (sills, shutters, balconies,
+//     awnings, cornices) starts above head height.
+//  2. NO TWO SAME-FACING FACES SHARE A PLANE WITH OVERLAP (`mapcheck`). Pieces
+//     ABUT (a face meeting its neighbour's back face is fine) and trims are
+//     sized so their tops never land on another piece's top.
+//  3. STAIRS RISE 0.4 m A STEP, one STEP_H, so the player walks up them.
+// Coordinates: x east, z south, y up; a facade is described along its wall
+// (`a`), into the building from its outer plane (`t`, negative = outside).
+// ---------------------------------------------------------------------------
+#define PF_FLOOR 3.2f          // storey height
+#define PF_SKIN  0.30f         // facade depth over the core
+#define PF_RISE  0.40f         // one stair step == STEP_H's design step
+#define PF_RUN   0.50f
+
+static void bx(float x0, float y0, float z0, float x1, float y1, float z1, v3 c) {
+  map_add((v3){{fminf(x0, x1), fminf(y0, y1), fminf(z0, z1)}},
+          (v3){{fmaxf(x0, x1), fmaxf(y0, y1), fmaxf(z0, z1)}}, c);
+}
+static v3 rgb(float r, float g, float b) { return (v3){{r, g, b}}; }
+static v3 tint(v3 c, float lo, float hi) { return col_tint(c, lo, hi); }
+
+// A box on a facade. ax 0: the wall is z = plane, running along x; ax 1: the
+// wall is x = plane, running along z. inw: +1/-1, the direction INTO the house.
+static void fbox(int ax, float plane, int inw, float a0, float a1, float t0, float t1,
+                 float y0, float y1, v3 c) {
+  float d0 = plane + (float)inw * t0, d1 = plane + (float)inw * t1;
+  if (ax == 0) bx(a0, y0, d0, a1, y1, d1, c);
+  else         bx(d0, y0, a0, d1, y1, a1, c);
+}
+
+// THE PALETTE of one town: plasters, trims, glass, timber, accents.
+typedef struct {
+  v3 plaster[4], trim, glass, door, shutter[3], awning[4], roof, stone;
+  int shutters, awnings, balconies, wide_windows;
+} town_style_t;
+static town_style_t g_town;
+static int g_town_kind = -1;   // which town the grid is being dressed as
+// The grid being dressed, so a facade can ask whether a street is really in
+// front of each opening (NULL: a hand-placed landmark, which asks nobody).
+static const char *const *g_mg_rows;
+static int mg_point_open(float x, float z) {
+  if (!g_mg_rows) return 1;
+  const float cs = 2.0f * ARENA_HALF / 52.0f;
+  int c = (int)floorf((x + ARENA_HALF) / cs), r = (int)floorf((z + ARENA_HALF) / cs);
+  if (c < 0 || r < 0 || c >= 52 || r >= 52) return 0;
+  // Clear AIR in front of a facade: floor, paint, or under a roof or catwalk.
+  // Stairs, crates, walls and water have their own geometry there.
+  return strchr(".ABTK", g_mg_rows[r][c]) != NULL;
+}
+
+static void town_style(int which) {
+  town_style_t *s = &g_town;
+  memset(s, 0, sizeof *s);
+  s->glass = rgb(0.10f, 0.12f, 0.15f);
+  s->door  = rgb(0.30f, 0.19f, 0.11f);
+  if (which == 0) {          // CITADEL: an old desert town
+    s->plaster[0] = rgb(0.80f, 0.68f, 0.50f); s->plaster[1] = rgb(0.86f, 0.80f, 0.68f);
+    s->plaster[2] = rgb(0.74f, 0.55f, 0.38f); s->plaster[3] = rgb(0.90f, 0.86f, 0.78f);
+    s->trim = rgb(0.62f, 0.50f, 0.36f); s->stone = rgb(0.58f, 0.50f, 0.40f);
+    s->roof = rgb(0.70f, 0.60f, 0.46f);
+    s->shutter[0] = rgb(0.16f, 0.36f, 0.52f); s->shutter[1] = rgb(0.20f, 0.44f, 0.36f);
+    s->shutter[2] = rgb(0.52f, 0.30f, 0.18f);
+    s->awning[0] = rgb(0.72f, 0.24f, 0.16f); s->awning[1] = rgb(0.18f, 0.38f, 0.58f);
+    s->awning[2] = rgb(0.86f, 0.62f, 0.20f); s->awning[3] = rgb(0.30f, 0.52f, 0.30f);
+    s->shutters = 1; s->awnings = 1; s->balconies = 1;
+  } else if (which == 1) {   // HARBOR: brick and painted-steel waterfront
+    s->plaster[0] = rgb(0.46f, 0.26f, 0.20f); s->plaster[1] = rgb(0.56f, 0.58f, 0.60f);
+    s->plaster[2] = rgb(0.38f, 0.42f, 0.46f); s->plaster[3] = rgb(0.52f, 0.32f, 0.24f);
+    s->trim = rgb(0.30f, 0.32f, 0.34f); s->stone = rgb(0.40f, 0.41f, 0.42f);
+    s->roof = rgb(0.32f, 0.34f, 0.36f);
+    s->shutter[0] = rgb(0.20f, 0.30f, 0.40f); s->shutter[1] = rgb(0.22f, 0.24f, 0.26f);
+    s->shutter[2] = rgb(0.45f, 0.18f, 0.14f);
+    s->awning[0] = rgb(0.16f, 0.30f, 0.46f); s->awning[1] = rgb(0.62f, 0.20f, 0.16f);
+    s->awning[2] = rgb(0.26f, 0.28f, 0.30f); s->awning[3] = rgb(0.80f, 0.60f, 0.16f);
+    s->awnings = 1; s->wide_windows = 1;
+  } else {                   // REFINERY: concrete and corrugated sheds
+    s->plaster[0] = rgb(0.66f, 0.64f, 0.60f); s->plaster[1] = rgb(0.58f, 0.60f, 0.62f);
+    s->plaster[2] = rgb(0.72f, 0.70f, 0.64f); s->plaster[3] = rgb(0.52f, 0.54f, 0.52f);
+    s->trim = rgb(0.80f, 0.62f, 0.14f); s->stone = rgb(0.46f, 0.46f, 0.44f);
+    s->roof = rgb(0.44f, 0.45f, 0.46f);
+    s->shutter[0] = rgb(0.30f, 0.32f, 0.34f); s->shutter[1] = s->shutter[0];
+    s->shutter[2] = s->shutter[0];
+    s->awning[0] = rgb(0.80f, 0.62f, 0.14f); s->awning[1] = rgb(0.40f, 0.42f, 0.44f);
+    s->awning[2] = s->awning[0]; s->awning[3] = s->awning[1];
+    s->wide_windows = 1;
+  }
+}
+
+// One facade: piers, and in each opening column the wall pieces, the window or
+// door between them, and the relief above head height. `windows` 0 = blank.
+static void facade(int ax, float plane, int inw, float a0, float a1, float H, int floors,
+                   int windows, int door, v3 wall) {
+  const town_style_t *s = &g_town;
+  float L = a1 - a0, D = PF_SKIN;
+  float pitch = s->wide_windows ? 3.4f : 2.7f, ww = s->wide_windows ? 2.0f : 1.1f;
+  int n = windows ? (int)((L - 0.8f) / pitch) : 0;
+  if (n < 1) { fbox(ax, plane, inw, a0, a1, 0.0f, D, 0.0f, H, wall); return; }
+  float step = L / (float)n;
+  float prev = a0;
+  int door_i = door ? n / 2 : -1;
+  for (int i = 0; i < n; i++) {
+    float c = a0 + step * ((float)i + 0.5f);
+    float o0 = c - ww * 0.5f, o1 = c + ww * 0.5f;
+    if (door && i == door_i) { o0 = c - 0.65f; o1 = c + 0.65f; }
+    // Only where a street is in front of the whole opening and its relief:
+    // a facade that runs on past the end of a street meets the next house.
+    int faces_street = 1;
+    // 1.9 m to either side catches a house standing across the end of this
+    // facade, whose own awnings and balconies would meet these in the corner.
+    for (int q = 0; q < 5; q++) {
+      float a = q == 0 ? c : q == 1 ? o0 - 1.9f : q == 2 ? o1 + 1.9f
+              : q == 3 ? o0 - 0.65f : o1 + 0.65f;
+      float d = plane - (float)inw * 0.7f;
+      if (!(ax == 0 ? mg_point_open(a, d) : mg_point_open(d, a))) faces_street = 0;
+    }
+    if (!faces_street) continue;      // the pier simply runs on across it
+    fbox(ax, plane, inw, prev, o0, 0.0f, D, 0.0f, H, wall);            // pier
+    prev = o1;
+    float top = 0.0f;
+    for (int f = 0; f < floors; f++) {
+      float base = (float)f * PF_FLOOR;
+      int is_door = f == 0 && i == door_i;
+      float sill = is_door ? 0.0f : base + 0.95f, head = base + (is_door ? 2.3f : 2.25f);
+      if (sill > top + 0.01f) fbox(ax, plane, inw, o0, o1, 0.0f, D, top, sill, wall);
+      // Ground floor flush (rule 1); upper floors set 12 cm into the wall.
+      float t0 = f == 0 ? 0.0f : 0.12f;
+      fbox(ax, plane, inw, o0, o1, t0, D, sill, head, is_door ? s->door : s->glass);
+      top = head;
+      if (is_door) {   // a lintel band over the door, above head height
+        fbox(ax, plane, inw, o0 - 0.15f, o1 + 0.15f, -0.08f, 0.0f, 2.3f, 2.5f, s->trim);
+        if (s->awnings)
+          fbox(ax, plane, inw, o0 - 0.5f, o1 + 0.5f, -1.3f, -0.08f, 2.62f, 2.72f,
+               s->awning[rng_u32() % 4]);
+      } else if (f == 0 && s->awnings && (rng_u32() % 4) == 0) {
+        fbox(ax, plane, inw, o0 - 0.4f, o1 + 0.4f, -1.1f, 0.0f, 2.62f, 2.72f,
+             s->awning[rng_u32() % 4]);
+      }
+      if (f >= 1) {
+        fbox(ax, plane, inw, o0 - 0.08f, o1 + 0.08f, -0.12f, 0.0f, sill - 0.08f, sill,
+             s->trim);                                                  // sill
+        if (s->shutters && (rng_u32() % 3) != 0) {
+          v3 sc = s->shutter[rng_u32() % 3];
+          fbox(ax, plane, inw, o0 - 0.44f, o0 - 0.04f, -0.05f, 0.0f, sill, head, sc);
+          fbox(ax, plane, inw, o1 + 0.04f, o1 + 0.44f, -0.05f, 0.0f, sill, head, sc);
+        }
+        if (f == 1 && s->balconies && (rng_u32() % 3) == 0) {
+          float y = base;
+          fbox(ax, plane, inw, o0 - 0.6f, o1 + 0.6f, -1.1f, 0.0f, y - 0.15f, y, s->stone);
+          fbox(ax, plane, inw, o0 - 0.6f, o1 + 0.6f, -1.1f, -1.04f, y, y + 0.95f, s->door);
+          fbox(ax, plane, inw, o0 - 0.6f, o0 - 0.54f, -1.04f, 0.0f, y, y + 0.95f, s->door);
+          fbox(ax, plane, inw, o1 + 0.54f, o1 + 0.6f, -1.04f, 0.0f, y, y + 0.95f, s->door);
+        }
+      }
+    }
+    if (H > top + 0.01f) fbox(ax, plane, inw, o0, o1, 0.0f, D, top, H, wall);
+  }
+  fbox(ax, plane, inw, prev, a1, 0.0f, D, 0.0f, H, wall);
+}
+
+// A side of a house for house(): which walls carry windows, and where a stair
+// reaches the roof (the parapet leaves a gap there).
+enum { SIDE_N = 1, SIDE_E = 2, SIDE_S = 4, SIDE_W = 8 };
+
+// THE HOUSE. A core inset by the skin, four skins (N/S run the full length,
+// E/W fit between them so no two skins overlap), a cornice above the top
+// floor's windows and a parapet round a flat roof, with a gap at `gap_*` for a
+// roof stair. `win` = sides with windows, `doors` = sides with a door.
+static void house(float x0, float z0, float x1, float z1, int floors, int win, int doors,
+                  int gap_side, float gap_a0, float gap_a1, int roof_props) {
+  const town_style_t *s = &g_town;
+  float H = (float)floors * PF_FLOOR, D = PF_SKIN;
+  v3 wall = tint(s->plaster[rng_u32() % 4], 0.95f, 1.04f);
+  bx(x0 + D, 0.0f, z0 + D, x1 - D, H, z1 - D, wall);                    // core
+  int dn = doors & SIDE_N ? 1 : 0, ds = doors & SIDE_S ? 1 : 0;
+  int de = doors & SIDE_E ? 1 : 0, dw = doors & SIDE_W ? 1 : 0;
+  facade(0, z0, +1, x0, x1, H, floors, win & SIDE_N, dn, wall);
+  facade(0, z1, -1, x0, x1, H, floors, win & SIDE_S, ds, wall);
+  facade(1, x0, +1, z0 + D, z1 - D, H, floors, win & SIDE_W, dw, wall);
+  facade(1, x1, -1, z0 + D, z1 - D, H, floors, win & SIDE_E, de, wall);
+  // Cornice: N/S along the full length, E/W between them; outward only, and
+  // only where nothing climbs past it.
+  float c0 = H - 0.45f, c1 = H - 0.15f;
+  // Street stretches only: a cornice over a party wall, or past the corner
+  // where another house meets this one, would sit inside that house.
+  for (int sd = 1; sd <= 8; sd <<= 1) {
+    if (gap_side == sd || !(win & sd)) continue;
+    int axz = sd == SIDE_N || sd == SIDE_S;
+    float a0 = axz ? x0 : z0 + 0.2f, a1 = axz ? x1 : z1 - 0.2f;
+    float pl = sd == SIDE_N ? z0 : sd == SIDE_S ? z1 : sd == SIDE_W ? x0 : x1;
+    float out = (sd == SIDE_N || sd == SIDE_W) ? -1.0f : 1.0f;
+    // Walk the side cell by cell (cells are where other houses begin), so a
+    // run ends exactly where the street does.
+    const float cs = 2.0f * ARENA_HALF / 52.0f;
+    float run0 = -1.0f;
+    for (float a = a0; a < a1 - 0.001f; ) {
+      float cell_end = -ARENA_HALF + (floorf((a + ARENA_HALF) / cs + 1e-4f) + 1.0f) * cs;
+      float e = fminf(cell_end, a1), mid = (a + e) * 0.5f;
+      int open = axz ? mg_point_open(mid, pl + out * 0.7f) : mg_point_open(pl + out * 0.7f, mid);
+      // A run that starts or stops against another building stops 12 cm
+      // short: at an inside corner that building's cornice comes the other
+      // way, and the two must meet, not cross.
+      if (open && run0 < 0.0f) run0 = a > a0 + 0.001f ? a + 0.12f : a;
+      if ((!open || e >= a1 - 0.001f) && run0 >= 0.0f) {
+        float re = open ? e : a - 0.12f;
+        if (re - run0 > 0.05f) {
+          if (axz) bx(run0, c0, pl, re, c1, pl + out * 0.12f, s->trim);
+          else     bx(pl, c0, run0, pl + out * 0.12f, c1, re, s->trim);
+        }
+        run0 = -1.0f;
+      }
+      a = e;
+    }
+  }
+  // Parapet, split round the stair gap.
+  const float PT = 0.25f, PH = 0.7f;
+  struct { int side; float a0, a1; int ax; float p0, p1; } par[4] = {
+    {SIDE_N, x0, x1, 0, z0, z0 + PT}, {SIDE_S, x0, x1, 0, z1 - PT, z1},
+    {SIDE_W, z0 + PT, z1 - PT, 1, x0, x0 + PT}, {SIDE_E, z0 + PT, z1 - PT, 1, x1 - PT, x1}};
+  for (int k = 0; k < 4; k++) {
+    float a0 = par[k].a0, a1 = par[k].a1;
+    float segs[2][2] = {{a0, a1}, {0, 0}};
+    int ns = 1;
+    if (par[k].side == gap_side) {
+      segs[0][1] = fmaxf(a0, gap_a0); segs[1][0] = fminf(a1, gap_a1); segs[1][1] = a1;
+      ns = 2;
+    }
+    for (int q = 0; q < ns; q++) {
+      if (segs[q][1] - segs[q][0] < 0.2f) continue;
+      if (par[k].ax == 0) bx(segs[q][0], H, par[k].p0, segs[q][1], H + PH, par[k].p1, s->trim);
+      else                bx(par[k].p0, H, segs[q][0], par[k].p1, H + PH, segs[q][1], s->trim);
+    }
+  }
+  // Roof furniture, one item per quadrant at most, clear of the parapet.
+  if (roof_props) {
+    float w = x1 - x0, d = z1 - z0;
+    if (w > 5.0f && d > 5.0f) {
+      uint32_t r = rng_u32();
+      if (r & 1) {   // water tank on a plinth
+        float tx = x0 + 1.0f, tz = z0 + 1.0f;
+        bx(tx, H, tz, tx + 1.6f, H + 0.3f, tz + 1.6f, s->stone);
+        bx(tx + 0.1f, H + 0.3f, tz + 0.1f, tx + 1.5f, H + 1.6f, tz + 1.5f,
+           rgb(0.25f, 0.27f, 0.30f));
+      }
+      if (r & 2) {   // chimney / vent stack
+        float tx = x1 - 1.6f, tz = z1 - 1.6f;
+        bx(tx, H, tz, tx + 0.7f, H + 1.9f, tz + 0.7f, tint(wall, 0.8f, 0.9f));
+      }
+      if (r & 4) {   // stair hut
+        float tx = x1 - 3.2f, tz = z0 + 1.0f;
+        if (tx > x0 + 3.0f) bx(tx, H, tz, tx + 2.0f, H + 2.3f, tz + 1.8f, wall);
+      }
+    }
+  }
+}
+
+// A straight stair from the ground up `rise` metres, along a wall: steps run
+// from (a, t) in direction `dir` (+1/-1 along the wall), `w` wide outward from
+// the wall plane. Solid to the ground — it reads as a masonry stair.
+static void stair_up(int ax, float plane, int inw, float a, int dir, float w, float rise, v3 c) {
+  int n = (int)(rise / PF_RISE + 0.5f);
+  for (int k = 0; k < n; k++) {
+    float s0 = a + (float)dir * (float)k * PF_RUN, s1 = s0 + (float)dir * PF_RUN;
+    fbox(ax, plane, inw, fminf(s0, s1), fmaxf(s0, s1), -w, 0.0f, 0.0f,
+         (float)(k + 1) * PF_RISE, tint(c, 0.97f, 1.03f));
+  }
+}
+
+// A house you can stand on top of: a stair along its `stair_side` wall
+// (which is left windowless) up to a gap in the parapet. Returns nothing; the
+// roof is the reward.
+static void house_climb(float x0, float z0, float x1, float z1, int floors, int win,
+                        int doors, int stair_side, int dir, float start) {
+  float H = (float)floors * PF_FLOOR;
+  float len = H / PF_RISE * PF_RUN;
+  int ax = (stair_side == SIDE_N || stair_side == SIDE_S) ? 0 : 1;
+  float end = start + (float)dir * len;
+  float plane = stair_side == SIDE_N ? z0 : stair_side == SIDE_S ? z1
+              : stair_side == SIDE_W ? x0 : x1;
+  int inw = (stair_side == SIDE_N || stair_side == SIDE_W) ? +1 : -1;
+  float g0 = fminf(end, end - (float)dir * 1.4f), g1 = fmaxf(end, end - (float)dir * 1.4f);
+  house(x0, z0, x1, z1, floors, win & ~stair_side, doors & ~stair_side,
+        stair_side, g0, g1, 1);
+  stair_up(ax, plane, inw, start, dir, 1.3f, H, g_town.stone);
+}
+
+// THE CLIMBING TOWER: a square core with a stair spiralling round it, one step
+// a 0.4 m slab, a landing at each corner, ending on the core's roof — the
+// lookout. Railing round the roof, open where the stair arrives. Above it,
+// `cap` builds the crown (a lantern and spire, or nothing).
+static void tower(float cx, float cz, float hc, float H, v3 core, v3 step, int cap,
+                  int open_side) {
+  const float W = 1.2f;
+  bx(cx - hc, 0.0f, cz - hc, cx + hc, H, cz + hc, core);
+  int nside = (int)((2.0f * hc) / PF_RUN);
+  float run = 2.0f * hc / (float)nside;
+  int total = (int)(H / PF_RISE + 0.5f);
+  int k = 0;
+  // Sides in order: south (running east), east (running north), north
+  // (running west), west (running south); each corner gets a landing.
+  for (int side = 0; k < total; side = (side + 1) % 4) {
+    for (int i = 0; i < nside && k < total; i++, k++) {
+      float top = (float)(k + 1) * PF_RISE, a = -hc + (float)i * run, b = a + run;
+      switch (side) {
+        case 0: bx(cx + a, top - PF_RISE, cz + hc, cx + b, top, cz + hc + W, step); break;
+        case 1: bx(cx + hc, top - PF_RISE, cz - b, cx + hc + W, top, cz - a, step); break;
+        case 2: bx(cx - b, top - PF_RISE, cz - hc - W, cx - a, top, cz - hc, step); break;
+        default: bx(cx - hc - W, top - PF_RISE, cz + a, cx - hc, top, cz + b, step); break;
+      }
+    }
+    if (k >= total) break;
+    float top = (float)k * PF_RISE;   // landing at the last step's height
+    switch (side) {
+      case 0: bx(cx + hc, top - PF_RISE, cz + hc, cx + hc + W, top, cz + hc + W, step); break;
+      case 1: bx(cx + hc, top - PF_RISE, cz - hc - W, cx + hc + W, top, cz - hc, step); break;
+      case 2: bx(cx - hc - W, top - PF_RISE, cz - hc - W, cx - hc, top, cz - hc, step); break;
+      default: bx(cx - hc - W, top - PF_RISE, cz + hc, cx - hc, top, cz + hc + W, step); break;
+    }
+  }
+  // Railing round the lookout, a gap on the side the stair finished on.
+  int last = ((total - 1) / nside) % 4;
+  v3 rc = g_town.trim;
+  const float RT = 0.12f, RH = 1.0f;
+  if (last != 2 && open_side != 2) bx(cx - hc, H, cz - hc, cx + hc, H + RH, cz - hc + RT, rc);
+  if (last != 0 && open_side != 0) bx(cx - hc, H, cz + hc - RT, cx + hc, H + RH, cz + hc, rc);
+  if (last != 3 && open_side != 3)
+    bx(cx - hc, H, cz - hc + RT, cx - hc + RT, H + RH, cz + hc - RT, rc);
+  if (last != 1 && open_side != 1)
+    bx(cx + hc - RT, H, cz - hc + RT, cx + hc, H + RH, cz + hc - RT, rc);
+  if (cap == 1) {   // lantern: four posts and a roof, then a spire
+    float p = 0.22f, ph = 2.4f;
+    bx(cx - hc + RT, H, cz - hc + RT, cx - hc + RT + p, H + ph, cz - hc + RT + p, core);
+    bx(cx + hc - RT - p, H, cz - hc + RT, cx + hc - RT, H + ph, cz - hc + RT + p, core);
+    bx(cx - hc + RT, H, cz + hc - RT - p, cx - hc + RT + p, H + ph, cz + hc - RT, core);
+    bx(cx + hc - RT - p, H, cz + hc - RT - p, cx + hc - RT, H + ph, cz + hc - RT, core);
+    bx(cx - hc - 0.2f, H + ph, cz - hc - 0.2f, cx + hc + 0.2f, H + ph + 0.3f, cz + hc + 0.2f, rc);
+    bx(cx - hc * 0.6f, H + ph + 0.3f, cz - hc * 0.6f, cx + hc * 0.6f, H + ph + 1.2f,
+       cz + hc * 0.6f, core);
+    bx(cx - 0.12f, H + ph + 1.2f, cz - 0.12f, cx + 0.12f, H + ph + 3.0f, cz + 0.12f, rc);
+  }
+}
+
+// An octagonal drum (or a dome, as a stack of them): each layer a centre strip
+// and two tabs that do not overlap it, so the plan is an octagon and no two
+// tops share a plane.
+static void octa(float cx, float cz, float r, float y0, float y1, v3 c) {
+  float k = r * 0.414f, m = r * 0.72f;
+  bx(cx - r, y0, cz - k, cx + r, y1, cz + k, c);
+  bx(cx - 0.82f * r, y0, cz - m, cx + 0.82f * r, y1, cz - k, c);
+  bx(cx - 0.82f * r, y0, cz + k, cx + 0.82f * r, y1, cz + m, c);
+  bx(cx - 0.5f * r, y0, cz - r, cx + 0.5f * r, y1, cz - m, c);
+  bx(cx - 0.5f * r, y0, cz + m, cx + 0.5f * r, y1, cz + r, c);
+}
+static void dome(float cx, float cz, float R, float y0, v3 c) {
+  static const float RS[6] = {1.0f, 0.97f, 0.9f, 0.78f, 0.6f, 0.34f};
+  float dh = R * 0.2f;
+  for (int i = 0; i < 6; i++)
+    octa(cx, cz, R * RS[i], y0 + dh * (float)i, y0 + dh * (float)(i + 1), c);
+  bx(cx - 0.1f, y0 + dh * 6.0f, cz - 0.1f, cx + 0.1f, y0 + dh * 6.0f + 1.4f, cz + 0.1f,
+     g_town.trim);
+}
+
+static void palm(float x, float z, float h) {
+  v3 tr = rgb(0.42f, 0.32f, 0.22f), lf = rgb(0.26f, 0.42f, 0.18f);
+  float seg = h / 3.0f, lean = rng_range(-0.25f, 0.25f);
+  for (int i = 0; i < 3; i++) {
+    float o = lean * (float)i;
+    bx(x - 0.18f + o, seg * (float)i, z - 0.18f, x + 0.18f + o, seg * (float)(i + 1),
+       z + 0.18f, tint(tr, 0.9f, 1.1f));
+  }
+  float tx = x + lean * 2.0f, t = h;
+  bx(tx - 0.22f, t, z - 2.4f, tx + 0.22f, t + 0.08f, z, lf);
+  bx(tx - 0.22f, t + 0.1f, z, tx + 0.22f, t + 0.18f, z + 2.4f, lf);
+  bx(tx, t + 0.05f, z - 0.22f, tx + 2.4f, t + 0.13f, z + 0.22f, lf);
+  bx(tx - 2.4f, t + 0.15f, z - 0.22f, tx, t + 0.23f, z + 0.22f, lf);
+  bx(tx - 0.2f, t - 0.6f, z - 2.9f, tx + 0.2f, t - 0.05f, z - 2.4f, lf);
+  bx(tx - 0.2f, t - 0.5f, z + 2.4f, tx + 0.2f, t + 0.05f, z + 2.9f, lf);
+  bx(tx + 2.4f, t - 0.55f, z - 0.2f, tx + 2.9f, t, z + 0.2f, lf);
+  bx(tx - 2.9f, t - 0.45f, z - 0.2f, tx - 2.4f, t + 0.1f, z + 0.2f, lf);
+}
+
+// A car (ax 0 = facing along x). Body, cabin, four wheels proud of the body.
+static void car(float x, float z, int ax) {
+  static const v3 PAINT[5] = {{{0.62f, 0.12f, 0.10f}}, {{0.82f, 0.80f, 0.74f}},
+                              {{0.16f, 0.30f, 0.48f}}, {{0.20f, 0.22f, 0.24f}},
+                              {{0.72f, 0.58f, 0.24f}}};
+  v3 p = PAINT[rng_u32() % 5], w = rgb(0.08f, 0.08f, 0.09f);
+  float L = 2.1f, W = 0.95f;
+#define CB(a0, b0, a1, b1, y0, y1, c) \
+  (ax ? bx(x + (b0), y0, z + (a0), x + (b1), y1, z + (a1), c) \
+      : bx(x + (a0), y0, z + (b0), x + (a1), y1, z + (b1), c))
+  CB(-L, -W, L, W, 0.32f, 0.95f, p);
+  CB(-1.1f, -0.85f, 0.9f, 0.85f, 0.95f, 1.5f, tint(p, 0.85f, 0.9f));
+  CB(-1.05f, -0.86f, 0.85f, 0.86f, 1.05f, 1.42f, g_town.glass);
+  CB(-1.55f, -W - 0.05f, -0.85f, -W + 0.25f, 0.0f, 0.62f, w);
+  CB(0.85f, -W - 0.05f, 1.55f, -W + 0.25f, 0.0f, 0.62f, w);
+  CB(-1.55f, W - 0.25f, -0.85f, W + 0.05f, 0.0f, 0.62f, w);
+  CB(0.85f, W - 0.25f, 1.55f, W + 0.05f, 0.0f, 0.62f, w);
+#undef CB
+}
+
+static void barrel(float x, float z, v3 c) {
+  bx(x - 0.3f, 0.0f, z - 0.3f, x + 0.3f, 0.92f, z + 0.3f, c);
+  bx(x - 0.32f, 0.42f, z - 0.32f, x + 0.32f, 0.5f, z + 0.32f, tint(c, 0.6f, 0.7f));
+}
+
+static void lamp(float x, float z, int ax, int dir) {
+  v3 m = rgb(0.16f, 0.17f, 0.18f);
+  bx(x - 0.07f, 0.0f, z - 0.07f, x + 0.07f, 4.2f, z + 0.07f, m);
+  float d = (float)dir * 0.9f;
+  if (ax == 0) bx(fminf(x, x + d), 3.98f, z - 0.05f, fmaxf(x, x + d), 4.08f, z + 0.05f, m);
+  else         bx(x - 0.05f, 3.98f, fminf(z, z + d), x + 0.05f, 4.08f, fmaxf(z, z + d), m);
+  float lx = ax == 0 ? x + d : x, lz = ax == 0 ? z : z + d;
+  bx(lx - 0.18f, 3.72f, lz - 0.18f, lx + 0.18f, 3.98f, lz + 0.18f, rgb(0.95f, 0.86f, 0.62f));
+}
+
+// A shipping container, 6.1 x 2.44 x 2.6, along x (ax 0) or z; `y` stacks it.
+static void container(float x, float z, int ax, float y, v3 c) {
+  float L = 3.05f, W = 1.22f, H = 2.6f;
+  if (ax == 0) bx(x - L, y, z - W, x + L, y + H, z + W, c);
+  else         bx(x - W, y, z - L, x + W, y + H, z + L, c);
+}
+
+// Market stall (one copy; the open maps' stall() mirrors).
+static void stall1(float cx, float cz, int ax, v3 awn) {
+#define ST1(a0, b0, a1, b1, y0, y1, c) \
+  (ax ? bx(cx + (b0), y0, cz + (a0), cx + (b1), y1, cz + (a1), c) \
+      : bx(cx + (a0), y0, cz + (b0), cx + (a1), y1, cz + (b1), c))
+  ST1(-1.20f, -0.40f, 1.20f, 0.40f, 0.0f, 1.0f, rgb(0.50f, 0.36f, 0.22f));
+  ST1(-1.38f, 0.82f, -1.22f, 0.98f, 0.0f, 2.30f, rgb(0.34f, 0.24f, 0.15f));
+  ST1(1.22f, 0.82f, 1.38f, 0.98f, 0.0f, 2.30f, rgb(0.34f, 0.24f, 0.15f));
+  ST1(-1.50f, -0.70f, 1.50f, 1.30f, 2.30f, 2.42f, awn);
+#undef ST1
+}
+
+// An arched gate across a street: two piers, the wall over the opening, and a
+// stepped soffit that reads as an arch. Opening from a0..a1 along `ax`, wall
+// thickness t centred on `p`.
+static void arch_gate(int ax, float p, float a0, float a1, float wa0, float wa1, float H, v3 c) {
+  float t = 0.9f, oh = 3.6f;
+  float o = (a1 - a0);
+#define AG(u0, u1, y0, y1) \
+  (ax == 0 ? bx(u0, y0, p - t * 0.5f, u1, y1, p + t * 0.5f, c) \
+           : bx(p - t * 0.5f, y0, u0, p + t * 0.5f, y1, u1, c))
+  AG(wa0, a0, 0.0f, H);
+  AG(a1, wa1, 0.0f, H);
+  AG(a0 + o * 0.22f, a1 - o * 0.22f, oh, H);
+  AG(a0, a0 + o * 0.22f, oh - 0.55f, H);
+  AG(a1 - o * 0.22f, a1, oh - 0.55f, H);
+#undef AG
+  // crenellations along the top
+  for (float u = wa0; u + 0.6f <= wa1; u += 1.2f)
+    ax == 0 ? bx(u, H, p - t * 0.5f, u + 0.6f, H + 0.6f, p + t * 0.5f, c)
+            : bx(p - t * 0.5f, H, u, p + t * 0.5f, H + 0.6f, u + 0.6f, c);
+}
+
+static void tank(float cx, float cz, float r, float h, v3 c) {
+  octa(cx, cz, r, 0.0f, h, c);
+  octa(cx, cz, r + 0.08f, h * 0.5f - 0.18f, h * 0.5f + 0.18f, tint(c, 0.62f, 0.68f));
+  octa(cx, cz, r * 0.86f, h, h + 0.55f, tint(c, 0.9f, 0.95f));
+  bx(cx - 0.3f, h + 0.55f, cz - 0.3f, cx + 0.3f, h + 1.1f, cz + 0.3f, g_town.trim);
+}
+
+static void truck(float x, float z, int ax, v3 c) {
+  v3 cab = rgb(0.72f, 0.16f, 0.12f), blk = rgb(0.08f, 0.08f, 0.09f);
+#define TK(a0, b0, a1, b1, y0, y1, cc) \
+  (ax ? bx(x + (b0), y0, z + (a0), x + (b1), y1, z + (a1), cc) \
+      : bx(x + (a0), y0, z + (b0), x + (a1), y1, z + (b1), cc))
+  TK(-3.6f, -1.1f, 3.4f, 1.1f, 0.55f, 1.2f, rgb(0.20f, 0.21f, 0.22f));   // chassis
+  TK(3.4f, -1.15f, 5.4f, 1.15f, 0.55f, 3.0f, cab);                       // cab
+  TK(5.4f, -0.95f, 5.44f, 0.95f, 1.8f, 2.7f, g_town.glass);              // windscreen
+  TK(-3.0f, -1.2f, -1.8f, -0.95f, 0.0f, 0.95f, blk);
+  TK(-3.0f, 0.95f, -1.8f, 1.2f, 0.0f, 0.95f, blk);
+  TK(3.8f, -1.2f, 5.0f, -0.95f, 0.0f, 0.95f, blk);
+  TK(3.8f, 0.95f, 5.0f, 1.2f, 0.0f, 0.95f, blk);
+#undef TK
+  container(ax ? x : x - 0.1f, ax ? z - 0.1f : z, ax, 1.2f, c);
+}
+
+// Water: a dark sheet on the floor, and a quay railing along every edge that
+// borders walkable ground — top rail above a jump (1.35 m), mid rail, posts.
+static void water_rect(float x0, float z0, float x1, float z1) {
+  bx(x0, 0.0f, z0, x1, 0.02f, z1, rgb(0.08f, 0.17f, 0.21f));
+}
+static void quay_rail(int ax, float plane, int inw, float a0, float a1) {
+  v3 m = rgb(0.20f, 0.22f, 0.24f);
+  fbox(ax, plane, inw, a0, a1, 0.0f, 0.10f, 1.25f, 1.35f, m);
+  fbox(ax, plane, inw, a0, a1, 0.0f, 0.10f, 0.55f, 0.62f, m);
+  for (float a = a0 + 0.2f; a + 0.12f <= a1; a += 2.0f)
+    fbox(ax, plane, inw, a, a + 0.12f, 0.02f, 0.14f, 0.02f, 1.25f, m);
+}
+
+static void flare_stack(float x, float z, float h) {
+  bx(x - 2.0f, 0.0f, z - 2.0f, x + 2.0f, 3.0f, z + 2.0f, g_town.stone);
+  for (int i = 0; 3.0f + (float)i * 2.0f < h; i++) {
+    float y0 = 3.0f + (float)i * 2.0f;
+    bx(x - 0.6f, y0, z - 0.6f, x + 0.6f, fminf(y0 + 2.0f, h), z + 0.6f,
+       (i & 1) ? rgb(0.86f, 0.86f, 0.84f) : rgb(0.72f, 0.16f, 0.12f));
+  }
+  bx(x - 0.8f, h, z - 0.8f, x + 0.8f, h + 0.5f, z + 0.8f, rgb(0.16f, 0.16f, 0.17f));
+}
+
+static void cooling_tower(float cx, float cz) {
+  static const float R[9] = {8.0f, 7.3f, 6.7f, 6.25f, 6.0f, 5.9f, 6.0f, 6.25f, 6.6f};
+  v3 c = rgb(0.74f, 0.72f, 0.68f);
+  for (int i = 0; i < 9; i++)
+    octa(cx, cz, R[i], (float)i * 2.0f, (float)(i + 1) * 2.0f, tint(c, 0.96f, 1.02f));
+  octa(cx, cz, 6.8f, 18.0f, 18.6f, rgb(0.36f, 0.36f, 0.36f));
+}
+
+typedef struct { char ch; float y0, y1, inset; int col; } mapgrid_tile_t;
+enum { MGC_WALL, MGC_COVER, MGC_CRATE_A, MGC_CRATE_B, MGC_MID, MGC_SITE_A, MGC_SITE_B };
+static const mapgrid_tile_t MAPGRID_TILES[] = {
+  {'#', 0.0f, 8.0f, 0.0f, MGC_WALL},    {'%', 0.0f, 5.0f, 0.0f, MGC_COVER},
+  {'w', 0.0f, 3.2f, 0.0f, MGC_CRATE_B}, {'r', 3.4f, 3.9f, 0.0f, MGC_CRATE_B},
+  {'^', 2.4f, 2.8f, 0.0f, MGC_COVER},
+  {'1', 0.0f, 0.4f, 0.0f, MGC_CRATE_B}, {'2', 0.0f, 0.8f, 0.0f, MGC_CRATE_B},
+  {'3', 0.0f, 1.2f, 0.0f, MGC_CRATE_B}, {'4', 0.0f, 1.6f, 0.0f, MGC_CRATE_B},
+  {'5', 0.0f, 2.0f, 0.0f, MGC_CRATE_B}, {'6', 0.0f, 2.4f, 0.0f, MGC_CRATE_B},
+  {'c', 0.0f, 1.1f, 0.15f, MGC_CRATE_A}, {'C', 0.0f, 2.2f, 0.15f, MGC_CRATE_A},
+  {'=', 0.0f, 1.05f, 0.5f, MGC_COVER},
+  {'A', 0.0f, 0.02f, 0.0f, MGC_SITE_A}, {'B', 0.0f, 0.02f, 0.0f, MGC_SITE_B},
+};
+
+// Is the grid cell (c, r) open ground — something a facade should face?
+static int mg_open(const char *const rows[MAPGRID_N], int c, int r) {
+  if (c < 0 || r < 0 || c >= MAPGRID_N || r >= MAPGRID_N) return 0;
+  return strchr("#%HhOX", rows[r][c]) == NULL;
+}
+// Does the world-space side of a rect face open ground anywhere along it?
+static int mg_side_open(const char *const rows[MAPGRID_N], float x0, float z0, float x1,
+                        float z1, int side) {
+  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  int c0 = (int)floorf((x0 + ARENA_HALF) / cs + 0.01f), c1 = (int)ceilf((x1 + ARENA_HALF) / cs - 0.01f) - 1;
+  int r0 = (int)floorf((z0 + ARENA_HALF) / cs + 0.01f), r1 = (int)ceilf((z1 + ARENA_HALF) / cs - 0.01f) - 1;
+  if (side == SIDE_N || side == SIDE_S) {
+    int r = side == SIDE_N ? r0 - 1 : r1 + 1;
+    for (int c = c0; c <= c1; c++) if (mg_open(rows, c, r)) return 1;
+  } else {
+    int c = side == SIDE_W ? c0 - 1 : c1 + 1;
+    for (int r = r0; r <= r1; r++) if (mg_open(rows, c, r)) return 1;
+  }
+  return 0;
+}
+
+// A BLOCK OF TOWN: one merged '#' (tall) or '%' (low) rect, cut along its long
+// axis into houses 6-11 m wide, each with its own height, plaster, windows on
+// the sides that face a street and, often, a door on one of them.
+static void town_block(const char *const rows[MAPGRID_N], float x0, float z0, float x1,
+                       float z1, int tall) {
+  int along_x = (x1 - x0) >= (z1 - z0);
+  float a = along_x ? x0 : z0, end = along_x ? x1 : z1;
+  while (end - a > 0.1f) {
+    float w = rng_range(6.0f, 11.0f);
+    if (end - (a + w) < 5.0f) w = end - a;          // no sliver at the end
+    float hx0 = along_x ? a : x0, hx1 = along_x ? a + w : x1;
+    float hz0 = along_x ? z0 : a, hz1 = along_x ? z1 : a + w;
+    int win = 0;
+    for (int sd = 1; sd <= 8; sd <<= 1)
+      if (mg_side_open(rows, hx0, hz0, hx1, hz1, sd)) win |= sd;
+    int floors = tall ? 2 + (int)(rng_u32() % 2) : 1 + (int)(rng_u32() % 2);
+    if (hx1 - hx0 < 4.0f || hz1 - hz0 < 4.0f) floors = floors > 2 ? 2 : floors;
+    int doors = 0;
+    if (win && (rng_u32() % 10) < 7) {
+      for (int sd = 1; sd <= 8; sd <<= 1) if (win & sd) { doors = sd; break; }
+    }
+    house(hx0, hz0, hx1, hz1, floors, win, doors, 0, 0.0f, 0.0f, 1);
+    a += w;
+  }
+}
+
+// A CLIMBABLE HOUSE ('H' tall, 'h' low): one house, its stair on the longest
+// side facing a street, as many floors as that side has room to climb.
+static void town_climb(const char *const rows[MAPGRID_N], float x0, float z0, float x1,
+                       float z1, int tall) {
+  int win = 0;
+  for (int sd = 1; sd <= 8; sd <<= 1)
+    if (mg_side_open(rows, x0, z0, x1, z1, sd)) win |= sd;
+  // The stair stands in the street, so it needs a stretch of clear street
+  // along the wall, not merely a side that touches one somewhere.
+  int best = 0;
+  float best_len = 0.0f, best_a = 0.0f;
+  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  for (int sd = 1; sd <= 8; sd <<= 1) {
+    if (!(win & sd)) continue;
+    int axz = sd == SIDE_N || sd == SIDE_S;
+    float a0 = axz ? x0 : z0 + PF_SKIN, a1 = axz ? x1 : z1 - PF_SKIN;
+    float pl = sd == SIDE_N ? z0 : sd == SIDE_S ? z1 : sd == SIDE_W ? x0 : x1;
+    float out = (sd == SIDE_N || sd == SIDE_W) ? -1.0f : 1.0f;
+    float run0 = -1.0f;
+    for (float a = a0; a < a1 - 0.001f; ) {
+      float ce = -ARENA_HALF + (floorf((a + ARENA_HALF) / cs + 1e-4f) + 1.0f) * cs;
+      float e = fminf(ce, a1), m = (a + e) * 0.5f;
+      int open = axz ? mg_point_open(m, pl + out * 1.0f) : mg_point_open(pl + out * 1.0f, m);
+      if (open && run0 < 0.0f) run0 = a;
+      if ((!open || e >= a1 - 0.001f) && run0 >= 0.0f) {
+        float re = open ? e : a;
+        if (re - run0 > best_len) { best_len = re - run0; best = sd; best_a = run0; }
+        run0 = -1.0f;
+      }
+      a = e;
+    }
+  }
+  int floors = tall ? 3 : 1;
+  while (floors > 1 && (float)floors * PF_FLOOR / PF_RISE * PF_RUN + 0.8f > best_len) floors--;
+  if (!best || (float)floors * PF_FLOOR / PF_RISE * PF_RUN + 0.8f > best_len) {
+    house(x0, z0, x1, z1, floors, win, 0, 0, 0.0f, 0.0f, 1);
+    return;
+  }
+  int other = win & ~best;
+  int doors = 0;
+  for (int sd = 1; sd <= 8; sd <<= 1) if (other & sd) { doors = sd; break; }
+  house_climb(x0, z0, x1, z1, floors, win, doors, best, +1, best_a + 0.4f);
+}
+
+static void map_grid(const char *const rows[MAPGRID_N]) {
+  const theme_t *t = &g_theme;
+  g_mg_rows = rows;
+  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  static uint8_t used[MAPGRID_N][MAPGRID_N];
+  memset(used, 0, sizeof used);
+  for (int r = 0; r < MAPGRID_N; r++)
+    for (int c = 0; c < MAPGRID_N; c++) {
+      char ch = rows[r][c];
+      const mapgrid_tile_t *tl = NULL;
+      for (size_t k = 0; k < sizeof MAPGRID_TILES / sizeof MAPGRID_TILES[0]; k++)
+        if (MAPGRID_TILES[k].ch == ch) tl = &MAPGRID_TILES[k];
+      int special = strchr("#%HhOWX", ch) != NULL || (ch == 'C' && g_town_kind == 1);
+      if ((!tl && !special) || used[r][c]) continue;
+      // Widest run along the row, then as many rows down as stay full.
+      int w = 1, h = 1;
+      while (c + w < MAPGRID_N && rows[r][c + w] == ch && !used[r][c + w]) w++;
+      for (int ok = 1; ok && r + h < MAPGRID_N; ) {
+        for (int k = 0; k < w; k++)
+          if (rows[r + h][c + k] != ch || used[r + h][c + k]) { ok = 0; break; }
+        if (ok) h++;
+      }
+      for (int y = r; y < r + h; y++)
+        for (int x = c; x < c + w; x++) used[y][x] = 1;
+      if (special) {
+        float sx0 = -ARENA_HALF + (float)c * cs, sz0 = -ARENA_HALF + (float)r * cs;
+        float sx1 = -ARENA_HALF + (float)(c + w) * cs, sz1 = -ARENA_HALF + (float)(r + h) * cs;
+        switch (ch) {
+          case '#': town_block(rows, sx0, sz0, sx1, sz1, 1); break;
+          case '%': town_block(rows, sx0, sz0, sx1, sz1, 0); break;
+          case 'H': town_climb(rows, sx0, sz0, sx1, sz1, 1); break;
+          case 'h': town_climb(rows, sx0, sz0, sx1, sz1, 0); break;
+          case 'O': {
+            float rr = fminf(sx1 - sx0, sz1 - sz0) * 0.5f - 0.15f;
+            tank((sx0 + sx1) * 0.5f, (sz0 + sz1) * 0.5f, rr, rng_range(6.5f, 8.5f),
+                 tint(rgb(0.82f, 0.82f, 0.78f), 0.95f, 1.03f));
+          } break;
+          case 'W':
+            water_rect(sx0, sz0, sx1, sz1);
+            // a railing on each land edge, run by run along it
+            for (int sd = 1; sd <= 8; sd <<= 1) {
+              int n_ = (sd == SIDE_N || sd == SIDE_S) ? w : h;
+              int run0 = -1;
+              for (int k = 0; k <= n_; k++) {
+                int open = 0;
+                if (k < n_) {
+                  int cc = sd == SIDE_W ? c - 1 : sd == SIDE_E ? c + w : c + k;
+                  int rr2 = sd == SIDE_N ? r - 1 : sd == SIDE_S ? r + h : r + k;
+                  open = mg_open(rows, cc, rr2) && rows[rr2][cc] != 'W';
+                }
+                if (open && run0 < 0) run0 = k;
+                if (!open && run0 >= 0) {
+                  float a0 = (sd == SIDE_N || sd == SIDE_S ? sx0 : sz0) + (float)run0 * cs;
+                  float a1 = (sd == SIDE_N || sd == SIDE_S ? sx0 : sz0) + (float)k * cs;
+                  if (sd == SIDE_E) quay_rail(1, sx1, +1, a0, a1);
+                  else if (sd == SIDE_W) quay_rail(1, sx0, -1, a0, a1);
+                  else if (sd == SIDE_N) quay_rail(0, sz0, -1, a0, a1);
+                  else quay_rail(0, sz1, +1, a0, a1);
+                  run0 = -1;
+                }
+              }
+            }
+            break;
+          case 'C': {   // HARBOR: shipping containers, sometimes two high
+            static const v3 CC[5] = {{{0.66f, 0.20f, 0.14f}}, {{0.16f, 0.34f, 0.56f}},
+                                     {{0.22f, 0.46f, 0.30f}}, {{0.82f, 0.54f, 0.16f}},
+                                     {{0.50f, 0.52f, 0.54f}}};
+            int ax = (sx1 - sx0) >= (sz1 - sz0) ? 0 : 1;
+            float cx = (sx0 + sx1) * 0.5f, cz = (sz0 + sz1) * 0.5f;
+            container(cx, cz, ax, 0.0f, CC[rng_u32() % 5]);
+            if (rng_u32() & 1) container(cx, cz, ax, 2.6f, CC[rng_u32() % 5]);
+          } break;
+          default: break;   // 'X': a landmark goes here by hand
+        }
+        continue;
+      }
+      float y1 = tl->y1;
+      float x0 = -ARENA_HALF + (float)c * cs + tl->inset;
+      float z0 = -ARENA_HALF + (float)r * cs + tl->inset;
+      float x1 = -ARENA_HALF + (float)(c + w) * cs - tl->inset;
+      float z1 = -ARENA_HALF + (float)(r + h) * cs - tl->inset;
+      v3 col;
+      switch (tl->col) {
+        case MGC_WALL:    col = col_tint(t->wall, 0.86f, 1.0f); break;
+        case MGC_COVER:   col = col_tint(t->cover, 0.92f, 1.04f); break;
+        case MGC_CRATE_A: col = col_tint(t->crate_a, 0.9f, 1.06f); break;
+        case MGC_MID:     col = t->mid; break;
+        case MGC_SITE_A:  col = t->band_s; break;
+        case MGC_SITE_B:  col = t->band_n; break;
+        default:          col = col_tint(t->crate_b, 0.92f, 1.04f); break;
+      }
+      map_add((v3){{x0, tl->y0, z0}}, (v3){{x1, y1, z1}}, col);
+    }
+}
+// THE LANDMARKS, by hand, on the cells the grids reserve ('X') or leave open.
+static void citadel_extras(void) {
+  const town_style_t *s = &g_town;
+  // The mosque: a hall with a drum and dome, and a minaret you climb.
+  int bal = g_town.balconies;
+  g_town.balconies = 0;
+  house(12.0f, -16.0f, 24.0f, 6.0f, 2, SIDE_N | SIDE_S | SIDE_E | SIDE_W, SIDE_W, 0, 0.0f, 0.0f, 0);
+  g_town.balconies = bal;
+  octa(18.0f, -5.0f, 4.6f, 6.4f, 7.6f, s->plaster[3]);
+  dome(18.0f, -5.0f, 4.3f, 7.6f, rgb(0.24f, 0.46f, 0.52f));
+  tower(8.6f, -12.0f, 1.8f, 10.4f, s->plaster[3], s->stone, 1, -1);
+  octa(9.0f, 1.0f, 1.0f, 0.0f, 0.9f, s->stone);                     // well
+  palm(7.6f, 4.6f, 5.2f);
+  // Arched gates at mid doors and long A doors.
+  arch_gate(0, -23.0f, -2.0f, 2.0f, -6.0f, 6.0f, 6.0f, s->plaster[0]);
+  arch_gate(0, 7.0f, -42.0f, -38.0f, -46.0f, -36.0f, 6.0f, s->plaster[2]);
+  // Palms, market stalls, carts, lamps, barrels.
+  palm(-22.0f, -16.0f, 5.6f); palm(-12.0f, 44.0f, 5.0f); palm(12.0f, 44.0f, 5.4f);
+  palm(-4.0f, -38.0f, 5.0f);
+  stall1(4.6f, 12.0f, 1, s->awning[0]); stall1(4.6f, 22.0f, 1, s->awning[1]);
+  car(-30.0f, -44.5f, 0); car(34.0f, -44.0f, 0); car(-30.0f, 32.0f, 0);
+  for (float z = -10.0f; z <= 26.0f; z += 12.0f) lamp(5.6f, z + 1.0f, 0, -1);
+  barrel(-38.0f, -22.0f, s->door); barrel(-37.2f, -22.4f, s->door);
+  barrel(20.0f, -34.0f, s->door);
+}
+
+static void harbor_extras(void) {
+  const town_style_t *s = &g_town;
+  // The lighthouse in the dock-side pocket.
+  tower(-37.0f, 12.0f, 2.0f, 12.0f, rgb(0.90f, 0.90f, 0.88f), s->stone, 1, -1);
+  // The gantry crane: a stair tower at the east end, a walkway beam at 10.4 m
+  // across the container yard, a leg frame at the west end, a cab and a hook.
+  v3 yel = rgb(0.86f, 0.64f, 0.14f), stl = rgb(0.28f, 0.30f, 0.32f);
+  // (8.0 m, so the stair finishes on the north side and the west face, where
+  // the beam meets the tower, has no flight under it.)
+  tower(-13.5f, -33.0f, 1.8f, 8.0f, yel, stl, 0, 3);
+  bx(-45.0f, 7.6f, -33.8f, -15.3f, 8.0f, -32.2f, yel);
+  bx(-45.0f, 8.0f, -33.8f, -15.3f, 9.0f, -33.72f, stl);
+  bx(-45.0f, 8.0f, -32.28f, -15.3f, 9.0f, -32.2f, stl);
+  bx(-45.0f, 8.0f, -33.72f, -44.92f, 9.0f, -32.28f, stl);
+  bx(-44.8f, 0.0f, -33.8f, -44.0f, 7.6f, -33.2f, yel);
+  bx(-44.8f, 0.0f, -32.8f, -44.0f, 7.6f, -32.2f, yel);
+  bx(-44.8f, 4.0f, -33.2f, -44.0f, 4.4f, -32.8f, yel);
+  bx(-40.0f, 5.8f, -34.4f, -37.4f, 7.6f, -31.6f, rgb(0.82f, 0.80f, 0.74f));
+  bx(-28.06f, 3.6f, -33.06f, -27.94f, 7.6f, -32.94f, stl);
+  bx(-28.4f, 3.0f, -33.4f, -27.6f, 3.6f, -32.6f, yel);
+  // Trucks in the east lane and at T, lamps along the dock.
+  truck(41.0f, 20.0f, 1, rgb(0.16f, 0.34f, 0.56f));
+  truck(-26.0f, 46.0f, 0, rgb(0.66f, 0.20f, 0.14f));
+  for (float z = -36.0f; z <= 40.0f; z += 12.0f) lamp(-43.4f, z, 0, -1);
+  barrel(36.0f, -2.0f, rgb(0.20f, 0.30f, 0.50f)); barrel(36.8f, -2.4f, rgb(0.62f, 0.20f, 0.14f));
+}
+
+static void refinery_extras(void) {
+  const town_style_t *s = &g_town;
+  flare_stack(-11.0f, -35.0f, 24.0f);
+  cooling_tower(-21.0f, 13.0f);
+  // The distillation column: a stair tower to a 10.4 m deck, the column above.
+  tower(24.0f, -11.0f, 1.8f, 10.4f, rgb(0.62f, 0.62f, 0.60f), rgb(0.30f, 0.31f, 0.32f), 0, -1);
+  octa(24.0f, -11.0f, 1.0f, 10.4f, 19.0f, rgb(0.78f, 0.78f, 0.76f));
+  for (float y = 12.0f; y < 19.0f; y += 2.4f)
+    octa(24.0f, -11.0f, 1.12f, y, y + 0.3f, s->trim);
+  // A pipe rack down mid, and railings on the catwalk across it.
+  v3 post = rgb(0.30f, 0.31f, 0.32f);
+  static const float PZ[] = {-34.0f, -24.0f, -14.0f, 6.0f, 16.0f, 26.0f, 36.0f};
+  for (size_t i = 0; i < sizeof PZ / sizeof PZ[0]; i++) {
+    bx(-7.8f, 0.0f, PZ[i] - 0.2f, -7.4f, 4.6f, PZ[i] + 0.2f, post);
+    bx(7.4f, 0.0f, PZ[i] - 0.2f, 7.8f, 4.6f, PZ[i] + 0.2f, post);
+    bx(-7.8f, 4.6f, PZ[i] - 0.15f, 7.8f, 4.9f, PZ[i] + 0.15f, post);
+  }
+  bx(-4.2f, 4.9f, -38.0f, -3.75f, 5.35f, 38.0f, s->trim);
+  bx(-1.4f, 4.9f, -38.0f, -0.8f, 5.5f, 38.0f, rgb(0.62f, 0.64f, 0.66f));
+  bx(1.2f, 4.9f, -38.0f, 1.75f, 5.45f, 38.0f, rgb(0.52f, 0.26f, 0.18f));
+  bx(3.6f, 4.9f, -38.0f, 4.0f, 5.3f, 38.0f, rgb(0.26f, 0.46f, 0.30f));
+  bx(-8.0f, 2.8f, -4.0f, 8.0f, 3.8f, -3.92f, s->trim);
+  bx(-8.0f, 2.8f, -0.08f, 8.0f, 3.8f, 0.0f, s->trim);
+  for (float z = -30.0f; z <= 30.0f; z += 15.0f) lamp(-6.6f, z + 3.0f, 0, +1);
+  barrel(-38.0f, -10.0f, rgb(0.20f, 0.30f, 0.50f)); barrel(-37.2f, -10.4f, rgb(0.20f, 0.30f, 0.50f));
+  barrel(30.0f, -24.0f, rgb(0.72f, 0.16f, 0.12f)); barrel(30.8f, -24.4f, rgb(0.72f, 0.16f, 0.12f));
+  car(20.0f, -46.0f, 0); car(-14.0f, 47.0f, 0);
+}
+
+static void map_citadel(void) {
+  g_town_kind = 0; town_style(0); map_grid(MAP_CITADEL); citadel_extras(); g_mg_rows = NULL;
+}
+static void map_harbor(void) {
+  g_town_kind = 1; town_style(1); map_grid(MAP_HARBOR); harbor_extras(); g_mg_rows = NULL;
+}
+static void map_refinery(void) {
+  g_town_kind = 2; town_style(2); map_grid(MAP_REFINERY); refinery_extras(); g_mg_rows = NULL;
+}
+
+// The map table. `theme` indexes THEMES and `atm` the sky presets (ATM, below
+// with the renderer): a handmade map has ONE look, because a place you learn
+// is a place you recognise. ARENA keeps drawing both from its seed. `half` is
+// the map's half-size and `step` its STEP_H; `route` turns on grid routing for
+// the bots (bot_route), which a town of corridors cannot be played without and
+// the open maps do not need.
+typedef struct {
+  const char *name, *key;
+  int theme, atm;
+  float half, step;
+  int route;
+  void (*build)(void);
+} map_def_t;
+static const map_def_t MAP_DEFS[] = {
+  {"ARENA",    "arena",    -1, -1, 24.0f, 0.0f,  0, NULL},
+  {"FOUNDRY",  "foundry",   1,  4, 24.0f, 0.0f,  0, map_foundry},   // SLATE, STORMFRONT
+  {"BAZAAR",   "bazaar",    2,  1, 24.0f, 0.0f,  0, map_bazaar},    // SAND, GOLDEN HOUR
+  {"OUTPOST",  "outpost",   0,  0, 24.0f, 0.0f,  0, map_outpost},   // QUARTZ, HIGH NOON
+  {"CITADEL",  "citadel",   2,  2, 52.0f, 0.45f, 1, map_citadel},   // SAND, EMBER DUSK
+  {"HARBOR",   "harbor",    1,  3, 52.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN
+  {"REFINERY", "refinery",  0,  1, 52.0f, 0.45f, 1, map_refinery},  // QUARTZ, GOLDEN HOUR
+};
+#define MAP_COUNT ((int)(sizeof MAP_DEFS / sizeof MAP_DEFS[0]))
+#define MAP_ROTATE MAP_COUNT          // the MAP setting's extra value
+static const char *const MAP_PICK_NAMES[MAP_COUNT + 1] = {
+  "ARENA", "FOUNDRY", "BAZAAR", "OUTPOST", "CITADEL", "HARBOR", "REFINERY", "ROTATE"};
+static int map_parse(const char *s) {
+  for (int i = 0; i < MAP_COUNT; i++) if (!strcmp(s, MAP_DEFS[i].key)) return i;
+  return !strcmp(s, "rotate") ? MAP_ROTATE : -1;
+}
+static const char *map_pick_key(int pick) {
+  return pick >= 0 && pick < MAP_COUNT ? MAP_DEFS[pick].key : "rotate";
+}
+static int map_id_valid(int id) { return id >= 0 && id < MAP_COUNT ? id : 0; }
+static int map_routes(void) { return MAP_DEFS[map_id_valid(g_map_id)].route; }
+
+// Latch the MAP setting and decide this match's map. ROTATE steps through every
+// map in table order — `advance` is 0 at session bring-up, so a rotation opens
+// on ARENA, and 1 on each restart after it.
+static void map_pick_apply(int advance) {
+  int pick = g_cfg.sp_map;
+  if (pick < 0 || pick > MAP_ROTATE) pick = 0;
+  g_map_pick = pick;
+  if (pick < MAP_COUNT) g_map_id = pick;
+  else g_map_id = advance ? (map_id_valid(g_map_id) + 1) % MAP_COUNT : 0;
+}
+
+static void map_generate_layout(uint32_t seed);
+// Lay the arena out, then index it (bp_build). Every caller comes through here.
 static void map_generate(uint32_t seed) {
+  map_generate_layout(seed);
+  bp_build();
+}
+static void map_generate_layout(uint32_t seed) {
   g_rng = (uint64_t)seed * 2654435761u + 1;
   for (int h = 0; h < (int)(sizeof g_rng_gun / sizeof g_rng_gun[0]); h++)
     g_rng_gun[h] = rng_gun_seed(seed, h);
   g_rng_bot = (uint64_t)(seed ^ 0xB07u) * 2654435761u + 1;
   g_num_solids = 0;
   g_theme = THEMES[rng_u32() % (sizeof THEMES / sizeof THEMES[0])];
+  const map_def_t *md = &MAP_DEFS[map_id_valid(g_map_id)];
+  if (md->theme >= 0) g_theme = THEMES[md->theme];   // the draw above still
+                                                     // happens: same streams
+  g_arena_half_all[g_lobby] = md->half;              // before the shell below
+  g_step_h_all[g_lobby] = md->step;
   {  // see wind_dir(): hashed off the seed, never drawn from the map stream
     uint32_t wh = seed * 2246822519u;
     wh ^= wh >> 13; wh *= 3266489917u; wh ^= wh >> 16;
@@ -2136,6 +3595,7 @@ static void map_generate(uint32_t seed) {
   // apart. Marked here, next to the eight calls that build it, rather than
   // threaded through map_add as a parameter every other caller would pass 1 to.
   for (int i = 0; i < g_num_solids; i++) g_solids[i].pen = 0;
+  if (md->build) { md->build(); return; }
 
   // Mid landmark, self-symmetric: the map's one saturated color anchor.
   switch (rng_u32() % 4) {
@@ -2267,7 +3727,8 @@ static const char *ent_name(int e) {
 typedef enum {
   EV_FIRE, EV_HIT, EV_HIT_HEAD, EV_KILL, EV_IMPACT, EV_DRYFIRE, EV_RELOAD,
   EV_RELOAD_CANCEL,  // a swap abandoned a running reload; wpn = the weapon
-  EV_RESPAWN, EV_END, EV_STEP, EV_LAND
+  EV_RESPAWN, EV_END, EV_STEP, EV_LAND,
+  EV_MELEE, EV_BLOCK, EV_NADE, EV_BLAST
 } ev_type_t;
 
 // AI hearing is simulation state, deliberately separate from g_events: events
@@ -2302,6 +3763,12 @@ static void bot_flank_release(bot_t *b);
 // EV_KILL:   k = headshot flag.  EV_END: k = winner entity.
 // EV_STEP:   a = the foot that just landed, f = speed, g = crouch blend.
 // EV_LAND:   a = where the body touched down, f = the IMPACT SPEED (m/s down).
+// EV_MELEE:  a = the blade's origin. k = 0 a swing starting, 1 steel on a wall.
+// EV_BLOCK:  a = contact point, src = attacker, dst = the guard, k = 1 a parry.
+// EV_NADE:   k = 0 thrown: a = position, b = velocity, i = fuse ticks left.
+//            k = 1 a bounce: a = where, f = impact speed.
+//            k = 2 the spoon flew: a = hand, b = its velocity. k = 3 taken in hand.
+// EV_BLAST:  a = the detonation, src = thrower, g = 1 on open ground.
 // src/dst:   attacker/victim entity id (0 = player, 1.. = bots).
 // EV_FIRE also carries `pen`: metres of MATERIAL the round crossed on the way,
 // 0 for an ordinary shot. It is the only field that distinguishes a wallbang
@@ -2424,6 +3891,10 @@ static void ev_push(event_t e) {
   // ~4 steps/s would bury every gunplay line the contract is written against.
   case EV_STEP:
   case EV_LAND:    break;
+  case EV_MELEE:   break;
+  case EV_NADE:    if (e.k == 2) printf("spoon t=%ld\n", g_tick); else if (!e.k) printf("nade t=%ld src=%s at=(%.2f %.2f %.2f) v=(%.2f %.2f %.2f) fuse=%d\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z, (double)e.b.x, (double)e.b.y, (double)e.b.z, e.i); break;
+  case EV_BLAST:   printf("blast t=%ld src=%s at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
+  case EV_BLOCK:   printf("block t=%ld %s -> %s parry=%d\n", g_tick, ent_name(e.src), ent_name(e.dst), e.k); break;
   }
 #endif
 }
@@ -2467,7 +3938,7 @@ static float ray_aabb(v3 o, v3 d, v3 mn, v3 mx, v3 *nrm) {
 static float trace_world(v3 o, v3 d, v3 *nrm, int *solid) {
   float best = GUN_RANGE;
   int si = -1;
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_RAY(i, o, d, GUN_RANGE) {
     v3 n;
     float t = ray_aabb(o, d, g_solids[i].min, g_solids[i].max, &n);
     if (t > 0 && t < best) { best = t; *nrm = n; si = i; }
@@ -2556,7 +4027,7 @@ static float pen_span(v3 o, v3 d) {
                                              // that finds open air
     v3 p = v3_add(o, v3_scale(d, t + PEN_EPS));
     float adv = t;
-    for (int i = 0; i < g_num_solids; i++) {
+    BP_BOX(i, p.x, p.z, p.x, p.z) {
       const solid_t *s = &g_solids[i];
       if (p.x < s->min.x || p.x > s->max.x || p.y < s->min.y ||
           p.y > s->max.y || p.z < s->min.z || p.z > s->max.z) continue;
@@ -2609,6 +4080,10 @@ static float pen_span(v3 o, v3 d) {
   "fire_ar", "fire_sr", "far_ar", "far_sr", "hit", "hit_head",
   "kill", "kill_head", "hurt", "impact", "whizz", "step", "dryfire",
   "reload_ar", "reload_sr", "flesh", "reload_ar_tac",
+  "fire_pt", "reload_pt", "knife_swing", "knife_wall", "knife_block",
+  "nade_pin", "nade_bounce", "blast", "blast_far", "nade_spoon", "nade_equip",
+  "fire_ar2", "fire_ar3", "fire_ar4", "fire_ar5", "fire_sr2", "fire_sr3",
+  "fire_pt2", "fire_pt3", "fire_pt4", "far_pt", "slap",
 };
 
 #define SFX_HZ 48000
@@ -3396,6 +4871,136 @@ static void sfx_kill_base(int id, float g) {
 // AR's energy sat below 250 Hz and only 2.9% above 2 kHz, which is a thud, not
 // a report. The band split is the design, and `sfx` prints it back.
 // ---------------------------------------------------------------------------
+// --- THE PHYSICS OF A SHOT ----------------------------------------------
+// Everything above is filtered noise, and filtered noise is what a gunshot sounds
+// like when it is described rather than fired. These are the parts that are not
+// noise: a shock front, the round's own sonic boom, gas tearing out of the muzzle,
+// steel hitting steel, and a microphone that cannot take it.
+
+// The muzzle blast: a Friedlander pressure wave, the standard shape of a free-air
+// shock. A vertical step, a decay through zero in T seconds, then the suction
+// behind it. The step is what no band-passed burst can do: it has energy at every
+// frequency at once, in phase, and that coherence is what reads as a detonation.
+static int sfx_friedlander(float T, float amp) {
+  int n = (int)(T * 6.0f * SFX_HZ);
+  if (n > SFX_SCRATCH) n = SFX_SCRATCH;
+  op_t rough = {0}, dc = {0};
+  for (int i = 0; i < n; i++) {
+    float t = (float)i / SFX_HZ, u = t / T;
+    float grit = op_lp(&rough, rng_rangef(&g_rng_sfx, -1, 1), 7000.0f);
+    g_scr[i] = op_hp(&dc, (1.0f - u) * expf(-1.7f * u) * (1.0f + grit * 0.9f), 90.0f);
+  }
+  return scr_norm(n, amp);
+}
+
+// The round's own boom: a supersonic bullet drags an N-wave, up, straight down
+// through zero and back, over a fraction of a millisecond. Almost all of it is
+// above 2 kHz. A pistol round at the speed of sound does not make one.
+static int sfx_nwave(float T, float amp) {
+  int n = (int)(T * SFX_HZ) + 2;
+  for (int i = 0; i < n; i++) g_scr[i] = 1.0f - 2.0f * (float)i / (float)(n - 1);
+  return scr_norm(n, amp);
+}
+
+// The sizzle on top of a report: two high-passes in series, because this is the one
+// band svf() cannot reach. It is capped near 7.4 kHz for stability, and that cap
+// was why every shot in this file measured 1-2% of its energy above 6 kHz.
+static int sfx_air(float sec, float hz, float dec, float amp) {
+  int n = (int)(sec * SFX_HZ);
+  if (n > SFX_SCRATCH) n = SFX_SCRATCH;
+  op_t a = {0}, b = {0};
+  for (int i = 0; i < n; i++) {
+    float t = (float)i / SFX_HZ;
+    float x = op_hp(&b, op_hp(&a, rng_rangef(&g_rng_sfx, -1, 1), hz), hz * 1.3f);
+    g_scr[i] = x * expf(-t / dec);
+  }
+  return scr_norm(n, amp);
+}
+
+// Propellant gas: a band of noise whose level is itself noise, so it TEARS instead
+// of hissing. This is the rough edge on a real report, and the thing a smooth
+// exponential envelope can never have.
+static int sfx_gas(float sec, float hz, float q, float dec, float rough_hz, float amp) {
+  int n = (int)(sec * SFX_HZ);
+  if (n > SFX_SCRATCH) n = SFX_SCRATCH;
+  svf_t f = {0, 0};
+  op_t m = {0};
+  float mg = 0.0f;
+  for (int i = 0; i < n; i++) g_scr[i] = rng_rangef(&g_rng_sfx, -1, 1);
+  for (int i = 0; i < n; i++) {
+    float t = (float)i / SFX_HZ;
+    float am = op_lp(&m, rng_rangef(&g_rng_sfx, -1, 1), rough_hz);
+    mg = fmaxf(mg, fabsf(am));
+    g_scr[i] = svf(&f, g_scr[i], hz, q) * expf(-t / dec) * am;
+  }
+  for (int i = 0; i < n; i++) g_scr[i] = g_scr[i] / (mg + 1e-6f);
+  return scr_norm(n, amp);
+}
+
+// Struck steel: five partials in the ratios of a bar rather than a string, the high
+// ones dying first. Each take strikes it a little differently.
+static int sfx_modal(float sec, float hz, float dec, float amp) {
+  static const float R_[5] = {1.0f, 1.59f, 2.41f, 3.37f, 4.53f};
+  int n = (int)(sec * SFX_HZ);
+  if (n > SFX_SCRATCH) n = SFX_SCRATCH;
+  memset(g_scr, 0, (size_t)n * sizeof g_scr[0]);
+  for (int k = 0; k < 5; k++) {
+    float f = hz * R_[k] * rng_rangef(&g_rng_sfx, 0.985f, 1.015f);
+    float d = dec / (1.0f + 0.55f * (float)k), g = rng_rangef(&g_rng_sfx, 0.6f, 1.0f) / (1.0f + 0.4f * (float)k);
+    if (f > SFX_HZ * 0.45f) continue;
+    for (int i = 0; i < n; i++) {
+      float t = (float)i / SFX_HZ;
+      g_scr[i] += sinf(F_TAU * f * t) * expf(-t / d) * g;
+    }
+  }
+  return scr_norm(n, amp);
+}
+
+static void sfx_strike(int id, float at_s, float hz, float dec, float amp, float pan) {
+  int n = sfx_click(0.002f, 0.00030f, 2600.0f, amp * 0.8f);
+  sfx_lay(id, n, (int)(at_s * SFX_HZ), pan, 0);
+  n = sfx_modal(dec * 6.0f, hz, dec, amp);
+  sfx_lay(id, n, (int)(at_s * SFX_HZ), pan, 1);
+}
+
+// A spent case landing somewhere near your boots: brass, not steel, so high and
+// short, and it skips.
+static void sfx_brass(int id, float at_s, float amp) {
+  float pan = rng_rangef(&g_rng_sfx, 0.18f, 0.42f), gap = rng_rangef(&g_rng_sfx, 0.07f, 0.11f);
+  for (int k = 0; k < 3; k++, amp *= 0.5f, gap *= 0.62f) {
+    int n = sfx_modal(0.04f, rng_rangef(&g_rng_sfx, 4300.0f, 5600.0f), 0.0065f, amp);
+    sfx_lay(id, n, (int)(at_s * SFX_HZ), pan, 1);
+    at_s += gap;
+  }
+}
+
+// A microphone next to a gun is not linear and neither is an ear. Rounding the very
+// top of the wave off is what turns a thin spike into a solid hit: it moves energy
+// out of one sample into the milliseconds around it and adds the harmonics a
+// recorded report is full of. Soft, so a quiet tail passes through untouched.
+static void sfx_drive(int id, int upto, float drive) {
+  float *b = g_sfx_buf[id], mx = 1e-6f;
+  int n = upto * SFX_CH, len = g_sfx_len[id] * SFX_CH;
+  if (n > len) n = len;
+  for (int i = 0; i < n; i++) mx = fmaxf(mx, fabsf(b[i]));
+  float g = drive / mx;
+  for (int i = 0; i < n; i++) b[i] = tanhf(b[i] * g) / g;
+}
+
+// The first few milliseconds of any firearm. T is how long the shock takes to pass,
+// which is what separates a pistol from a rifle more than level does. The second
+// copy is the same shock off the ground, a couple of metres further round.
+static void sfx_report(int id, float T, float blast, float boom, float air, float air_dec) {
+  float gd = rng_rangef(&g_rng_sfx, 0.0026f, 0.0040f);
+  int n = sfx_friedlander(T, blast);
+  sfx_lay(id, n, 0, 0.0f, 0);
+  n = sfx_friedlander(T * 1.2f, blast * 0.42f);
+  sfx_lay(id, n, (int)(gd * SFX_HZ), 0.0f, 0);
+  if (boom > 0.0f) { n = sfx_nwave(0.00028f, boom); sfx_lay(id, n, 2, 0.0f, 0); }
+  n = sfx_air(0.05f, 6200.0f, air_dec, air);
+  sfx_lay(id, n, 0, 0.0f, 1);
+}
+
 static void sfx_build_all(void) {
   int n;  // sfx_alloc reseeds g_rng_sfx per sound id — no global seed here
 
@@ -3403,41 +5008,59 @@ static void sfx_build_all(void) {
   // 0.66 s, not 0.52: the room below decays over 440 ms from a 9 ms predelay,
   // and a reverb tail that runs off the end of its buffer is a step to zero —
   // i.e. a click, at the exact moment the ear is listening to the decay.
-  sfx_alloc(SFX_FIRE_AR, 0.66f);
-  n = sfx_click(0.004f, 0.00055f, 1800.0f, 1.75f);
-  sfx_lay(SFX_FIRE_AR, n, 0, 0.0f, 0);                 // transient
-  n = sfx_burst(0.08f, 4300.0f, 1.7f, 0.00002f, 0.011f, 1.7f, 0.88f);
-  sfx_lay(SFX_FIRE_AR, n, 0, 0.0f, 0);                 // snap
-  n = sfx_burst(0.10f, 2500.0f, 1.4f, 0.00003f, 0.022f, 1.5f, 1.30f);
-  sfx_lay(SFX_FIRE_AR, n, 0, 0.0f, 0);                 // crack
-  n = sfx_burst(0.12f, 1150.0f, 1.2f, 0.00006f, 0.034f, 1.2f, 0.95f);
-  sfx_lay(SFX_FIRE_AR, n, 1, -0.06f, 2);               // upper body
-  n = sfx_burst(0.16f, 240.0f, 1.0f, 0.00010f, 0.045f, 1.0f, 0.58f);
-  sfx_lay(SFX_FIRE_AR, n, 2, 0.05f, 3);                // body
-  n = sfx_sweep(0.20f, 190.0f, 62.0f, 0.026f, 0.050f, 1.0f, 0.46f);
-  sfx_lay(SFX_FIRE_AR, n, 0, 0.0f, 0);                 // sub punch
-  sfx_clack(SFX_FIRE_AR, (int)(0.006f * SFX_HZ), 3400.0f, 0.20f);  // bolt
-  {   // nearby cover: 1.9 / 3.6 / 5.8 m, there and back
-    static const float D[3] = {0.011f, 0.021f, 0.034f};
-    static const float G[3] = {0.30f, 0.20f, 0.13f};
-    sfx_reflect(SFX_FIRE_AR, (int)(0.09f * SFX_HZ), D, G, 3, 3200.0f);
+  static const int AR_TAKE[5] = {SFX_FIRE_AR, SFX_FIRE_AR2, SFX_FIRE_AR3, SFX_FIRE_AR4, SFX_FIRE_AR5};
+  for (int fv = 0; fv < 5; fv++) {
+    int fid = AR_TAKE[fv];
+    sfx_alloc(fid, 0.66f);
+    float vj = rng_rangef(&g_rng_sfx, 0.94f, 1.06f);      // no two chambers ring alike
+    sfx_report(fid, 0.00125f, 2.3f, 1.5f, 1.75f, 0.0095f);
+    n = sfx_click(0.004f, 0.00055f, 1800.0f, 0.90f);
+    sfx_lay(fid, n, 0, 0.0f, 0);                 // transient
+    n = sfx_burst(0.08f, 4300.0f * vj, 1.7f, 0.00002f, 0.011f, 1.7f, 0.88f);
+    sfx_lay(fid, n, 0, 0.0f, 0);                 // snap
+    n = sfx_burst(0.10f, 2500.0f / vj, 1.4f, 0.00003f, 0.022f, 1.5f, 1.30f);
+    sfx_lay(fid, n, 0, 0.0f, 0);                 // crack
+    n = sfx_burst(0.12f, 1150.0f * vj, 1.2f, 0.00006f, 0.034f, 1.2f, 0.95f);
+    sfx_lay(fid, n, 1, -0.06f, 2);               // upper body
+    n = sfx_burst(0.16f, 260.0f, 1.0f, 0.00010f, 0.036f, 1.0f, 0.40f);
+    sfx_lay(fid, n, 2, 0.05f, 3);                // body
+    n = sfx_sweep(0.20f, 190.0f, 62.0f, 0.026f, 0.050f, 1.0f, 0.46f);
+    sfx_lay(fid, n, 0, 0.0f, 0);                 // sub punch
+    n = sfx_gas(0.11f, 1700.0f * vj, 0.8f, 0.022f, 900.0f, 1.05f);
+    sfx_lay(fid, n, 1, 0.0f, 2);                         // gas tearing out of the muzzle
+    // The action, on its real clock: a 700 rpm bolt goes back, stops in the buffer,
+    // comes home. Then the buffer spring, ringing on behind it: that thin twang is
+    // the thing about this kind of rifle everybody knows and nobody can name.
+    sfx_clack(fid, (int)(0.006f * SFX_HZ), 3400.0f, 0.20f);
+    sfx_strike(fid, 0.012f * vj, 1850.0f, 0.0055f, 0.17f, 0.06f);   // carrier back
+    sfx_strike(fid, 0.031f / vj, 980.0f, 0.0080f, 0.15f, 0.04f);    // into the buffer
+    sfx_strike(fid, 0.073f * vj, 2300.0f, 0.0065f, 0.17f, 0.06f);   // home
+    n = sfx_modal(0.16f, 2150.0f * vj, 0.040f, 0.075f);
+    sfx_lay(fid, n, (int)(0.020f * SFX_HZ), 0.08f, 2);   // the spring
+    if (fv % 2) sfx_brass(fid, 0.30f + 0.04f * (float)fv, 0.055f);
+    sfx_drive(fid, (int)(0.11f * SFX_HZ), 2.6f);
+    {   // nearby cover: 1.9 / 3.6 / 5.8 m, there and back
+      static const float D[3] = {0.011f, 0.021f, 0.034f};
+      static const float G[3] = {0.30f, 0.20f, 0.13f};
+      sfx_reflect(fid, (int)(0.09f * SFX_HZ), D, G, 3, 3200.0f);
+    }
+    {   // ...and the arena. Both weapons are fired inside the same 48 m box, so
+        // both get the same wall returns — the AR's are just quieter and darker
+        // under a shot that is itself over in 80 ms.
+      static const float D[2] = {0.140f, 0.198f};
+      static const float G[2] = {0.14f, 0.09f};
+      sfx_reflect(fid, (int)(0.07f * SFX_HZ), D, G, 2, 900.0f);
+    }
+    // One real room instead of two noise tails. The old pair measured T60 338 ms
+    // in the low band against 407 ms in the high band — a "room" that got
+    // BRIGHTER as it died, which no physical space does. Short, mid-forward,
+    // and it now decays 250 ms/1.5 kHz-damped the way a concrete bay does.
+    sfx_verb(fid, (int)(0.24f * SFX_HZ), 0.009f, 0.027f, 0.44f, 2600.0f,
+             0.30f);
+    sfx_tail(fid, (int)(0.006f * SFX_HZ), 0.22f, 2600.0f, 0.9f,
+             0.005f, 0.055f, 0.13f);   // air, on top of the walls
+    sfx_finish(fid, 0.97f, 0.1748f, 0.30f);
   }
-  {   // ...and the arena. Both weapons are fired inside the same 48 m box, so
-      // both get the same wall returns — the AR's are just quieter and darker
-      // under a shot that is itself over in 80 ms.
-    static const float D[2] = {0.140f, 0.198f};
-    static const float G[2] = {0.14f, 0.09f};
-    sfx_reflect(SFX_FIRE_AR, (int)(0.07f * SFX_HZ), D, G, 2, 900.0f);
-  }
-  // One real room instead of two noise tails. The old pair measured T60 338 ms
-  // in the low band against 407 ms in the high band — a "room" that got
-  // BRIGHTER as it died, which no physical space does. Short, mid-forward,
-  // and it now decays 250 ms/1.5 kHz-damped the way a concrete bay does.
-  sfx_verb(SFX_FIRE_AR, (int)(0.24f * SFX_HZ), 0.009f, 0.027f, 0.44f, 2600.0f,
-           0.30f);
-  sfx_tail(SFX_FIRE_AR, (int)(0.006f * SFX_HZ), 0.22f, 2600.0f, 0.9f,
-           0.005f, 0.055f, 0.13f);   // air, on top of the walls
-  sfx_finish(SFX_FIRE_AR, 0.97f, 0.1748f, 0.30f);
 
   // ---- Sniper: a pressure wave, and then the whole arena answering --------
   // "Mightier" and "more reverberant" are two different jobs solved in two
@@ -3463,9 +5086,16 @@ static void sfx_build_all(void) {
   // energy is spent buying nothing while eating the limiter's whole headroom.
   // Power is 60-150 Hz plus a transient, and the sniper's authority over the AR
   // is that it owns the 600 Hz chest band the AR cannot reach.
-  sfx_alloc(SFX_FIRE_SR, 2.45f);
-  n = sfx_click(0.007f, 0.00090f, 1150.0f, 3.10f);
-  sfx_lay(SFX_FIRE_SR, n, 0, 0.0f, 0);                 // transient
+  static const int SR_TAKE[3] = {SFX_FIRE_SR, SFX_FIRE_SR2, SFX_FIRE_SR3};
+  for (int fv = 0; fv < 3; fv++) {
+    int fid = SR_TAKE[fv];
+  sfx_alloc(fid, 2.45f);
+  float vj = rng_rangef(&g_rng_sfx, 0.95f, 1.05f);
+  sfx_report(fid, 0.00210f, 5.6f, 4.2f, 4.2f, 0.0140f);
+  n = sfx_gas(0.20f, 1250.0f * vj, 0.75f, 0.042f, 520.0f, 2.9f);
+  sfx_lay(fid, n, 1, 0.0f, 3);                         // a big case's worth of gas
+  n = sfx_click(0.007f, 0.00090f, 1150.0f, 1.70f);
+  sfx_lay(fid, n, 0, 0.0f, 0);                 // transient
   // A ONE-SHOT WEAPON HAS TO BE FRIGHTENING, and fright lives in the crack, not
   // in the bottom octave. Measured over the first 80 ms the shot was
   // 20/22/49/9% across sub/low/mid/hi with a 878 Hz centroid — a big, round,
@@ -3475,9 +5105,9 @@ static void sfx_build_all(void) {
   // and the band that survives being scary. Every crack layer up, the pressure
   // sweep down; the sub is what you feel, the crack is what you fear.
   n = sfx_burst(0.055f, 5600.0f, 1.9f, 0.00002f, 0.0085f, 1.9f, 4.90f);
-  sfx_lay(SFX_FIRE_SR, n, 0, 0.0f, 0);                 // whip
+  sfx_lay(fid, n, 0, 0.0f, 0);                 // whip
   n = sfx_burst(0.105f, 3600.0f, 1.7f, 0.00002f, 0.019f, 1.8f, 4.40f);
-  sfx_lay(SFX_FIRE_SR, n, 0, 0.0f, 0);                 // snap
+  sfx_lay(fid, n, 0, 0.0f, 0);                 // snap
   // 2500, NOT 1750, AND THIS IS THE ONE THAT MADE THE SNIPER BLUNT. Measured on
   // the bus over the first 80 ms, the sniper beat the AR by +4.7 dB at
   // 500 Hz-2 kHz and by only +0.8 dB at 2-6 kHz — the band this file's own rule
@@ -3493,7 +5123,7 @@ static void sfx_build_all(void) {
   // burst draws the same number of RNG samples and every layer built after it is
   // byte-identical.
   n = sfx_burst(0.17f, 2500.0f, 1.35f, 0.00004f, 0.048f, 1.4f, 3.20f);
-  sfx_lay(SFX_FIRE_SR, n, 0, 0.0f, 0);                 // crack
+  sfx_lay(fid, n, 0, 0.0f, 0);                 // crack
   // THE SNARL. A big rifle does not just crack, it TEARS: the report falls in
   // pitch over the first tenth of a second as the muzzle blast expands, and
   // that falling edge is the single most recognisable thing about a heavy
@@ -3513,11 +5143,11 @@ static void sfx_build_all(void) {
   // touches it — so this costs gain staging, not headroom, and the shot's own
   // 0-80 ms A-weighted level goes UP 0.5 dB.
   n = sfx_sweep(0.125f, 2150.0f, 560.0f, 0.028f, 0.066f, 1.25f, 1.20f);
-  sfx_lay(SFX_FIRE_SR, n, (int)(0.003f * SFX_HZ), 0.0f, 0);
+  sfx_lay(fid, n, (int)(0.003f * SFX_HZ), 0.0f, 0);
   n = sfx_burst(0.26f, 620.0f, 1.1f, 0.00008f, 0.062f, 1.1f, 1.85f);
-  sfx_lay(SFX_FIRE_SR, n, 1, -0.07f, 3);               // chest
+  sfx_lay(fid, n, 1, -0.07f, 3);               // chest
   n = sfx_burst(0.34f, 150.0f, 1.0f, 0.00012f, 0.090f, 1.0f, 0.95f);
-  sfx_lay(SFX_FIRE_SR, n, 2, 0.06f, 4);                // body
+  sfx_lay(fid, n, 2, 0.06f, 4);                // body
   // Bottoming out at 45 Hz bought nothing — headphones roll off below 50 and
   // the ear is 25 dB down there — while eating the limiter headroom the crack
   // now needs. Shorter, shallower, and 0.42 instead of 0.50.
@@ -3536,11 +5166,12 @@ static void sfx_build_all(void) {
   // else), it is a tone so it draws no RNG, and its excursion is slow enough at
   // +8 ms that it never sums into the transient's peak.
   n = sfx_sweep(0.26f, 165.0f, 62.0f, 0.030f, 0.062f, 1.0f, 1.05f);
-  sfx_lay(SFX_FIRE_SR, n, (int)(0.008f * SFX_HZ), 0.0f, 0);  // the pressure
+  sfx_lay(fid, n, (int)(0.008f * SFX_HZ), 0.0f, 0);  // the pressure
+  sfx_drive(fid, (int)(0.15f * SFX_HZ), 2.3f);
   {   // nearby cover: 2.7 / 5 / 8 / 12 m
     static const float D[4] = {0.016f, 0.029f, 0.047f, 0.071f};
     static const float G[4] = {0.34f, 0.26f, 0.19f, 0.13f};
-    sfx_reflect(SFX_FIRE_SR, (int)(0.13f * SFX_HZ), D, G, 4, 2200.0f);
+    sfx_reflect(fid, (int)(0.13f * SFX_HZ), D, G, 4, 2200.0f);
   }
   {   // the arena: side walls, a corner, the far wall, and one second-order
       // return. Low-passed hard — 40 m of air and two bounces of concrete leave
@@ -3565,10 +5196,10 @@ static void sfx_build_all(void) {
     // while holding the hall's 500 ms level at -17.9 dB against the old -16.5.
     static const float D[4] = {0.140f, 0.198f, 0.245f, 0.292f};
     static const float G[4] = {0.38f, 0.29f, 0.21f, 0.15f};
-    sfx_reflect(SFX_FIRE_SR, (int)(0.16f * SFX_HZ), D, G, 4, 1200.0f);
+    sfx_reflect(fid, (int)(0.16f * SFX_HZ), D, G, 4, 1200.0f);
   }
-  sfx_clack(SFX_FIRE_SR, (int)(0.34f * SFX_HZ), 1000.0f, 0.42f);   // bolt back
-  sfx_clack(SFX_FIRE_SR, (int)(0.50f * SFX_HZ), 1700.0f, 0.36f);   // bolt home
+  sfx_clack(fid, (int)(0.34f * SFX_HZ), 1000.0f, 0.42f);   // bolt back
+  sfx_clack(fid, (int)(0.50f * SFX_HZ), 1700.0f, 0.36f);   // bolt home
   // The hall. Fed 560 ms of direct sound, which deliberately INCLUDES the wall
   // returns and the bolt cycle: a real room is re-excited by its own echoes and
   // by everything else that happens in it, and that late re-excitement is what
@@ -3611,9 +5242,10 @@ static void sfx_build_all(void) {
   // untouched) and by the wall taps above, not by size_s. It also buys the
   // sniper's kill confirmation 2 dB of clear air at its own 130 ms offset,
   // which had been landing squarely on this rebound.
-  sfx_verb(SFX_FIRE_SR, (int)(0.62f * SFX_HZ), 0.014f, 0.055f, 1.95f, 2000.0f,
+  sfx_verb(fid, (int)(0.62f * SFX_HZ), 0.014f, 0.055f, 1.95f, 2000.0f,
            0.33f);
-  sfx_finish(SFX_FIRE_SR, 0.99f, 0.2680f, 0.30f);
+  sfx_finish(fid, 0.99f, 0.2680f, 0.30f);
+  }
 
   // ---- The same two shots heard from across the arena --------------------
   // Distance is not a volume knob. Air eats the high end, the direct crack
@@ -3896,6 +5528,151 @@ static void sfx_build_all(void) {
   sfx_lay(SFX_DRY, n, 1, 0.0f, 1);
   sfx_finish(SFX_DRY, 0.62f, 0.0374f, 0.30f);
 
+  // THE PISTOL: a short bright crack with far less low end than the rifles and
+  // a slide clack right behind it, so it reads as smaller at any range.
+  // A short barrel dumps its gas at pressure: a much shorter shock than a rifle's,
+  // a hard flat bark and no boom, because the round is barely at the speed of sound.
+  // The slide is the character: back, stop, forward, each one a real strike.
+  static const int PT_TAKE[4] = {SFX_FIRE_PT, SFX_FIRE_PT2, SFX_FIRE_PT3, SFX_FIRE_PT4};
+  for (int fv = 0; fv < 4; fv++) {
+    int fid = PT_TAKE[fv];
+    sfx_alloc(fid, 0.72f);
+    float vj = rng_rangef(&g_rng_sfx, 0.94f, 1.06f);
+    sfx_report(fid, 0.00082f, 2.1f, 0.0f, 1.45f, 0.0075f);
+    n = sfx_click(0.012f, 0.0016f, 2400.0f, 0.7f);
+    sfx_lay(fid, n, 0, 0.0f, 0);
+    n = sfx_burst(0.09f, 2900.0f * vj, 1.3f, 0.00003f, 0.012f, 1.5f, 0.95f);
+    sfx_lay(fid, n, 0, 0.0f, 0);                       // the crack
+    n = sfx_burst(0.16f, 1250.0f / vj, 0.9f, 0.00010f, 0.030f, 1.3f, 0.95f);
+    sfx_lay(fid, n, 2, -0.04f, 1);
+    n = sfx_burst(0.20f, 300.0f, 0.8f, 0.00020f, 0.028f, 1.2f, 0.42f);
+    sfx_lay(fid, n, 4, 0.04f, 2);
+    n = sfx_sweep(0.12f, 210.0f, 90.0f, 0.018f, 0.024f, 1.0f, 0.22f);
+    sfx_lay(fid, n, (int)(0.003f * SFX_HZ), 0.0f, 0);  // the wrist takes it
+    n = sfx_gas(0.08f, 2100.0f * vj, 0.8f, 0.014f, 1100.0f, 0.70f);
+    sfx_lay(fid, n, 1, 0.0f, 2);
+    sfx_strike(fid, 0.016f * vj, 2500.0f, 0.0045f, 0.14f, 0.05f);   // slide back
+    sfx_strike(fid, 0.030f / vj, 1450.0f, 0.0065f, 0.15f, 0.05f);   // on the frame
+    sfx_strike(fid, 0.062f * vj, 3100.0f, 0.0045f, 0.15f, 0.05f);   // back in battery
+    if (fv != 2) sfx_brass(fid, 0.24f + 0.03f * (float)fv, 0.06f);
+    sfx_drive(fid, (int)(0.09f * SFX_HZ), 2.4f);
+    {  // the same arena every other gun is fired in
+      static const float D[3] = {0.012f, 0.023f, 0.037f};
+      static const float G[3] = {0.28f, 0.19f, 0.12f};
+      sfx_reflect(fid, (int)(0.08f * SFX_HZ), D, G, 3, 3000.0f);
+    }
+    sfx_verb(fid, (int)(0.16f * SFX_HZ), 0.008f, 0.024f, 0.40f, 2800.0f, 0.26f);
+    sfx_finish(fid, 0.90f, 0.128f, 0.20f);
+  }
+
+  // Its own distant report, not the rifle's played fast: shorter, higher, no weight.
+  sfx_alloc(SFX_FAR_PT, 0.70f);
+  n = sfx_burst(0.07f, 1500.0f, 1.0f, 0.00008f, 0.011f, 1.3f, 0.55f);
+  sfx_lay(SFX_FAR_PT, n, 0, 0.0f, 0);
+  n = sfx_burst(0.16f, 380.0f, 0.9f, 0.0004f, 0.036f, 1.0f, 0.42f);
+  sfx_lay(SFX_FAR_PT, n, 2, 0.0f, 2);
+  {
+    static const float D[4] = {0.024f, 0.043f, 0.068f, 0.099f};
+    static const float G[4] = {0.38f, 0.29f, 0.21f, 0.14f};
+    sfx_reflect(SFX_FAR_PT, (int)(0.10f * SFX_HZ), D, G, 4, 1600.0f);
+  }
+  sfx_tail(SFX_FAR_PT, (int)(0.018f * SFX_HZ), 0.60f, 520.0f, 0.7f, 0.024f, 0.130f, 0.55f);
+  sfx_tail(SFX_FAR_PT, (int)(0.026f * SFX_HZ), 0.45f, 1400.0f, 0.8f, 0.030f, 0.080f, 0.50f);
+  sfx_finish(SFX_FAR_PT, 0.90f, 0.0700f, 0.0f);
+
+  // What a wall throws back: no top, no bottom, and short. A hard surface returns
+  // the middle of a shot, and the air on the way eats the rest.
+  sfx_alloc(SFX_SLAP, 0.26f);
+  n = sfx_burst(0.09f, 1500.0f, 0.8f, 0.0004f, 0.016f, 1.2f, 0.80f);
+  sfx_lay(SFX_SLAP, n, 0, 0.0f, 2);
+  n = sfx_burst(0.16f, 480.0f, 0.8f, 0.0008f, 0.036f, 1.1f, 0.65f);
+  sfx_lay(SFX_SLAP, n, 2, 0.0f, 4);
+  sfx_tail(SFX_SLAP, (int)(0.008f * SFX_HZ), 0.22f, 900.0f, 0.7f, 0.010f, 0.055f, 0.30f);
+  sfx_finish(SFX_SLAP, 0.86f, 0.090f, 0.0f);
+
+  // Reload, timed from reload_ticks like every other: drop, seat, slide.
+  {
+    float t_pt = (float)WPN_DEF[WPN_PT].reload_ticks / (float)TICK_HZ;
+    sfx_alloc(SFX_RELOAD_PT, t_pt + 0.20f);
+    sfx_clack(SFX_RELOAD_PT, (int)(0.12f * t_pt * SFX_HZ), 1500.0f, 0.42f);
+    sfx_clack(SFX_RELOAD_PT, (int)(RELOAD_BEAT[WPN_PT][0] * t_pt * SFX_HZ), 900.0f, 0.70f);
+    sfx_clack(SFX_RELOAD_PT, (int)(RELOAD_BEAT[WPN_PT][1] * t_pt * SFX_HZ), 2200.0f, 0.82f);
+    sfx_finish(SFX_RELOAD_PT, 0.62f, 0.040f, 0.30f);
+  }
+
+  // THE KNIFE. A swing is air: filtered noise whose band rises and falls with
+  // the blade speed. A wall is a dull chip, a block is two pieces of steel.
+  sfx_alloc(SFX_KNIFE_SWING, 0.30f);
+  n = sfx_burst(0.26f, 1500.0f, 1.2f, 0.060f, 0.070f, 1.4f, 0.75f);
+  sfx_lay(SFX_KNIFE_SWING, n, 0, 0.0f, 2);
+  n = sfx_burst(0.20f, 3600.0f, 1.8f, 0.050f, 0.050f, 1.4f, 0.40f);
+  sfx_lay(SFX_KNIFE_SWING, n, (int)(0.02f * SFX_HZ), 0.0f, 2);
+  sfx_finish(SFX_KNIFE_SWING, 0.50f, 0.045f, 0.20f);
+
+  sfx_alloc(SFX_KNIFE_WALL, 0.22f);
+  sfx_clack(SFX_KNIFE_WALL, 0, 1800.0f, 0.70f);
+  n = sfx_burst(0.09f, 620.0f, 1.0f, 0.00015f, 0.022f, 1.2f, 0.70f);
+  sfx_lay(SFX_KNIFE_WALL, n, 1, 0.0f, 1);
+  sfx_finish(SFX_KNIFE_WALL, 0.56f, 0.050f, 0.12f);
+
+  sfx_alloc(SFX_KNIFE_BLOCK, 0.60f);
+  n = sfx_ring(0.55f, 2350.0f, 3720.0f, 0.120f, 0.75f);
+  sfx_lay(SFX_KNIFE_BLOCK, n, 0, 0.0f, 1);
+  n = sfx_click(0.010f, 0.0014f, 3000.0f, 0.95f);
+  sfx_lay(SFX_KNIFE_BLOCK, n, 0, 0.0f, 0);
+  sfx_finish(SFX_KNIFE_BLOCK, 0.68f, 0.060f, 0.14f);
+
+  // THE GRENADE. Pin: a small metal scrape and tick. Bounce: a short dull clank.
+  sfx_alloc(SFX_NADE_PIN, 0.22f);
+  sfx_clack(SFX_NADE_PIN, 0, 3400.0f, 0.42f);
+  n = sfx_burst(0.07f, 5200.0f, 2.2f, 0.004f, 0.018f, 1.3f, 0.34f);
+  sfx_lay(SFX_NADE_PIN, n, (int)(0.012f * SFX_HZ), 0.0f, 0);
+  sfx_finish(SFX_NADE_PIN, 0.46f, 0.030f, 0.12f);
+
+  sfx_alloc(SFX_NADE_BOUNCE, 0.20f);
+  sfx_clack(SFX_NADE_BOUNCE, 0, 1250.0f, 0.60f);
+  n = sfx_ring(0.14f, 1700.0f, 2750.0f, 0.030f, 0.42f);
+  sfx_lay(SFX_NADE_BOUNCE, n, 1, 0.0f, 0);
+  sfx_finish(SFX_NADE_BOUNCE, 0.52f, 0.040f, 0.10f);
+
+  // The spoon leaving: one bright sprung-steel ping. Equip: leather taking a load.
+  sfx_alloc(SFX_NADE_SPOON, 0.34f);
+  n = sfx_ring(0.30f, 4150.0f, 6300.0f, 0.070f, 0.70f);
+  sfx_lay(SFX_NADE_SPOON, n, 0, 0.0f, 1);
+  sfx_clack(SFX_NADE_SPOON, 0, 3800.0f, 0.34f);
+  sfx_finish(SFX_NADE_SPOON, 0.50f, 0.034f, 0.12f);
+
+  sfx_alloc(SFX_NADE_EQUIP, 0.24f);
+  n = sfx_burst(0.20f, 900.0f, 0.8f, 0.018f, 0.050f, 1.3f, 0.60f);
+  sfx_lay(SFX_NADE_EQUIP, n, 0, 0.0f, 2);
+  n = sfx_burst(0.12f, 2600.0f, 1.2f, 0.010f, 0.030f, 1.3f, 0.26f);
+  sfx_lay(SFX_NADE_EQUIP, n, (int)(0.03f * SFX_HZ), 0.0f, 2);
+  sfx_finish(SFX_NADE_EQUIP, 0.40f, 0.030f, 0.12f);
+
+  // A DETONATION IS THE LOW END. A hard broadband crack for the shock front, a
+  // long sub-heavy thump under it, and the arena answering. Peak-limited here
+  // and placed by distance at the router, like a gunshot.
+  sfx_alloc(SFX_BLAST, 2.40f);
+  n = sfx_click(0.016f, 0.0030f, 1200.0f, 1.0f);
+  sfx_lay(SFX_BLAST, n, 0, 0.0f, 0);
+  n = sfx_burst(0.70f, 62.0f, 0.7f, 0.0006f, 0.190f, 1.1f, 1.00f);
+  sfx_lay(SFX_BLAST, n, 0, 0.0f, 1);
+  n = sfx_burst(0.45f, 240.0f, 0.8f, 0.0003f, 0.095f, 1.2f, 0.90f);
+  sfx_lay(SFX_BLAST, n, 1, 0.0f, 2);
+  n = sfx_burst(0.30f, 1900.0f, 0.8f, 0.0002f, 0.050f, 1.3f, 0.62f);
+  sfx_lay(SFX_BLAST, n, 2, 0.0f, 2);
+  sfx_tail(SFX_BLAST, (int)(0.05f * SFX_HZ), 1.9f, 180.0f, 0.7f, 0.020f, 0.42f, 0.34f);
+  sfx_finish(SFX_BLAST, 0.92f, 0.120f, 0.30f);
+
+  // Far away the crack is gone and what arrives is the rumble.
+  sfx_alloc(SFX_BLAST_FAR, 2.60f);
+  n = sfx_burst(0.80f, 72.0f, 0.7f, 0.006f, 0.26f, 1.1f, 1.00f);
+  sfx_lay(SFX_BLAST_FAR, n, 0, 0.0f, 1);
+  n = sfx_burst(0.50f, 320.0f, 0.8f, 0.004f, 0.11f, 1.2f, 0.34f);
+  sfx_lay(SFX_BLAST_FAR, n, 1, 0.0f, 2);
+  sfx_tail(SFX_BLAST_FAR, (int)(0.08f * SFX_HZ), 2.1f, 150.0f, 0.7f, 0.040f, 0.45f, 0.34f);
+  sfx_finish(SFX_BLAST_FAR, 0.80f, 0.100f, 0.30f);
+
   // RELOADS ARE PER WEAPON AND TIMED FROM reload_ticks. The single shared
   // buffer was 1.30 s long with its last clack at 1.12 s, against reloads of
   // 1.80 s (AR) and 2.50 s (sniper): the audio announced a live weapon 680 ms
@@ -4132,7 +5909,8 @@ static int sfx_class_cap(int id) {
   // and 8 steps, so a cap has to sit ABOVE the real demand to be a backstop
   // rather than a throttle — its job is that no ONE class can own the pool, not
   // that the pool fits.
-  if (id == SFX_FAR_AR || id == SFX_FAR_SR) return 52;
+  if (id == SFX_FAR_AR || id == SFX_FAR_SR || id == SFX_FAR_PT) return 52;
+  if (id == SFX_SLAP) return 8;
   if (id == SFX_STEP) return 12;
   return 0;
 }
@@ -4285,10 +6063,75 @@ static float audio_place(v3 at, float *dist) {
   return f_clamp(v3_dot(d, g_listen_r) / len, -1.0f, 1.0f) * 0.85f;
 }
 
+// A take of this gun's report, never the one just played: two the same back to back
+// is what makes a burst sound like a loop.
+static int sfx_shot_id(int wpn) {
+  static const int T[3][5] = {
+    [WPN_AR] = {SFX_FIRE_AR, SFX_FIRE_AR2, SFX_FIRE_AR3, SFX_FIRE_AR4, SFX_FIRE_AR5},
+    [WPN_SR] = {SFX_FIRE_SR, SFX_FIRE_SR2, SFX_FIRE_SR3},
+    [WPN_PT] = {SFX_FIRE_PT, SFX_FIRE_PT2, SFX_FIRE_PT3, SFX_FIRE_PT4},
+  };
+  static const int N[3] = {[WPN_AR] = 5, [WPN_SR] = 3, [WPN_PT] = 4};
+  static int last[3];
+  if (wpn < 0 || wpn >= 3) return WPN_DEF[wpn].sfx_fire;
+  int k = (last[wpn] + 1 + (int)rng_rangef(&g_rng_audio, 0.0f, (float)N[wpn] - 1.0f)) % N[wpn];
+  last[wpn] = k;
+  return T[wpn][k];
+}
+
+// How far a wall is in one direction: the arena's edge unless something is nearer.
+static float audio_wall_dist(v3 o, v3 d) {
+  float best = 1e9f;
+  if (d.x > 0.01f) best = fminf(best, (ARENA_HALF - o.x) / d.x);
+  if (d.x < -0.01f) best = fminf(best, (-ARENA_HALF - o.x) / d.x);
+  if (d.z > 0.01f) best = fminf(best, (ARENA_HALF - o.z) / d.z);
+  if (d.z < -0.01f) best = fminf(best, (-ARENA_HALF - o.z) / d.z);
+  BP_RAY(i, o, d, best) {
+    v3 nrm;
+    float t = ray_aabb(o, d, g_solids[i].min, g_solids[i].max, &nrm);
+    if (t >= 0.0f && t < best) best = t;
+  }
+  return best;
+}
+
+// THE PLACE YOU ARE STANDING. The rooms baked into the reports are the arena in
+// general, and they sound the same in the open and with your back to a crate. So
+// each of your own shots asks the real geometry how far off the world is on four
+// sides and hears the nearest come back, on that side, after the time sound takes to get
+// there and back. A wall at your shoulder is the difference you can hear with your
+// eyes shut.
+static void audio_slap(int wpn) {
+  static const float LVL[3] = {[WPN_AR] = 0.46f, [WPN_SR] = 0.62f, [WPN_PT] = 0.42f};
+  static const float RATE[3] = {[WPN_AR] = 1.0f, [WPN_SR] = 0.80f, [WPN_PT] = 1.16f};
+  if (wpn < 0 || wpn >= 3) return;
+  v3 o = v3_add(g_listen, (v3){{0, -0.15f, 0}});
+  v3 rt = g_listen_r, fw = {{-rt.z, 0, rt.x}};
+  v3 dirs[4] = {rt, v3_scale(rt, -1.0f), fw, v3_scale(fw, -1.0f)};
+  static const float PAN[4] = {0.72f, -0.72f, 0.0f, 0.0f};
+  // The two nearest only: they are the ones the ear places, and four on every round
+  // of a held trigger cost a 20-bot fight five times the dropped sounds.
+  float ds[4];
+  int near0 = 0, near1 = -1;
+  for (int i = 0; i < 4; i++) {
+    ds[i] = audio_wall_dist(o, dirs[i]);
+    if (ds[i] < ds[near0]) near0 = i;
+  }
+  for (int i = 0; i < 4; i++)
+    if (i != near0 && (near1 < 0 || ds[i] < ds[near1])) near1 = i;
+  for (int k = 0; k < 2; k++) {
+    int i = k ? near1 : near0;
+    float d = ds[i];
+    if (d > 30.0f) continue;
+    float g = LVL[wpn] / (1.0f + d * 0.17f);
+    audio_play(SFX_SLAP, g * rng_rangef(&g_rng_audio, 0.9f, 1.0f),
+               RATE[wpn] * rng_rangef(&g_rng_audio, 0.95f, 1.05f), PAN[i], 2.0f * d / 343.0f);
+  }
+}
+
 static void audio_on_event(const event_t *e) {
   switch (e->type) {
   case EV_FIRE: {
-    float rate = rng_rangef(&g_rng_audio, 0.97f, 1.03f);
+    float rate = rng_rangef(&g_rng_audio, 0.985f, 1.015f);
     if (e->src == g_local_ent) {  // your own weapon: dead centre, full level
       g_last_wpn = e->wpn;
       // PER WEAPON, because both buffers are PEAK-normalised and both were
@@ -4300,8 +6143,9 @@ static void audio_on_event(const event_t *e) {
       // that headroom is free. Verify with `mixdown` that the limiter stays at
       // 1.00 and `clipped` at 0, including in a 12-bot firefight.
       float lvl = e->wpn == WPN_SR ? 1.12f : 1.0f;
-      audio_play(WPN_DEF[e->wpn].sfx_fire,
+      audio_play(sfx_shot_id(e->wpn),
                  lvl * rng_rangef(&g_rng_audio, 0.92f, 1.0f), rate, 0.0f, 0.0f);
+      audio_slap(e->wpn);
       break;
     }
     // Someone else's. Distance is not a volume knob: past ~18 m what reaches
@@ -4316,8 +6160,8 @@ static void audio_on_event(const event_t *e) {
     // is 140 ms — long enough to hear, and it is most of why a distant shot
     // reads as distant rather than as quiet.
     float t = dist / 343.0f;
-    int id_near = WPN_DEF[e->wpn].sfx_fire;
-    int id_far  = e->wpn == WPN_SR ? SFX_FAR_SR : SFX_FAR_AR;
+    int id_near = sfx_shot_id(e->wpn);
+    int id_far  = e->wpn == WPN_SR ? SFX_FAR_SR : e->wpn == WPN_PT ? SFX_FAR_PT : SFX_FAR_AR;
     // Equal power, not linear. The two bakes are uncorrelated, so their POWERS
     // add rather than their amplitudes, and a linear crossfade between them
     // drops ~3 dB at the midpoint — an audible hole at about 19 m, which is
@@ -4443,6 +6287,38 @@ static void audio_on_event(const event_t *e) {
     if (e->src != g_local_ent && g < 0.10f) break;
     audio_play(SFX_STEP, g, rng_rangef(&g_rng_audio, 0.86f, 1.16f),
                e->src == g_local_ent ? 0.0f : pan, dist / 343.0f);
+    break;
+  }
+  case EV_NADE: {
+    float dist, pan = audio_place(e->a, &dist);
+    float near = f_clamp(1.0f / (1.0f + dist * dist * 0.02f), 0.03f, 0.9f);
+    if (e->k == 1) audio_play(SFX_NADE_BOUNCE, near * f_clamp(e->f / 7.0f, 0.15f, 1.0f),
+                              rng_rangef(&g_rng_audio, 0.92f, 1.10f), pan, 0.0f);
+    if (e->k == 2) audio_play(SFX_NADE_SPOON, near, rng_rangef(&g_rng_audio, 0.96f, 1.05f), pan, 0.0f);
+    if (e->k == 3) audio_play(SFX_NADE_EQUIP, near, 1.0f, pan, 0.0f);
+    break;
+  }
+  case EV_BLAST: {
+    float dist, pan = audio_place(e->a, &dist);
+    float fmix = f_clamp((dist - 8.0f) / 16.0f, 0.0f, 1.0f);
+    float att = f_clamp(1.0f / (1.0f + dist * dist * 0.0022f), 0.14f, 1.0f);
+    float t = dist / 343.0f;
+    if (fmix < 0.98f) audio_play(SFX_BLAST, att * sqrtf(1.0f - fmix), 1.0f, pan, t);
+    if (fmix > 0.02f) audio_play(SFX_BLAST_FAR, att * sqrtf(fmix) * 1.2f, 1.0f, pan * 0.7f, t);
+    break;
+  }
+  case EV_MELEE: {
+    float dist, pan = e->src == g_local_ent ? 0.0f : audio_place(e->a, &dist);
+    float att = e->src == g_local_ent ? 0.8f
+              : f_clamp(1.0f / (1.0f + dist * dist * 0.03f), 0.04f, 0.8f);
+    audio_play(e->k ? SFX_KNIFE_WALL : SFX_KNIFE_SWING, att,
+               rng_rangef(&g_rng_audio, 0.94f, 1.06f), pan, 0.0f);
+    break;
+  }
+  case EV_BLOCK: {
+    float dist, pan = audio_place(e->a, &dist);
+    audio_play(SFX_KNIFE_BLOCK, f_clamp(1.0f / (1.0f + dist * dist * 0.02f), 0.05f, 1.0f),
+               e->k ? 1.12f : 0.94f, pan, 0.0f);
     break;
   }
   case EV_LAND: {
@@ -4836,11 +6712,17 @@ static void audio_mix(float *out, uint32_t frames, int channels) {
         if (v->gl + v->gr < 1e-4f) { v->active = 0; continue; }
       }
       int ip = (int)v->pos;
-      if (ip + 1 >= v->len) { v->active = 0; continue; }
+      if (ip + 2 >= v->len) { v->active = 0; continue; }
       float fr = v->pos - (float)ip;
       const float *b = v->buf + ip * SFX_CH;
-      float xl = (b[0] * (1.0f - fr) + b[SFX_CH] * fr) * v->gl;
-      float xr = (b[1] * (1.0f - fr) + b[SFX_CH + 1] * fr) * v->gr;
+      // Four points, not two. A straight line between samples is a low-pass: 2 dB
+      // down at 10 kHz halfway between them, on every shot pitched off exactly 1.0.
+      const float *pb = ip > 0 ? b - SFX_CH : b;
+      float f2 = fr * fr, f3 = f2 * fr;
+      float w0 = 0.5f * (-f3 + 2.0f * f2 - fr), w1 = 0.5f * (3.0f * f3 - 5.0f * f2 + 2.0f);
+      float w2 = 0.5f * (-3.0f * f3 + 4.0f * f2 + fr), w3 = 0.5f * (f3 - f2);
+      float xl = (pb[0] * w0 + b[0] * w1 + b[SFX_CH] * w2 + b[2 * SFX_CH] * w3) * v->gl;
+      float xr = (pb[1] * w0 + b[1] * w1 + b[SFX_CH + 1] * w2 + b[2 * SFX_CH + 1] * w3) * v->gr;
       // KEEP voices bypass the duck by riding the lead bus WITHOUT feeding the
       // sidechain: they are neither attenuated nor allowed to attenuate.
       if (v->prio == SFX_P_LEAD)      { ll += xl; lr += xr; }
@@ -5100,6 +6982,18 @@ typedef struct {
   int   idx;             // spray pattern index, resets once recoil recovered
   int   reload_t;        // ticks of reload remaining, 0 = not reloading
   int   reload_tac;      // ...and whether it started with a round still up
+  // The knife. melee_t counts UP through a swing of MELEE[melee_v] (0 = idle);
+  // melee_n is the place in the chain and melee_gap the pause that resets it.
+  // guard_t counts how long the guard has been up, which is what decides a
+  // parry. stagger_t is the lockout after being parried, block_k the jolt a
+  // blocked hit puts through the guard, decaying.
+  int   melee_t, melee_v, melee_n, melee_gap, melee_done, guard_t, stagger_t;
+  // The grenade: gr_cook counts up from the press (0 = pin in), gr_t counts up
+  // through the throw, gr_fuse is what the throw leaves on the clock, gr_lob the
+  // throw being underhand, and gr_prev the weapon to go back to when none remain.
+  int   gr_cook, gr_t, gr_fuse, gr_lob, gr_prev;
+  int   gr_regen;        // ticks toward the next grenade (mode_nade_refill)
+  float block_k, prev_block_k;
   int   switch_t;        // ticks of weapon raise remaining after a swap
   float prev_switch;     // last tick's raise fraction, for interpolation
   float rec_p, rec_y, prev_rec_p, prev_rec_y;  // deg, applied to view AND aim
@@ -5228,7 +7122,7 @@ typedef struct {
 // fail the world hash on the first snapshot instead — a clean refusal, but at
 // the wrong boundary and with the wrong message. The version is what the
 // handshake is for.
-#define NET_PROTO 8
+#define NET_PROTO 11   // 11: game modes (NP_SCORES mode block + mscore column)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -5285,7 +7179,7 @@ typedef struct {
                          // the world the shooter actually saw, and
                          // g_tick - view at consume time IS the round trip —
                          // the ping the scoreboard shows. 0 = not synced yet.
-  uint16_t buttons;      // IN_COUNT fits in 16 bits
+  uint32_t buttons;      // IN_COUNT outgrew 16 bits with the weapon slots
   int16_t  yaw, pitch;   // yaw: full circle -> i16; pitch: +/-PITCH_MAX -> i16
   int16_t  wish_x, wish_y;
 } net_input_t;
@@ -5339,7 +7233,7 @@ static float   net_dq_wish(int16_t q){ return f_clamp((float)q * (1.0f / 32767.0
 static void net_input_encode(np_wr *w, const net_input_t *in) {
   np_w32(w, in->tick);
   np_w32(w, in->view);
-  np_w16(w, in->buttons);
+  np_w32(w, in->buttons);
   np_w16(w, (uint16_t)in->yaw);
   np_w16(w, (uint16_t)in->pitch);
   np_w16(w, (uint16_t)in->wish_x);
@@ -5351,7 +7245,7 @@ static void net_input_encode(np_wr *w, const net_input_t *in) {
 static int net_input_decode(np_rd *r, net_input_t *in) {
   in->tick   = np_r32(r);
   in->view   = np_r32(r);
-  in->buttons = np_r16(r) & ((1u << IN_COUNT) - 1u);
+  in->buttons = np_r32(r) & ((1u << IN_COUNT) - 1u);
   in->yaw    = (int16_t)np_r16(r);
   in->pitch  = (int16_t)np_r16(r);
   in->wish_x = (int16_t)np_r16(r);
@@ -5365,9 +7259,11 @@ static int net_input_decode(np_rd *r, net_input_t *in) {
 // tells the client to anim_reset instead of interpolating across a respawn
 // teleport.
 typedef struct {
-  uint8_t  id, flags;      // flags bit0 alive, bit1 grounded, bit2 crouched, bit3 sliding
-  uint8_t  hp, weapon;     // weapon: 2 bits used
+  uint8_t  id, flags;      // flags bit0 alive, bit1 grounded, bit2 crouched,
+                           // bit3 sliding, bit4 knife guard up
+  uint8_t  hp, weapon;     // weapon: 3 bits used
   uint8_t  spawn_seq;
+  uint8_t  melee;          // swing for remote figures: variant << 6 | ticks / 2
   uint8_t  mag;            // rounds in the CURRENT weapon's magazine. Without
                            // it a lost reload press was invisible forever: the
                            // predicted HUD showed a full mag while the server
@@ -5378,6 +7274,20 @@ typedef struct {
   int16_t  yaw, pitch;
   int16_t  lean;           // -1..1
 } net_ent_t;
+
+// The swing and guard a remote figure plays. Reconstructed, not simulated: only
+// the presentation reads these on a client's copy of someone else.
+#define net_melee_apply(wp, e) do {                                            \
+    (wp)->melee_v = (e)->melee >> 6 > 2 ? 2 : (e)->melee >> 6;                 \
+    (wp)->melee_t = ((e)->melee & 63) * 2;                                     \
+    float ga_ = (e)->flags & 16 ? 1.0f : 0.0f;                                 \
+    (wp)->ads_lin = (e)->weapon == WPN_KN ? ga_ : (wp)->ads_lin;               \
+    if ((e)->weapon == WPN_KN) (wp)->ads_s = (wp)->prev_ads_s = ga_;           \
+    if ((e)->weapon == WPN_GR) {                                               \
+      (wp)->gr_t = (e)->melee >> 6 == 1 ? ((e)->melee & 63) * 2 : 0;           \
+      (wp)->gr_cook = (e)->melee >> 6 == 2 ? NADE_PIN_T : 0;                   \
+    }                                                                          \
+  } while (0)
 
 // --- The event channel ---------------------------------------------
 // Every event carries its sim tick and a monotone id; the client acks the
@@ -5420,6 +7330,7 @@ static void net_ent_encode(np_wr *w, const net_ent_t *e) {
   np_w8(w, e->id); np_w8(w, e->flags);
   np_w8(w, e->hp); np_w8(w, e->weapon);
   np_w8(w, e->spawn_seq);
+  np_w8(w, e->melee);
   np_w8(w, e->mag);
   np_w16(w, (uint16_t)e->x); np_w16(w, (uint16_t)e->y); np_w16(w, (uint16_t)e->z);
   np_w16(w, (uint16_t)e->vx); np_w16(w, (uint16_t)e->vy); np_w16(w, (uint16_t)e->vz);
@@ -5461,7 +7372,7 @@ static void net_ev_from_live(net_ev_t *n, const event_t *e, uint32_t id) {
 }
 static void net_ev_to_live(event_t *e, const net_ev_t *n) {
   *e = (event_t){0};
-  e->type = (ev_type_t)(n->type > EV_LAND ? EV_IMPACT : n->type);
+  e->type = (ev_type_t)(n->type > EV_BLAST ? EV_IMPACT : n->type);
   // src/dst/wpn are ARRAY INDICES in every consumer (g_player_anim via
   // human_of_ent, WPN_DEF, g_bots) — a hostile server's 254 walked straight
   // into g_player_anim[234]. Out-of-range ids neutralize to -1 (no owner),
@@ -5479,6 +7390,7 @@ static int net_ent_decode(np_rd *r, net_ent_t *e) {
   e->hp = np_r8(r);
   e->weapon = np_r8(r);
   e->spawn_seq = np_r8(r);
+  e->melee = np_r8(r);
   e->mag = np_r8(r);
   e->x = (int16_t)np_r16(r); e->y = (int16_t)np_r16(r); e->z = (int16_t)np_r16(r);
   e->vx = (int16_t)np_r16(r); e->vy = (int16_t)np_r16(r); e->vz = (int16_t)np_r16(r);
@@ -5500,14 +7412,15 @@ static uint32_t net_world_hash(void) {
   // Cached per arena: the solids only change on map_generate (seed change),
   // but this used to rescan ~solids x 32 B per CLIENT per 60 Hz snapshot.
   static uint32_t cache, cache_seed = 0xffffffffu;
-  static int cache_n = -1;
-  if (cache_seed == g_map_seed && cache_n == g_num_solids) return cache;
+  static int cache_n = -1, cache_map = -1;
+  if (cache_seed == g_map_seed && cache_n == g_num_solids && cache_map == g_map_id)
+    return cache;
   uint32_t h = 2166136261u;
   const unsigned char *p = (const unsigned char *)g_solids;
   size_t n = (size_t)g_num_solids * sizeof g_solids[0];
   for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 16777619u;
   h = (h ^ (uint32_t)g_num_solids) * 16777619u;
-  cache = h; cache_seed = g_map_seed; cache_n = g_num_solids;
+  cache = h; cache_seed = g_map_seed; cache_n = g_num_solids; cache_map = g_map_id;
   return h;
 }
 
@@ -5649,7 +7562,7 @@ static void player_look(player_t *p, float dx, float dy, float sense) {
 static int aabb_fits(v3 pos, float radius, float height) {
   v3 mn = {{pos.x - radius, pos.y, pos.z - radius}};
   v3 mx = {{pos.x + radius, pos.y + height, pos.z + radius}};
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_BOX(i, mn.x, mn.z, mx.x, mx.z) {
     const solid_t *s = &g_solids[i];
     if (mx.x > s->min.x && mn.x < s->max.x &&
         mx.y > s->min.y && mn.y < s->max.y &&
@@ -5676,13 +7589,29 @@ static void move_axis(v3 *pos, v3 *vel, int *grounded, int axis,
                       float radius, float height, float dt) {
   pos->e[axis] += vel->e[axis] * dt;
   float ext[3] = {radius, height, radius};
-  for (int i = 0; i < g_num_solids; i++) {
+  // The candidate region has a metre of slack: resolving one solid moves the
+  // body back along this axis, and the ones it is then tested against must
+  // already be in the set.
+  BP_BOX(i, pos->x - radius - 1.0f, pos->z - radius - 1.0f,
+         pos->x + radius + 1.0f, pos->z + radius + 1.0f) {
     const solid_t *s = &g_solids[i];
     v3 mn = {{pos->x - radius, pos->y, pos->z - radius}};
     v3 mx = {{pos->x + radius, pos->y + height, pos->z + radius}};
     if (!(mx.x > s->min.x && mn.x < s->max.x &&
           mx.y > s->min.y && mn.y < s->max.y &&
           mx.z > s->min.z && mn.z < s->max.z)) continue;
+    // Step up a low edge on a horizontal move, if the body fits on top of it.
+    // aabb_fits tests the whole set at the raised position, so a step under a
+    // low ceiling, or into a wall, still blocks. Off (STEP_H 0) on the legacy
+    // maps, so their collision is unchanged to the bit.
+    if (axis != 1 && STEP_H > 0.0f) {
+      float rise = s->max.y - pos->y;
+      if (rise > 0.0f && rise <= STEP_H &&
+          aabb_fits((v3){{pos->x, s->max.y + 0.001f, pos->z}}, radius, height)) {
+        pos->y = s->max.y + 0.001f;
+        continue;
+      }
+    }
     if (vel->e[axis] > 0) {
       // ext[axis] is the height on y: moving up hits a box bottom with the full
       // body height (contrast the +0 on the downward line — the origin is at
@@ -6201,7 +8130,7 @@ static v3 foot_clamp_m(v3 base, v3 tgt, float margin) {
   float bx1 = (d.x > 0 ? o.x + d.x * reach : o.x) + 1e-3f;
   float bz0 = (d.z > 0 ? o.z : o.z + d.z * reach) - 1e-3f;
   float bz1 = (d.z > 0 ? o.z + d.z * reach : o.z) + 1e-3f;
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_BOX(i, bx0, bz0, bx1, bz1) {
     const solid_t *s = &g_solids[i];
     if (o.y < s->min.y - 1e-3f || o.y > s->max.y + 1e-3f) continue;
     if (bx1 < s->min.x || bx0 > s->max.x || bz1 < s->min.z || bz0 > s->max.z)
@@ -6228,7 +8157,7 @@ static v3 foot_clamp_world(v3 base, v3 tgt) { return foot_clamp_m(base, tgt, 0.0
 // test before any arithmetic) and only reached while a figure is airborne.
 static float ground_drop(v3 p, float maxd) {
   float best = p.y >= 0.0f && p.y < maxd ? p.y : maxd;   // the arena floor
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_BOX(i, p.x, p.z, p.x, p.z) {
     const solid_t *s = &g_solids[i];
     if (p.x < s->min.x || p.x > s->max.x || p.z < s->min.z || p.z > s->max.z) continue;
     float d = p.y - s->max.y;
@@ -8449,7 +10378,7 @@ static float rag_flat(float tilt) { return fabsf(sinf(tilt)); }
 // BOX overlap anything".
 static float rag_support_eps(v3 p, float eps) {
   float y = 0.0f;
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_BOX(i, p.x, p.z, p.x, p.z) {
     const solid_t *s = &g_solids[i];
     if (p.x < s->min.x || p.x > s->max.x || p.z < s->min.z || p.z > s->max.z)
       continue;
@@ -8567,7 +10496,8 @@ static void rag_step(rag_t *r, v3 *pos) {
       // still-overlapping box back on the same ledge and the body hovers with
       // the flag flickering. It needs a real push over the lip, so it
       // accelerates along the shortest way OUT of the footprint holding it up.
-      for (int i = 0; i < g_num_solids; i++) {
+      BP_BOX(i, pos->x - PLAYER_RADIUS, pos->z - PLAYER_RADIUS,
+             pos->x + PLAYER_RADIUS, pos->z + PLAYER_RADIUS) {
         const solid_t *sd = &g_solids[i];
         if (fabsf(sd->max.y - pos->y) > 0.05f) continue;
         if (pos->x < sd->min.x - PLAYER_RADIUS || pos->x > sd->max.x + PLAYER_RADIUS ||
@@ -8776,6 +10706,10 @@ struct bot_t {
   float hear_score;
   int   hear_src;                      // WHOSE noise is believed (refresh rule)
   float hear_err_a;                    // which way it mislocates, held per contact
+  // Grid route (bot_route, routed maps only): the destination last planned
+  // for, the waypoint toward it, and ticks until it is re-planned.
+  v3    route_dest, route_wp;
+  int   route_t;
 };
 
 static bot_t g_bots_all[SRV_LOBBIES][MAX_BOTS];
@@ -8803,6 +10737,17 @@ typedef struct {
   int  shots[MAX_ENTS], hits[MAX_ENTS];                  // accuracy source
   bot_noise_t noise[BOT_NOISE_COUNT][MAX_ENTS];          // latest per kind/source
   int  over, winner, last_killer, restart_req;
+  // THE MODE LAYER. `mode` is latched from g_cfg.sp_mode at every (re)start, so
+  // the MATCH tab's cycle never changes the rules of a match already running;
+  // online it is whatever NP_SCORES last said. mscore is the mode's own number
+  // per entity — the GUN GAME rung, or LAST MAN STANDING rounds won — and is a
+  // replicated counter like kills (match_counters_clear owns it too).
+  int  mode;
+  int  mscore[MAX_ENTS];
+  // LAST MAN STANDING between rounds: round_t counts the intermission down
+  // (0 = a round is live), round_win is who took the last one (-1 = nobody).
+  int  round_t, round_win, round_no;
+  int  round_clock;                  // ticks the live round has run (server)
 } match_t;
 
 // How long a NETWORKED match holds the final scoreboard before the arena
@@ -8832,6 +10777,81 @@ static match_t g_match_all[SRV_LOBBIES];
 static int g_over_t_all[SRV_LOBBIES];
 #define g_over_t (g_over_t_all[g_lobby])
 static int g_match_nbots_fwd(void) { return g_match.nbots; }  // for ent_next
+
+// ---------------------------------------------------------------------------
+// GAME MODES — the rules, in one place. Every reader below runs on the server,
+// offline AND in a client's prediction, from the same replicated inputs
+// (g_match.mode and g_match.mscore ride NP_SCORES), so the predicted weapon
+// gate and the server's agree; where they briefly do not (a promotion the 4 Hz
+// packet has not delivered yet), the snapshot's weapon truth wins as it always
+// has.
+// ---------------------------------------------------------------------------
+
+// The boot screen is a deathmatch backdrop whatever the MATCH tab says.
+static int game_mode(void) {
+  if (g_home) return GM_DM;
+  int m = g_match.mode;
+  return m >= 0 && m < GM_COUNT ? m : GM_DM;
+}
+
+// mscore in GUN GAME is POINTS (kills on the ladder); the rung is derived.
+static int gg_level(int ent) {
+  int l = ent >= 0 && ent < MAX_ENTS ? g_match.mscore[ent] / GG_RUNG_KILLS : 0;
+  return l < 0 ? 0 : l >= GG_LEVELS ? GG_LEVELS - 1 : l;
+}
+static int gg_progress(int ent) {   // kills already made on the current rung
+  return gg_level(ent) == GG_LEVELS - 1 ? 0 : g_match.mscore[ent] % GG_RUNG_KILLS;
+}
+
+// May `ent` hold weapon `wpn` in this mode?
+static int mode_allowed(int ent, int wpn) {
+  switch (game_mode()) {
+    case GM_GUN:    return wpn == GG_LADDER[gg_level(ent)];
+    case GM_SNIPER: return wpn == WPN_SR;
+    case GM_BLADES: return wpn == WPN_KN || wpn == WPN_GR;
+    default:        return 1;
+  }
+}
+
+// The weapon a spawn starts on, and what a disallowed weapon is swapped for.
+static int mode_primary(int ent) {
+  switch (game_mode()) {
+    case GM_GUN:    return GG_LADDER[gg_level(ent)];
+    case GM_SNIPER: return WPN_SR;
+    case GM_BLADES: return WPN_KN;
+    default:        return WPN_AR;
+  }
+}
+
+// LAST MAN STANDING's rounds to win: the server's on a client, ours otherwise.
+static int g_net_rounds;
+static int mode_round_goal(void) { return g_online && g_net_rounds ? g_net_rounds : g_cfg.sp_rounds; }
+
+// LAST MAN STANDING: the dead stay down until the round resets everyone.
+static int mode_respawns(void) { return game_mode() != GM_LMS; }
+
+// Grenade stock that is not the spawn's fixed two. The GUN GAME grenade rung is
+// bottomless (one kill to climb, and running dry would strand you on a weapon
+// you may not hold); KNIVES + NADES grows one back every NADE_REGEN_TICKS.
+// Runs in the shared weapon paths, so a client's prediction counts the same.
+#define NADE_REGEN_TICKS (5 * TICK_HZ)
+static void mode_nade_refill(int ent, weapon_t *w) {
+  int m = game_mode();
+  if (m == GM_GUN && GG_LADDER[gg_level(ent)] == WPN_GR) {
+    if (w->ammo[WPN_GR] < 1) w->ammo[WPN_GR] = 1;
+    w->gr_regen = 0;
+  } else if (m == GM_BLADES && w->ammo[WPN_GR] < WPN_DEF[WPN_GR].mag) {
+    if (++w->gr_regen >= NADE_REGEN_TICKS) { w->gr_regen = 0; w->ammo[WPN_GR]++; }
+  } else {
+    w->gr_regen = 0;
+  }
+}
+
+// A fresh life's weapon: the mode's primary, with no raise to wait through.
+static void mode_loadout(int ent, weapon_t *w) {
+  if (!mode_allowed(ent, w->cur)) w->cur = mode_primary(ent);
+  mode_nade_refill(ent, w);
+}
 
 // Bounded, simulation-owned writer. tick==0 remains the empty-store marker.
 static void bot_noise_emit(int src, bot_noise_kind_t kind, v3 pos, float radius) {
@@ -9048,12 +11068,17 @@ static void net_ent_from_live(net_ent_t *e, int ent) {
   e->id = (uint8_t)ent;
   e->flags = (alive ? 1 : 0) | (grounded ? 2 : 0) | (crouch ? 4 : 0) | (slide ? 8 : 0);
   e->hp = (uint8_t)f_clamp((float)hp, 0.0f, 255.0f);
-  e->weapon = (uint8_t)(wpn & 3);
+  e->weapon = (uint8_t)(wpn & 7);
   e->spawn_seq = g_spawn_seq[ent];
   {
     const weapon_t *wp = h >= 0 ? &g_players[h].wp : &g_bots[ent - 1].wp;
     int mag = wp->ammo[wpn >= 0 && wpn < WPN_COUNT ? wpn : 0];
     e->mag = (uint8_t)(mag < 0 ? 0 : mag > 255 ? 255 : mag);
+    e->melee = (uint8_t)(wp->melee_v << 6 | ((wp->melee_t + 1) / 2 & 63));
+    if (wpn == WPN_GR)
+      e->melee = wp->gr_t > 0 ? (uint8_t)(1 << 6 | ((wp->gr_t + 1) / 2 & 63))
+                              : (uint8_t)(wp->gr_cook > 0 ? 2 << 6 : 0);
+    if (wpn == WPN_KN && wp->ads_s > 0.5f) e->flags |= 16;
   }
   e->x = net_q_pos(pos.x); e->y = net_q_pos(pos.y); e->z = net_q_pos(pos.z);
   e->vx = net_q_vel(vel.x); e->vy = net_q_vel(vel.y); e->vz = net_q_vel(vel.z);
@@ -9107,6 +11132,7 @@ static size_t net_snapshot_build(unsigned char *buf, size_t cap, uint32_t last_i
   // version error, it presents as rubber-banding through walls. 4 bytes at
   // 60 Hz is 240 B/s per client; the alternative is a re-handshake.
   np_w32(&w, g_map_seed);
+  np_w8(&w, (uint8_t)g_map_id);    // ...and which map that seed builds
   // This client's input-queue depth at broadcast time: the client's
   // clock nudge holds it at NET_QDEPTH_TARGET instead of letting drift and
   // jitter walk it into the backlog trim (a trim discards moves the client
@@ -9166,16 +11192,19 @@ static size_t net_snapshot_build(unsigned char *buf, size_t cap, uint32_t last_i
 // on a malformed header (wrong proto / type).
 static int net_snapshot_read(const unsigned char *buf, size_t len, uint32_t *server_tick,
                              uint32_t *last_input_tick, uint32_t *world,
-                             uint32_t *seed, uint8_t *qdepth,
+                             uint32_t *seed, uint8_t *mapid, uint8_t *qdepth,
                              net_ent_t *out, int out_cap, int *complete,
                              net_ev_t *evs, int ev_cap, int *ev_cnt) {
   np_rd r = {buf, len, 0, 0};
   if (np_r16(&r) != NET_PROTO) return -1;
   if (np_r8(&r) != NP_SNAPSHOT) return -1;
   uint32_t st = np_r32(&r), li = np_r32(&r), wh = np_r32(&r), sd = np_r32(&r);
+  uint8_t mid = np_r8(&r);
   uint8_t qd = np_r8(&r);
   int cnt = np_r8(&r);
   if (r.bad) return -1;
+  if (mid >= MAP_COUNT) return -1;         // hostile map id: refuse the packet
+  if (mapid) *mapid = mid;
   if (qdepth) *qdepth = qd;
   if (cnt > out_cap) cnt = out_cap;        // never write past the caller array
   int got = 0;
@@ -9220,7 +11249,10 @@ static int net_snapshot_read(const unsigned char *buf, size_t len, uint32_t *ser
 // for every client, so the caller builds it once and sends it per conn.
 // ping is measured per connection (g_tick - input view tick, smoothed) and
 // rides here because it is scoreboard furniture, not hot-path state.
-typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping; } net_score_t;
+typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping, mscore; } net_score_t;
+// The mode block: the rules a client predicts under, and LAST MAN STANDING's
+// between-rounds state for its HUD. round_win 0xFF = nobody.
+typedef struct { uint8_t mode, round_secs, round_win, rounds, round_no; } net_mode_t;
 static size_t net_scores_build(unsigned char *buf, size_t cap,
                                const uint8_t ping[MAX_ENTS]) {
   np_wr w = {buf, cap, 0, 0};
@@ -9229,6 +11261,11 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
   np_w8(&w, (uint8_t)(g_match.over ? 1 : 0));
   np_w8(&w, (uint8_t)(g_match.winner < 0 ? 0xFF : g_match.winner));
   np_w16(&w, (uint16_t)g_cfg.sp_frag);       // "FIRST TO N" is match property
+  np_w8(&w, (uint8_t)game_mode());
+  np_w8(&w, (uint8_t)((g_match.round_t + TICK_HZ - 1) / TICK_HZ));
+  np_w8(&w, (uint8_t)(g_match.round_win < 0 ? 0xFF : g_match.round_win));
+  np_w8(&w, (uint8_t)g_cfg.sp_rounds);
+  np_w8(&w, (uint8_t)(g_match.round_no & 0xFF));
   size_t cnt_at = w.at;
   np_w8(&w, 0);
   int cnt = 0;
@@ -9239,6 +11276,7 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
     np_w16(&w, (uint16_t)g_match.shots[e]);
     np_w16(&w, (uint16_t)g_match.hits[e]);
     np_w8(&w, ping ? ping[e] : 0);
+    np_w8(&w, (uint8_t)g_match.mscore[e]);
     cnt++;
   }
   // Name section: every present HUMAN's display name (bots derive theirs from
@@ -9272,7 +11310,7 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
 typedef struct { uint8_t id; char name[12]; } net_name_t;
 static int net_scores_read(const unsigned char *buf, size_t len,
                            uint8_t *over, uint8_t *winner,
-                           uint16_t *frag,
+                           uint16_t *frag, net_mode_t *mode,
                            net_score_t *out, int out_cap,
                            net_name_t *nout, int nout_cap,
                            int *nout_cnt) {
@@ -9281,6 +11319,11 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   if (np_r8(&r) != NP_SCORES) return -1;
   uint8_t ov = np_r8(&r), wi = np_r8(&r);
   uint16_t fr = np_r16(&r);
+  net_mode_t md;
+  md.mode = np_r8(&r); md.round_secs = np_r8(&r); md.round_win = np_r8(&r);
+  md.rounds = np_r8(&r); md.round_no = np_r8(&r);
+  if (md.mode >= GM_COUNT) return -1;        // hostile mode: refuse the packet
+  if (md.round_win != 0xFF && md.round_win >= MAX_ENTS) return -1;
   int cnt = np_r8(&r);
   if (r.bad) return -1;
   if (cnt > out_cap) cnt = out_cap;
@@ -9291,6 +11334,7 @@ static int net_scores_read(const unsigned char *buf, size_t len,
     s.kills = np_r16(&r); s.deaths = np_r16(&r);
     s.shots = np_r16(&r); s.hits = np_r16(&r);
     s.ping = np_r8(&r);
+    s.mscore = np_r8(&r);
     if (r.bad) break;
     if (s.id >= MAX_ENTS) return -1;         // hostile id: refuse the packet
     out[got++] = s;
@@ -9315,6 +11359,7 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   if (over) *over = ov;
   if (winner) *winner = wi;
   if (frag) *frag = fr;
+  if (mode) *mode = md;
   return got;
 }
 
@@ -9389,6 +11434,7 @@ static void bot_spawn(int bi) {
   b->threat_score = 0;
   b->wp.cur = WPN_AR;
   wpn_fill_mags(&b->wp);
+  mode_loadout(bi + 1, &b->wp);
   b->burst = 3;
   b->strafe_dir = (rng_next(&g_rng_bot) & 1) ? 1 : -1;
   g_spawn_seq[bi + 1]++;       // snapshot readers see a teleport, not motion
@@ -9411,6 +11457,7 @@ static int bot_request_weapon(bot_t *b, int bi, int desired) {
   w->cur = desired;
   w->switch_t = GUN_SWITCH_TICKS;
   w->reload_t = w->reload_tac = 0;
+  w->melee_t = 0;
   w->dry_done = 0;
   w->idx = 0;
   // ammo[] and cool[] remain per weapon: holstering never refills/re-cocks it.
@@ -9419,11 +11466,26 @@ static int bot_request_weapon(bot_t *b, int bi, int desired) {
 
 // The two distance bands deliberately differ: 24 m enters sniper preference,
 // while only sub-16 m combat returns to AR. That gap stops boundary thrashing.
+#define BOT_KNIFE_ENTER_DIST 2.3f
+#define BOT_KNIFE_EXIT_DIST  4.0f
 static int bot_desired_weapon(const bot_t *b, int engaging, float target_dist,
                               float horizontal_speed) {
   int cur = b->wp.cur;
-  int other = (cur + 1) % WPN_COUNT;
+  // Arm's length is knife range. Two bands, so a target on the line does not
+  // flick the blade in and out.
+  if (engaging && target_dist < (cur == WPN_KN ? BOT_KNIFE_EXIT_DIST : BOT_KNIFE_ENTER_DIST))
+    return WPN_KN;
+  // The sidearm and the blade are situational: back to a long gun as soon as
+  // one can fire, and to the AR when nothing is loaded, because a bot reloads
+  // only what it holds.
+  if (cur == WPN_KN || cur == WPN_PT) {
+    if (b->wp.ammo[WPN_AR] > 0) return WPN_AR;
+    if (b->wp.ammo[WPN_SR] > 0) return WPN_SR;
+    return cur == WPN_PT && engaging ? WPN_PT : WPN_AR;
+  }
+  int other = cur == WPN_AR ? WPN_SR : WPN_AR;
   if (engaging && b->wp.ammo[cur] <= 0 && b->wp.ammo[other] > 0) return other;
+  if (engaging && b->wp.ammo[cur] <= 0 && b->wp.ammo[WPN_PT] > 0) return WPN_PT;
   // ...and only when there is nothing to shoot at. bot_investigating() is true
   // whenever a hear memory is live, and a gunshot is audible to 34 m, so in any
   // firefight this test used to run BEFORE the !engaging return and pinned an
@@ -9448,6 +11510,50 @@ static int bot_desired_weapon(const bot_t *b, int engaging, float target_dist,
     return WPN_AR;
   }
   return cur;
+}
+
+// THE MODE OVERRULES THE PREFERENCE. bot_desired_weapon is the deathmatch
+// policy and stays exactly that; a mode that narrows the arsenal re-picks here,
+// from the weapons it allows, with the same distance sense the policy has.
+#define BOT_NADE_MIN 6.0f    // closer than this a throw is a coin toss with
+#define BOT_NADE_MAX 26.0f   // your own blast radius; past this, a guess
+static int mode_bot_weapon(const bot_t *b, int bi, int desired, int engaging,
+                           float tdist) {
+  int ent = bi + 1;
+  if (game_mode() == GM_BLADES) {
+    int nade_ok = b->wp.ammo[WPN_GR] > 0 && b->wp.cool[WPN_GR] == 0;
+    if (engaging && nade_ok && tdist >= BOT_NADE_MIN && tdist <= BOT_NADE_MAX)
+      return WPN_GR;
+    if (b->wp.cur == WPN_GR && (b->wp.gr_t > 0 || b->wp.gr_cook > 0)) return WPN_GR;
+    return WPN_KN;
+  }
+  return mode_allowed(ent, desired) ? desired : mode_primary(ent);
+}
+
+// A BOT'S THROW. No cook and no lob: aim the low arc of a ballistic solution at
+// the target's feet, at the overhand speed the player throws with, and set the
+// fuse to land-plus-a-bounce. The error is the skill's aim error applied to the
+// range, so an EASY bot's grenades land metres off and a HARD one's do not.
+// Returns 1 when the solution exists (the arm has the reach).
+static int bot_nade_solve(const bot_t *b, v3 tgt, float err_deg, v3 *at, v3 *vel,
+                          int *fuse) {
+  v3 o = {{b->pos.x, b->pos.y + bot_eye(b) + 0.10f, b->pos.z}};
+  float dx = tgt.x - o.x, dz = tgt.z - o.z;
+  float dh = sqrtf(dx * dx + dz * dz);
+  if (dh < 0.5f) return 0;
+  float miss = rng_rangef(&g_rng_bot, -1.0f, 1.0f) * err_deg * DEG2RAD;
+  float ya = atan2f(dx, -dz) + miss;
+  dh *= 1.0f + rng_rangef(&g_rng_bot, -1.0f, 1.0f) * err_deg * 0.04f;
+  float dy = tgt.y - o.y, v = NADE_SPEED, g = NADE_GRAVITY;
+  float disc = v * v * v * v - g * (g * dh * dh + 2.0f * dy * v * v);
+  if (disc < 0.0f) return 0;
+  float th = atanf((v * v - sqrtf(disc)) / (g * dh));
+  float hv = v * cosf(th);
+  *at = o;
+  *vel = (v3){{sinf(ya) * hv, v * sinf(th), -cosf(ya) * hv}};
+  int f = (int)((dh / fmaxf(hv, 0.1f) + 0.45f) * (float)TICK_HZ);
+  *fuse = f < NADE_FUSE ? f : NADE_FUSE;
+  return 1;
 }
 
 // ONE hitbox for every entity, keyed on the eye height: head straddling the
@@ -9722,7 +11828,9 @@ static int los_blocked(v3 o, v3 d, float lim) {
   // that six extra compares per solid cost more than the rejects save. If this
   // is ever revisited, the lever is the SOLID COUNT (a grid or a BVH), not the
   // per-solid test — and measure it interleaved, on an idle machine.
-  for (int i = 0; i < g_num_solids; i++) {
+  // (Revisited for the tactical maps' thousands of solids: BP_RAY is that
+  // grid. At the arena's count it is the plain loop.)
+  BP_RAY(i, o, d, lim) {
     v3 n;
     float t = ray_aabb(o, d, g_solids[i].min, g_solids[i].max, &n);
     if (t > 0 && t < lim) return 1;
@@ -9792,6 +11900,7 @@ static void player_respawn(player_t *p, int ent) {
   player_spawn(p);
   p->shots = shots;
   p->wp.cur = cur;
+  mode_loadout(ent, &p->wp);   // a preference the mode forbids is overruled
   memcpy(p->prev_held, ph, sizeof ph);
   v3 s = spawn_spot(ent);
   p->pos = p->prev_pos = s;
@@ -9801,15 +11910,54 @@ static void player_respawn(player_t *p, int ent) {
   ev_push((event_t){.type = EV_RESPAWN, .dst = ent});
 }
 
+// WHAT KILLED THEM. A bullet or a blade is whatever the killer is holding, but a
+// grenade lands after its thrower may have changed weapons — and GUN GAME's
+// rules turn on the difference — so the blast says so itself for the duration of
+// its damage loop. -1 = "read the killer's hands".
+static int g_kill_wpn = -1;
+static weapon_t *ent_weapon(int e);
+
+static void match_end(int winner) {
+  g_match.over = 1;
+  g_match.winner = winner;
+  ev_push((event_t){.type = EV_END, .k = winner});
+}
+
 static void match_on_kill(int src, int dst, int hs) {
-  g_match.kills[src]++;
+  // Blowing yourself up is a death, not a frag.
+  if (src != dst) g_match.kills[src]++;
   g_match.deaths[dst]++;
   if (dst == g_local_ent) g_match.last_killer = src;
   ev_push((event_t){.type = EV_KILL, .src = src, .dst = dst, .k = hs});
-  if (!g_match.over && g_match.kills[src] >= sp_frag_limit()) {
-    g_match.over = 1;
-    g_match.winner = src;
-    ev_push((event_t){.type = EV_END, .k = src});
+  if (g_match.over) return;
+  switch (game_mode()) {
+    case GM_GUN: {
+      int wpn = g_kill_wpn;
+      if (wpn < 0) {
+        const weapon_t *kw = ent_weapon(src);
+        wpn = kw ? kw->cur : -1;
+      }
+      // A knife kill, or your own grenade, costs the victim a rung: back to
+      // the START of the one below (or of the first).
+      if (src == dst || wpn == WPN_KN) {
+        int vl = gg_level(dst);
+        g_match.mscore[dst] = vl > 0 ? (vl - 1) * GG_RUNG_KILLS : 0;
+      }
+      if (src == dst) break;
+      int lvl = gg_level(src);
+      if (wpn != GG_LADDER[lvl]) break;   // a stale grenade from the rung below
+      if (lvl == GG_LEVELS - 1) { match_end(src); break; }
+      g_match.mscore[src]++;
+      // A promotion's weapon arrives loaded; the swap itself is the shared
+      // gate in weapon_tick / bot_tick, so a live grenade finishes its throw.
+      weapon_t *w = ent_weapon(src);
+      if (w && gg_level(src) != lvl) wpn_fill_mags(w);
+      break;
+    }
+    case GM_LMS:
+      break;                              // rounds decide it (lms_tick)
+    default:
+      if (g_match.kills[src] >= sp_frag_limit()) match_end(src);
   }
 }
 
@@ -10152,7 +12300,10 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   if (w->bloom > GUN_BLOOM_CAP) w->bloom = GUN_BLOOM_CAP;
 
   float ya = yaw + w->rec_y * DEG2RAD;
-  float pa = f_clamp(pitch + w->rec_p * DEG2RAD, -PITCH_MAX, PITCH_MAX);
+  // The view punch counts too. The camera is pitched by rec_p + punch, so during
+  // a spray a shot that ignored the punch left 0.1-0.17 deg BELOW the crosshair:
+  // 6 cm at 20 m, every round after the first. This is the crosshair's own line.
+  float pa = f_clamp(pitch + (w->rec_p + w->punch) * DEG2RAD, -PITCH_MAX, PITCH_MAX);
   v3 dir = {{cosf(pa) * sinf(ya), sinf(pa), -cosf(pa) * cosf(ya)}};
   float r = spread * DEG2RAD * sqrtf(rng_rangef(rng, 0.0f, 1.0f));
   float phi = rng_rangef(rng, 0.0f, F_TAU);
@@ -10187,7 +12338,13 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   if (sh >= 0) g_players[sh].shots++;
   if (ent == g_local_ent && sh >= 0)
     g_players[sh].vm.kick_v += 0.8f + 0.5f * wp[WP_PUNCH];  // gun slams back
-  if (anim) anim->fire_k = 1.0f;                  // third-person body: gun kick
+  if (anim) {
+    anim->fire_k = 1.0f;                          // third-person body: gun kick
+    // ...and the weapon is ON the line when the round leaves. A figure caught at
+    // the low ready used to fire from a barrel pointing 34 degrees off the shot,
+    // with the tracer leaving it sideways. The same tick's pose solve sees this.
+    anim->ready_s = 1.0f;
+  }
 
   // THE ROUND'S FLIGHT, one segment per piece of material it crosses. A shot
   // that meets nothing runs this loop exactly once and does exactly what it did
@@ -10274,7 +12431,7 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
       // entry box for the single-box crossing, which is the common case.
       int xs = ws;
       v3 pp = v3_sub(so, v3_scale(dir, PEN_EPS));
-      for (int si = 0; si < g_num_solids; si++) {
+      BP_BOX(si, pp.x, pp.z, pp.x, pp.z) {
         const solid_t *sb = &g_solids[si];
         if (pp.x >= sb->min.x && pp.x <= sb->max.x && pp.y >= sb->min.y &&
             pp.y <= sb->max.y && pp.z >= sb->min.z && pp.z <= sb->max.z) {
@@ -10322,6 +12479,9 @@ static void gun_cool(weapon_t *w) {
   for (int i = 0; i < WPN_COUNT; i++)
     if (w->cool[i] > 0) w->cool[i]--;
   if (w->switch_t > 0) w->switch_t--;
+  if (w->stagger_t > 0) w->stagger_t--;
+  w->prev_block_k = w->block_k;
+  w->block_k *= expf(-11.0f * TICK_DT);
   // THE VIEW PUNCH STEPS HERE, at the top of the tick, for both shooters —
   // gun_cool is the one hook that already runs before gun_shoot in the player
   // path AND in bot_tick. Stepped in gun_recover (after the shot) the impulse
@@ -10400,6 +12560,236 @@ static void gun_recover(weapon_t *w, int trigger_held) {
   // render. Stepping it here decayed it 34% before any frame existed.
 }
 
+// LIVE GRENADES. One array per arena, stepped by the sim. On a client each one is a
+// local copy started by EV_NADE and run on the same physics for the eye; it deals
+// nothing, because EV_BLAST and the damage that follows come from the server.
+#define MAX_NADES 24
+typedef struct { v3 pos, prev_pos, vel, axis; float spin, prev_spin, spin_v; int fuse, src, rest; } nade_t;
+static nade_t g_nades_all[SRV_LOBBIES][MAX_NADES];
+#define g_nades (g_nades_all[g_lobby])
+
+static void nade_add(v3 at, v3 vel, int fuse, int src) {
+  int slot = 0, low = 1 << 30;
+  for (int i = 0; i < MAX_NADES; i++) {
+    if (g_nades[i].fuse <= 0) { slot = i; low = -1; break; }
+    if (g_nades[i].fuse < low) { low = g_nades[i].fuse; slot = i; }
+  }
+  v3 ax = v3_cross(vel, (v3){{0.3f, 1.0f, 0.2f}});
+  float l = v3_len(ax);
+  g_nades[slot] = (nade_t){.pos = at, .prev_pos = at, .vel = vel,
+                           .axis = l > 1e-3f ? v3_scale(ax, 1.0f / l) : (v3){{1, 0, 0}},
+                           .spin_v = 0.32f, .fuse = fuse, .src = src};
+}
+
+// A throw leaving a hand, authoritative: spawned here and announced to clients.
+static void nade_throw(v3 at, v3 vel, int fuse, int src) {
+  if (g_predicting) return;
+  nade_add(at, vel, fuse, src);
+  ev_push((event_t){.type = EV_NADE, .a = at, .b = vel, .i = fuse, .src = src, .dst = -1});
+}
+
+// THE DETONATION: who it reaches, how hard, and which way it throws them.
+static void nade_blast(v3 at, int src) {
+  v3 o = v3_add(at, (v3){{0, 0.12f, 0}});
+  int open = at.y < 1.2f;      // a charge still bouncing is close enough to raise the floor
+  ev_push((event_t){.type = EV_BLAST, .a = at, .g = open ? 1.0f : 0.0f, .src = src, .dst = -1});
+  bot_noise_emit(src, BOT_NOISE_SHOT, at, 46.0f);
+  ENT_FOREACH(e) {
+    if (!ent_alive(e)) continue;
+    v3 base = ent_pos(e);
+    v3 pts[3] = {{{base.x, base.y + 0.30f, base.z}},    // shins
+                 {{base.x, base.y + 1.10f, base.z}},    // chest
+                 {{base.x, base.y + 1.62f, base.z}}};   // head
+    float d = 1e9f;
+    int clear = 0;
+    v3 hit = pts[1];
+    for (int i = 0; i < 3; i++) {
+      float dp = v3_len(v3_sub(pts[i], o));
+      if (dp > BLAST_R || !los_clear(o, pts[i])) continue;
+      clear++;
+      if (dp < d) { d = dp; hit = pts[i]; }
+    }
+    if (!clear) continue;
+    float k = 1.0f - f_clamp((d - BLAST_CORE) / (BLAST_R - BLAST_CORE), 0.0f, 1.0f);
+    int dmg = (int)(BLAST_DMG * powf(k, 1.4f) * (float)clear / 3.0f + 0.5f);
+    // The shove is the air, not the fragments, and it does not care about hp.
+    v3 away = v3_sub(pts[1], at);
+    float al = v3_len(away);
+    away = al > 1e-3f ? v3_scale(away, 1.0f / al) : (v3){{0, 1, 0}};
+    v3 push = v3_scale(away, BLAST_SHOVE * k * k);
+    push.y = fmaxf(push.y, 2.6f * k * k);
+    int h = human_of_ent(e);
+    if (h >= 0) g_players[h].vel = v3_add(g_players[h].vel, push);
+    else if (g_bots[e - 1].active) g_bots[e - 1].vel = v3_add(g_bots[e - 1].vel, push);
+    g_kill_wpn = WPN_GR;
+    if (dmg > 0) ent_damage(e, dmg, 2, src, at, hit);
+    g_kill_wpn = -1;
+  }
+}
+
+// One tick of every live grenade. Swept by ray, so at 17 m/s nothing tunnels.
+// `auth` is 0 on a client's copy: same flight, no bang of its own.
+static void nade_tick(int auth) {
+  for (int i = 0; i < MAX_NADES; i++) {
+    nade_t *n = &g_nades[i];
+    if (n->fuse <= 0) continue;
+    n->prev_pos = n->pos;
+    n->prev_spin = n->spin;
+    if (--n->fuse <= 0) {
+      if (auth) nade_blast(n->pos, n->src);
+      continue;
+    }
+    if (n->rest) continue;
+    n->vel.y -= NADE_GRAVITY * TICK_DT;
+    n->vel = v3_scale(n->vel, 1.0f - NADE_DRAG);
+    n->spin += n->spin_v;
+    float sp = v3_len(n->vel);
+    float step = sp * TICK_DT;
+    if (step < 1e-5f) continue;
+    v3 d = v3_scale(n->vel, 1.0f / sp), wn = {{0, 1, 0}};
+    int ws = -1;
+    float hit = trace_world(n->pos, d, &wn, &ws);
+    if (hit >= step + NADE_R) {
+      n->pos = v3_add(n->pos, v3_scale(n->vel, TICK_DT));
+    } else {
+      // To the surface, then split the velocity on its normal: the part going
+      // into the wall reverses and mostly dies, the part along it scrapes.
+      n->pos = v3_add(n->pos, v3_scale(d, fmaxf(hit - NADE_R, 0.0f)));
+      float vn = v3_dot(n->vel, wn);
+      v3 vt = v3_sub(n->vel, v3_scale(wn, vn));
+      if (-vn > 1.1f && auth)
+        ev_push((event_t){.type = EV_NADE, .k = 1, .a = n->pos, .f = -vn, .src = n->src, .dst = -1});
+      n->vel = v3_add(v3_scale(vt, NADE_FRICTION), v3_scale(wn, -vn * NADE_BOUNCE));
+      n->spin_v *= 0.6f;
+      if (wn.y > 0.7f && fabsf(vn) < 1.3f) {   // on a floor and not bouncing: rolling
+        n->vel.y = 0.0f;
+        n->vel = v3_scale(n->vel, NADE_ROLL);
+        if (v3_len(n->vel) < 0.12f) { n->rest = 1; n->vel = (v3){{0, 0, 0}}; }
+      }
+    }
+    if (n->pos.y < NADE_R) { n->pos.y = NADE_R; if (n->vel.y < 0) n->vel.y = 0; }
+  }
+}
+
+// THE WEAPON ANY ENTITY HOLDS, or NULL. The block rule needs the VICTIM's guard
+// and only has an entity id.
+static weapon_t *ent_weapon(int e) {
+  int h = human_of_ent(e);
+  if (h >= 0) return &g_players[h].wp;
+  return e > 0 && e - 1 < MAX_BOTS ? &g_bots[e - 1].wp : NULL;
+}
+
+static float ent_yaw(int e) {
+  int h = human_of_ent(e);
+  return h >= 0 ? g_players[h].yaw : g_bots[e - 1].yaw;
+}
+
+// A BLADE ARRIVING AT A MAN. Everything the defence is lives here: a raised guard
+// facing the attacker stops the hit, and one raised just in time parries it,
+// which throws the ATTACKER out of his chain. Nothing protects a turned back,
+// and a guard does nothing against a bullet because bullets never come here.
+static void melee_land(int ent, weapon_t *w, int vic, int part, const melee_def_t *m,
+                       v3 o, v3 at) {
+  w->melee_done = 1;
+  if (g_predicting) return;                 // damage is authoritative: server only
+  int dmg = m->dmg * (part == 3 ? WPN_DEF[WPN_KN].head_x : 1);
+  weapon_t *vw = ent_weapon(vic);
+  if (vw && vw->cur == WPN_KN && vw->ads_s > 0.5f && vw->melee_t == 0) {
+    float vy = ent_yaw(vic);
+    v3 to = v3_sub(o, ent_pos(vic));
+    to.y = 0.0f;
+    float tl = v3_len(to);
+    float facing = tl > 1e-4f ? (to.x * sinf(vy) - to.z * cosf(vy)) / tl : 1.0f;
+    if (facing >= MELEE_GUARD_ARC) {
+      int parry = vw->guard_t <= MELEE_PARRY_TICKS;
+      vw->block_k = 1.0f;
+      if (parry) {
+        w->stagger_t = MELEE_STAGGER_TICKS;
+        w->melee_n = 0;                     // the chain is broken
+      } else {
+        w->block_k = 0.6f;
+      }
+      ev_push((event_t){.type = EV_BLOCK, .a = at, .b = o, .k = parry,
+                        .src = ent, .dst = vic, .wpn = WPN_KN});
+      if (!parry) ent_damage(vic, MELEE_CHIP, 2, ent, o, at);
+      return;
+    }
+  }
+  ent_damage(vic, dmg, part, ent, o, at);
+}
+
+// One tick of the blade crossing its arc. A fan of rays, so a target a little
+// above or below the blade's plane is still hit and a swing is not a pixel hunt.
+// Rays stop at solids: a blade does not reach through a crate.
+static void melee_sweep(int ent, weapon_t *w, v3 o, float yaw, float pitch) {
+  const melee_def_t *m = &MELEE[w->melee_v];
+  float u = (float)(w->melee_t - m->strike0) /
+            fmaxf((float)(m->strike1 - m->strike0), 1.0f);
+  float ya = yaw + m->a0 + (m->a1 - m->a0) * u;
+  float pa = pitch + m->p0 + (m->p1 - m->p0) * u;
+  static const float FAN[5][2] = {{0, 0}, {0, 0.16f}, {0, -0.16f},
+                                  {0.09f, 0}, {-0.09f, 0}};
+  int best = -1, bpart = 2;
+  float bd = m->reach, wall_d = m->reach;
+  v3 bdir = {{0, 0, -1}}, wall_n = {{0, 1, 0}}, wall_dir = bdir;
+  int wall_s = -1;
+  for (int i = 0; i < 5; i++) {
+    float y = ya + FAN[i][0], p = pa + FAN[i][1];
+    v3 d = {{cosf(p) * sinf(y), sinf(p), -cosf(p) * cosf(y)}};
+    v3 wn = {{0, 1, 0}};
+    int ws = -1;
+    float wall = trace_world(o, d, &wn, &ws);
+    float lim = fminf(wall, bd);
+    int part = 2;
+    int hit = ent_trace(ent, o, d, &lim, &part);
+    if (hit >= 0) { best = hit; bd = lim; bpart = part; bdir = d; }
+    if (i == 0 && wall < wall_d) { wall_d = wall; wall_n = wn; wall_s = ws; wall_dir = d; }
+  }
+  if (best >= 0) {
+    melee_land(ent, w, best, bpart, m, o, v3_add(o, v3_scale(bdir, bd)));
+    return;
+  }
+  if (wall_d < m->reach) {                  // steel on a wall: it stops the swing
+    w->melee_done = 1;
+    v3 at = v3_add(o, v3_scale(wall_dir, wall_d));
+    ev_push((event_t){.type = EV_IMPACT, .a = at, .b = wall_n, .i = wall_s, .k = 1,
+                      .f = wall_d, .src = ent});
+    ev_push((event_t){.type = EV_MELEE, .a = at, .k = 1, .src = ent, .wpn = WPN_KN});
+  }
+}
+
+// The knife's whole tick, shared by player and bots as gun_shoot is. It runs in
+// place of the trigger block of a gun.
+static void melee_tick(int ent, weapon_t *w, v3 o, float yaw, float pitch,
+                       anim_t *anim, int trigger) {
+  if (w->melee_gap > 0 && --w->melee_gap == 0) w->melee_n = 0;
+  if (w->melee_t > 0) {
+    const melee_def_t *m = &MELEE[w->melee_v];
+    w->melee_t++;
+    if (!w->melee_done && w->melee_t >= m->strike0 && w->melee_t <= m->strike1)
+      melee_sweep(ent, w, o, yaw, pitch);
+    if (w->melee_done && w->melee_t == m->strike1 + 1)
+      w->punch_v += GUN_PUNCH_SHOT * g_sim_wp[WPN_KN][WP_PUNCH] * GUN_PUNCH_V;
+    if (w->melee_t > m->total) {
+      w->melee_t = 0;
+      w->melee_gap = MELEE_CHAIN_TICKS;
+    }
+  }
+  if (trigger && w->melee_t == 0 && w->switch_t == 0 && w->stagger_t == 0) {
+    w->melee_v = w->melee_n % 3;
+    w->melee_n = (w->melee_n + 1) % 3;
+    w->melee_t = 1;
+    w->melee_done = 0;
+    w->melee_gap = 0;
+    g_match.shots[ent]++;
+    int sh = human_of_ent(ent);
+    if (sh >= 0) g_players[sh].shots++;
+    bot_noise_emit(ent, BOT_NOISE_SHOT, o, 9.0f);
+    if (anim) anim->fire_k = 1.0f;
+    ev_push((event_t){.type = EV_MELEE, .a = o, .src = ent, .wpn = WPN_KN});
+  }
+}
+
 // ---------------------------------------------------------------------------
 // What the weapon in a pair of hands is DOING this frame: the presentation
 // state the MODEL needs and the pose does not. One struct and one solver,
@@ -10426,12 +12816,144 @@ typedef struct {
   // rather than a handle throw.
   float bolt;
   float bhand;  // trigger hand off the grip and onto the bolt knob, 0..1
+  float slide;  // the pistol's slide: 1 = fully back, held there on an empty mag
+  float spoon;  // the grenade's lever has flown
+  // The knife, as ONE timeline the viewmodel and the figure both play. x, y, z
+  // are metres right/up/forward of the eye; pitch/yaw/roll radians, applied in
+  // that order. guard is the off-hand's rise into the cross-guard.
+  float kn[6], guard;
 } gunanim_t;
+
+// One keyframe of the knife. t is the normalised swing time.
+typedef struct { float t, k[6]; } knife_key_t;
+// Held up and across the frame, flat of the blade to the eye: a knife pointed down
+// the view axis foreshortens into a plank and hides the hand behind it. Every swing
+// keeps the flat turned toward the camera, for the same reason.
+#define KNIFE_HOLD {0.235f, -0.100f, 0.360f, -0.45f, 1.15f, 0.25f}
+static const knife_key_t KNIFE_KEY[3][6] = {
+  // Forehand: cock high and right, whip across, finish low and left.
+  {{0.00f, KNIFE_HOLD},
+   {0.15f, {0.300f, -0.010f, 0.310f, -0.25f,  1.35f,  0.85f}},
+   {0.26f, {0.325f,  0.000f, 0.320f, -0.20f,  1.40f,  1.00f}},
+   {0.36f, {0.070f, -0.085f, 0.420f, -0.55f,  0.75f,  0.15f}},
+   {0.50f, {-0.210f, -0.170f, 0.360f, -0.85f,  0.10f, -0.65f}},
+   {1.00f, KNIFE_HOLD}},
+  // Backhand: across the body and back out the way it came, wrist turned over.
+  {{0.00f, KNIFE_HOLD},
+   {0.15f, {-0.110f, -0.040f, 0.320f, -0.35f, -0.95f, -0.75f}},
+   {0.26f, {-0.150f, -0.035f, 0.330f, -0.30f, -1.05f, -0.90f}},
+   {0.36f, {0.070f, -0.085f, 0.420f, -0.55f, -0.30f, -0.10f}},
+   {0.50f, {0.340f, -0.120f, 0.360f, -0.85f,  0.75f,  0.55f}},
+   {1.00f, KNIFE_HOLD}},
+  // Thrust: the hand draws back to the hip and drives forward and in.
+  {{0.00f, KNIFE_HOLD},
+   {0.20f, {0.250f, -0.125f, 0.270f, -0.55f,  1.05f,  0.25f}},
+   {0.34f, {0.245f, -0.120f, 0.245f, -0.52f,  1.00f,  0.25f}},
+   {0.42f, {0.155f, -0.135f, 0.520f, -0.72f,  0.45f, -0.05f}},
+   {0.54f, {0.150f, -0.130f, 0.560f, -0.74f,  0.42f, -0.05f}},
+   {1.00f, KNIFE_HOLD}},
+};
+// The guard: blade upright across the centre line, edge out, off hand behind it.
+static const float KNIFE_GUARD[6] = {0.135f, -0.085f, 0.300f, -0.42f, -0.22f, 0.50f};
+
+// The grenade on the same six-number timeline: carried low, wound back overhead
+// while it cooks, and thrown down the view axis. An underhand lob swings up from
+// the hip instead.
+static const float NADE_HOLD[6]  = {0.215f, -0.075f, 0.360f, -0.22f, 1.00f, 0.42f};
+static const float NADE_COCK[6]  = {0.225f, -0.015f, 0.350f, -0.25f, 0.80f,  0.42f};
+static const float NADE_LOWC[6]  = {0.190f, -0.170f, 0.250f, -1.10f,  0.05f, -0.10f};
+static const float NADE_OUT[6]   = {0.170f, -0.030f, 0.560f, -1.30f,  0.55f,  0.05f};
+static const float NADE_LOWO[6]  = {0.110f, -0.070f, 0.520f, -0.20f, -0.10f,  0.00f};
+static const float NADE_DOWN[6]  = {-0.120f, -0.440f, 0.380f, -1.60f, -0.30f, -0.45f};
+
+static void grenade_anim(const weapon_t *w, float alpha, gunanim_t *g) {
+  const float *pa = NADE_HOLD, *pb = NADE_HOLD;
+  float u = 0.0f;
+  if (w->gr_t > 0) {
+    float t = (float)w->gr_t - 1.0f + alpha;
+    if (t < (float)NADE_RELEASE_T) {          // the arm comes through
+      pa = w->gr_lob ? NADE_LOWC : NADE_COCK;
+      pb = w->gr_lob ? NADE_LOWO : NADE_OUT;
+      u = f_clamp(t / (float)NADE_RELEASE_T, 0.0f, 1.0f);
+      u = u * u * (1.6f - 0.6f * u);
+    } else if (t < (float)NADE_RELEASE_T + 16.0f) {  // follow-through, off the frame
+      pa = w->gr_lob ? NADE_LOWO : NADE_OUT;
+      pb = NADE_DOWN;
+      u = smooth01((t - (float)NADE_RELEASE_T) / 16.0f);
+    } else {                                  // the next one comes up
+      pa = NADE_DOWN;
+      pb = NADE_HOLD;
+      u = smooth01((t - (float)NADE_RELEASE_T - 16.0f) /
+                   (float)(NADE_THROW_T - NADE_RELEASE_T - 16));
+    }
+    g->bolt = t >= (float)NADE_RELEASE_T && t < (float)NADE_RELEASE_T + 24.0f ? 1.0f : 0.0f;
+    if (t < (float)NADE_RELEASE_T) g->spoon = g->slide = 1.0f;   // pin and lever stay gone
+  } else if (w->gr_cook > 0) {
+    pb = NADE_COCK;
+    u = smooth01(f_clamp(((float)w->gr_cook - 8.0f + alpha) / 22.0f, 0.0f, 1.0f));
+    // The off hand reaches in, takes the ring, and draws away.
+    g->guard = sinf(f_clamp(((float)w->gr_cook + alpha) / (float)(NADE_PIN_T + 10), 0.0f, 1.0f) * F_PI);
+    g->slide = w->gr_cook >= NADE_PIN_T / 2 ? 1.0f : 0.0f;    // pin is out
+    g->spoon = w->gr_cook >= NADE_PIN_T ? 1.0f : 0.0f;        // ...and the lever gone
+  }
+  for (int i = 0; i < 6; i++) g->kn[i] = pa[i] + (pb[i] - pa[i]) * u;
+  // A live grenade in the hand: a tremor that builds as the fuse runs down.
+  if (w->gr_cook > NADE_PIN_T) {
+    float k = (float)w->gr_cook / (float)NADE_FUSE, c = (float)w->gr_cook + alpha;
+    k = k * k * k * 0.0065f;
+    g->kn[0] += sinf(c * 1.13f) * k;
+    g->kn[1] += sinf(c * 1.61f + 1.0f) * k;
+    g->kn[5] += sinf(c * 0.91f + 2.0f) * k * 3.0f;
+  }
+}
+
+static void knife_anim(const weapon_t *w, float alpha, gunanim_t *g) {
+  for (int i = 0; i < 6; i++) g->kn[i] = KNIFE_KEY[0][0].k[i];
+  if (w->melee_t > 0) {
+    int v = w->melee_v > 2 ? 2 : w->melee_v;       // wire-fed on a client
+    const knife_key_t *kk = KNIFE_KEY[v];
+    float t = ((float)w->melee_t - 1.0f + alpha) / (float)MELEE[v].total;
+    t = f_clamp(t, 0.0f, 1.0f);
+    int s = 0;
+    while (s < 4 && t >= kk[s + 1].t) s++;
+    float u = f_clamp((t - kk[s].t) / fmaxf(kk[s + 1].t - kk[s].t, 1e-4f), 0.0f, 1.0f);
+    // The strike legs run on an ease-in: slow to leave the cock, fastest at the
+    // target. Everything else eases both ways.
+    u = (s == 2 || s == 3) ? u * u * (1.6f - 0.6f * u) : smooth01(u);
+    for (int i = 0; i < 6; i++)
+      g->kn[i] = kk[s].k[i] + (kk[s + 1].k[i] - kk[s].k[i]) * u;
+  }
+  float ga = w->prev_ads_s + (w->ads_s - w->prev_ads_s) * alpha;
+  for (int i = 0; i < 6; i++) g->kn[i] += (KNIFE_GUARD[i] - g->kn[i]) * ga;
+  g->guard = ga;
+  // A blocked hit drives the guard back toward the chest and turns the wrist.
+  float bk = w->prev_block_k + (w->block_k - w->prev_block_k) * alpha;
+  g->kn[2] -= 0.075f * bk;
+  g->kn[1] -= 0.030f * bk;
+  g->kn[5] += 0.30f * bk;
+}
 
 static gunanim_t gun_anim(const weapon_t *w, float alpha) {
   gunanim_t g = {0};
   int cur = w->cur;
   g.trig = w->prev_trig_s + (w->trig_s - w->prev_trig_s) * alpha;
+  if (cur == WPN_KN) {
+    knife_anim(w, alpha, &g);
+    return g;
+  }
+  if (cur == WPN_GR) {
+    grenade_anim(w, alpha, &g);
+    return g;
+  }
+  if (cur == WPN_PT) {
+    // The slide runs on the weapon's own cycle: back fast, home on the spring,
+    // and locked open on the last round until the reload drops it.
+    float cyc = 60.0f / g_sim_wp[WPN_PT][WP_RPM] * (float)TICK_HZ;
+    float c = 1.0f - ((float)w->cool[WPN_PT] - alpha) / fmaxf(cyc, 1.0f);
+    if (w->cool[WPN_PT] > 0)
+      g.slide = c < 0.28f ? c / 0.28f : (1.0f - c) / 0.72f;
+    if (w->ammo[WPN_PT] == 0 && w->reload_t == 0) g.slide = 1.0f;
+  }
   if (w->reload_t <= 0) return g;
   // The SAME duration the sim is counting down, or every beat in the animation
   // lands on a different tick from the sound it is supposed to share.
@@ -11174,6 +13696,247 @@ static int bot_target_breaks_hidden(const bot_t *b, bot_target_choice_t c) {
   return "patrol";
 }
 
+// ---------------------------------------------------------------------------
+// GRID PATHING. Bots steer locally and have no route planner of their own,
+// which is fine in the open: a fight keeps finding them. Two places it is not:
+// LAST MAN STANDING's endgame (two survivors must cross a map to meet, and a
+// straight walk at a rival behind a wall slides along that wall forever), and
+// the large tactical maps, a town of corridors where almost every destination
+// is round a corner.
+//
+// So: a 1 m grid over the arena, built lazily once per (seed, map). Each cell
+// records whether a standing body fits there and at what LEVEL — always the
+// floor on the open maps, which have no step-up (byte-for-byte the floor-only
+// grid the hunt was measured on); the lowest level a body fits at on a stepped
+// map, so stairs and raised platforms carry their own height. A move between
+// neighbours climbs at most STEP_H and drops at most NAV_DROP. A breadth-first
+// distance field from a goal cell is walked downhill, string-pulled to the
+// farthest cell the body can reach in a straight line.
+// ---------------------------------------------------------------------------
+#define NAV_MAX 112                       // cells per side, 1 m: up to a 112 m map
+#define NAV_MIN_LEAD 1.1f                 // > the investigation's 0.9 m arrival
+#define NAV_DROP 2.6f                     // a ledge a body will step off
+typedef struct {
+  uint8_t  walk[NAV_MAX * NAV_MAX];
+  float    lvl[NAV_MAX * NAV_MAX];
+  uint32_t key;
+  int      keymap, n, ok;
+} nav_grid_t;
+static nav_grid_t g_nav_all[SRV_LOBBIES];
+#define g_nav (g_nav_all[g_lobby])
+
+static float nav_cellsz(void) { return 2.0f * ARENA_HALF / (float)g_nav.n; }
+static int nav_cell(float w) {
+  int c = (int)floorf((w + ARENA_HALF) / nav_cellsz());
+  return c < 0 ? 0 : c >= g_nav.n ? g_nav.n - 1 : c;
+}
+static float nav_centre(int c) { return -ARENA_HALF + ((float)c + 0.5f) * nav_cellsz(); }
+
+static void nav_ready(void) {
+  if (g_nav.ok && g_nav.key == g_map_seed && g_nav.keymap == g_map_id) return;
+  int n = (int)(2.0f * ARENA_HALF + 0.5f);
+  g_nav.n = n < 1 ? 1 : n > NAV_MAX ? NAV_MAX : n;
+  for (int z = 0; z < g_nav.n; z++)
+    for (int x = 0; x < g_nav.n; x++) {
+      int i = z * g_nav.n + x;
+      v3 c = {{nav_centre(x), 0.0f, nav_centre(z)}};
+      g_nav.lvl[i] = 0.0f;
+      g_nav.walk[i] = (uint8_t)aabb_fits(c, 0.45f, HEIGHT_STAND);
+      if (g_nav.walk[i] || STEP_H <= 0.0f) continue;
+      // Stepped map, floor blocked: the lowest box top under the centre that
+      // a body fits on is the cell's level.
+      float best = 1e9f;
+      BP_BOX(k, c.x, c.z, c.x, c.z) {
+        const solid_t *sd = &g_solids[k];
+        if (c.x < sd->min.x || c.x > sd->max.x || c.z < sd->min.z || c.z > sd->max.z) continue;
+        float y = sd->max.y;
+        if (y >= best || y > 6.0f) continue;
+        if (aabb_fits((v3){{c.x, y + 0.001f, c.z}}, 0.45f, HEIGHT_STAND)) best = y;
+      }
+      if (best < 1e8f) { g_nav.walk[i] = 1; g_nav.lvl[i] = best; }
+    }
+  g_nav.key = g_map_seed;
+  g_nav.keymap = g_map_id;
+  g_nav.ok = 1;
+}
+
+// May a body step from cell a to neighbour b?
+static int nav_step_ok(int a, int b) {
+  if (!g_nav.walk[a] || !g_nav.walk[b]) return 0;
+  float d = g_nav.lvl[b] - g_nav.lvl[a];
+  return d <= STEP_H + 0.01f && -d <= NAV_DROP;
+}
+// A diagonal needs both orthogonal cells open and on its level (within a step),
+// so a path never cuts a corner — or a stair edge — the body cannot.
+static int nav_diag_ok(int cx, int cz, int x, int z) {
+  int n = g_nav.n, c = cz * n + cx, a = cz * n + x, b = z * n + cx, d = z * n + x;
+  if (!g_nav.walk[a] || !g_nav.walk[b]) return 0;
+  float lo = g_nav.lvl[c], hi = lo;
+  float l3[3] = {g_nav.lvl[a], g_nav.lvl[b], g_nav.lvl[d]};
+  for (int k = 0; k < 3; k++) { lo = fminf(lo, l3[k]); hi = fmaxf(hi, l3[k]); }
+  return hi - lo <= STEP_H + 0.01f;
+}
+
+// The walkable cell nearest a world point, searching outward a few rings, at a
+// level within reach of the point's own height — a body hugging a wall, or
+// standing on a crate, sits over a blocked (or a different-level) cell.
+static int nav_snap(v3 p) {
+  int n = g_nav.n, cx = nav_cell(p.x), cz = nav_cell(p.z);
+  for (int r = 0; r <= 4; r++)
+    for (int dz = -r; dz <= r; dz++)
+      for (int dx = -r; dx <= r; dx++) {
+        if (abs(dx) != r && abs(dz) != r) continue;   // the ring only
+        int x = cx + dx, z = cz + dz;
+        if (x < 0 || z < 0 || x >= n || z >= n) continue;
+        int i = z * n + x;
+        if (g_nav.walk[i] && (STEP_H <= 0.0f || fabsf(g_nav.lvl[i] - p.y) <= 0.8f))
+          return i;
+      }
+  return -1;
+}
+
+// BFS distance field to `goal`, over moves INTO the goal's direction (a cell's
+// distance is the steps from it to the goal, so the edge tested is neighbour ->
+// cell). 0xFFFF = no route.
+static void nav_field(int goal, uint16_t *dist) {
+  static int q[NAV_MAX * NAV_MAX];
+  int n = g_nav.n;
+  for (int i = 0; i < n * n; i++) dist[i] = 0xFFFF;
+  int h = 0, t = 0;
+  dist[goal] = 0;
+  q[t++] = goal;
+  while (h < t) {
+    int c = q[h++], cx = c % n, cz = c / n;
+    for (int dz = -1; dz <= 1; dz++)
+      for (int dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        int x = cx + dx, z = cz + dz;
+        if (x < 0 || z < 0 || x >= n || z >= n) continue;
+        int nb = z * n + x;
+        if (dist[nb] != 0xFFFF || !nav_step_ok(nb, c)) continue;
+        if (dx && dz && !nav_diag_ok(cx, cz, x, z)) continue;
+        dist[nb] = (uint16_t)(dist[c] + 1);
+        q[t++] = nb;
+      }
+  }
+}
+
+// A few distance fields per arena, by goal cell: twenty bots heading for a
+// handful of places (each other, a noise, a site) share them, and a field is a
+// full BFS over up to 12,544 cells.
+#define NAV_FIELDS 8
+typedef struct { int goal; uint32_t key; int keymap; long tick; uint16_t d[NAV_MAX * NAV_MAX]; } nav_field_t;
+static nav_field_t g_navf_all[SRV_LOBBIES][NAV_FIELDS];
+static const uint16_t *nav_field_for(int goal) {
+  nav_field_t *f = g_navf_all[g_lobby], *slot = &f[0];
+  for (int k = 0; k < NAV_FIELDS; k++) {
+    if (f[k].goal == goal && f[k].key == g_map_seed && f[k].keymap == g_map_id &&
+        f[k].tick > 0) {
+      f[k].tick = g_tick + 1;          // most recently used
+      return f[k].d;
+    }
+    if (f[k].tick < slot->tick) slot = &f[k];
+  }
+  nav_field(goal, slot->d);
+  slot->goal = goal; slot->key = g_map_seed; slot->keymap = g_map_id;
+  slot->tick = g_tick + 1;
+  return slot->d;
+}
+
+// Can a body walk the straight segment a->b? Swept as body-sized samples every
+// 25 cm. On the open maps that is the floor test with a 0.5 m margin — the bots'
+// wall-band steering shaves the wish inside it, and a line grazing a wall end at
+// 0.36 m was measured to stall a bot on the corner it was routed round. On a
+// stepped map every sample must also sit on a cell it can step to from the last,
+// and the body is tested one step HIGHER than that cell's level, so a stair it
+// will climb passes while a crate or a wall does not.
+static int nav_clear(v3 a, v3 b) {
+  float dx = b.x - a.x, dz = b.z - a.z, l = sqrtf(dx * dx + dz * dz);
+  int ns = (int)(l / 0.25f) + 1;
+  int prev = nav_snap(a);
+  for (int i = 1; i <= ns; i++) {
+    float t = (float)i / (float)ns;
+    v3 p = {{a.x + dx * t, 0.0f, a.z + dz * t}};
+    if (STEP_H <= 0.0f) {
+      if (!aabb_fits(p, 0.50f, HEIGHT_STAND)) return 0;
+      continue;
+    }
+    int c = nav_cell(p.z) * g_nav.n + nav_cell(p.x);
+    if (prev < 0 || (c != prev && !nav_step_ok(prev, c))) return 0;
+    p.y = g_nav.lvl[c] + STEP_H + 0.01f;
+    if (!aabb_fits(p, 0.36f, HEIGHT_STAND - STEP_H)) return 0;
+    prev = c;
+  }
+  return 1;
+}
+
+// Where a body at `from` should walk next toward the field's goal: the FARTHEST
+// of the next `steps` downhill cells it can reach in a straight line, never
+// inside the investigation's arrival radius (the hunt re-issues a point every
+// quarter second, and a point under 0.9 m reads as "arrived" — measured, a bot
+// at a wall end sat in that loop for a round). Returns 0 when there is no route.
+static int nav_next(const uint16_t *dist, v3 from, int steps, v3 *out) {
+  int n = g_nav.n, c = nav_snap(from);
+  if (c < 0 || dist[c] == 0xFFFF) return 0;
+  v3 first = {{0}}, pick = {{0}}, far1 = {{0}};
+  int have = 0, have_far = 0;
+  for (int k = 0; k < steps && dist[c] > 0; k++) {
+    int cx = c % n, cz = c / n, best = c;
+    for (int dz = -1; dz <= 1; dz++)
+      for (int dx = -1; dx <= 1; dx++) {
+        int x = cx + dx, z = cz + dz;
+        if ((!dx && !dz) || x < 0 || z < 0 || x >= n || z >= n) continue;
+        int nb = z * n + x;
+        if (dist[nb] >= dist[best] || !nav_step_ok(c, nb)) continue;
+        if (dx && dz && !nav_diag_ok(cx, cz, x, z)) continue;
+        best = nb;
+      }
+    if (best == c) break;
+    c = best;
+    v3 cp = {{nav_centre(c % n), g_nav.lvl[c], nav_centre(c / n)}};
+    float ddx = cp.x - from.x, ddz = cp.z - from.z;
+    if (!have_far && ddx * ddx + ddz * ddz >= NAV_MIN_LEAD * NAV_MIN_LEAD) {
+      far1 = cp; have_far = 1;
+    }
+    if (!have) { first = pick = cp; have = 1; }
+    else if (nav_clear(from, cp)) pick = cp;
+  }
+  if (!have) {   // already in the goal cell
+    *out = (v3){{nav_centre(c % n), g_nav.lvl[c], nav_centre(c / n)}};
+    return 1;
+  }
+  v3 o = nav_clear(from, pick) ? pick : first;
+  float odx = o.x - from.x, odz = o.z - from.z;
+  if (odx * odx + odz * odz < NAV_MIN_LEAD * NAV_MIN_LEAD && have_far) o = far1;
+  *out = o;
+  return 1;
+}
+
+
+// THE ROUTE TO A POINT, for a bot on a routed map: the waypoint to steer at
+// instead of the point itself. Cached per bot and re-planned every quarter
+// second, when the destination moves, or when the waypoint is reached. Off a
+// routed map it is the point itself, so every caller below is unchanged there.
+static v3 bot_route(bot_t *b, v3 dest) {
+  if (!map_routes()) return dest;
+  float ddx = dest.x - b->route_dest.x, ddz = dest.z - b->route_dest.z;
+  float wdx = b->route_wp.x - b->pos.x, wdz = b->route_wp.z - b->pos.z;
+  if (b->route_t > 0 && ddx * ddx + ddz * ddz < 2.25f && wdx * wdx + wdz * wdz > 0.81f) {
+    b->route_t--;
+    return b->route_wp;
+  }
+  nav_ready();
+  b->route_dest = dest;
+  b->route_t = TICK_HZ / 4;
+  b->route_wp = dest;
+  if (nav_clear(b->pos, dest)) return dest;          // in sight: just go
+  int goal = nav_snap(dest);
+  if (goal < 0) return dest;
+  v3 wp;
+  if (nav_next(nav_field_for(goal), b->pos, 10, &wp)) b->route_wp = wp;
+  return b->route_wp;
+}
+
 static void bot_tick(int bi) {
   bot_t *b = &g_bots[bi];
   const bot_skill_t *sk = &BOT_SKILL[g_cfg.sp_diff];
@@ -11186,7 +13949,7 @@ static void bot_tick(int bi) {
   if (!b->alive) {
     rag_advance(&b->rag, &b->pos, b->prev_pos, &b->topple, &b->anim);
     b->grounded = b->rag.grounded;
-    if (!g_match.over && --b->respawn_t <= 0) {
+    if (!g_match.over && mode_respawns() && --b->respawn_t <= 0) {
       // The BODY stays behind. Respawn timing is match pacing and is untouched;
       // what changes is that the corpse is no longer the same object as the
       // entity, so it can lie there and come apart on its own clock.
@@ -11373,17 +14136,23 @@ static void bot_tick(int bi) {
   int startled = b->hear_tick && !engaging && b->hear_tick > b->last_seen_tick;
   b->startled = startled;   // census only (tacstat) — nothing branches on it
   float horizontal_speed = sqrtf(b->vel.x * b->vel.x + b->vel.z * b->vel.z);
-  int other_weapon = (b->wp.cur + 1) % WPN_COUNT;
+  int other_weapon = b->wp.cur == WPN_AR ? WPN_SR : WPN_AR;
   int emergency_swap = engaging && b->wp.ammo[b->wp.cur] <= 0 &&
-                       b->wp.ammo[other_weapon] > 0;
+                       (b->wp.ammo[other_weapon] > 0 || b->wp.ammo[WPN_PT] > 0);
   int desired = bot_desired_weapon(b, engaging, tdist, horizontal_speed);
+  desired = mode_bot_weapon(b, bi, desired, engaging, tdist);
+  mode_nade_refill(bi + 1, &b->wp);
+  // A weapon the mode no longer allows (a GUN GAME promotion) goes at once.
+  if (!mode_allowed(bi + 1, b->wp.cur) && b->wp.gr_t == 0) emergency_swap = 1;
   if (b->wp.switch_t == 0 && (b->swap_cd == 0 || emergency_swap) &&
       bot_request_weapon(b, bi, desired))
     b->swap_cd = BOT_SWAP_COOLDOWN_TICKS;
 
   // An available alternate weapon wins before the automatic empty-mag reload.
   // When neither weapon can fire, retain the existing reload/cover behavior.
-  if (b->wp.ammo[b->wp.cur] <= 0 && b->wp.reload_t == 0 && b->wp.switch_t == 0) {
+  // (Grenades never reload: their stock is the spawn's, or the mode's refill.)
+  if (b->wp.ammo[b->wp.cur] <= 0 && b->wp.reload_t == 0 && b->wp.switch_t == 0 &&
+      b->wp.cur != WPN_GR) {
     b->wp.reload_tac = 0;    // a bot only ever reloads when the mag is dry
     b->wp.reload_t = WPN_DEF[b->wp.cur].reload_ticks;
     ev_push((event_t){.type = EV_RELOAD, .a = b->pos, .wpn = b->wp.cur,
@@ -11475,11 +14244,16 @@ static void bot_tick(int bi) {
       // 12 m/s: the whole 8..16 m window is crossed in well under a second, so a
       // hard in/out flip at the edges makes a bot jitter on the spot. Ease the
       // advance in proportion to how far outside the band it actually is.
-      float adv = 0.0f;
-      if (tdist > 16.0f) adv = f_clamp((tdist - 16.0f) / 7.0f, 0.0f, 1.0f) * 0.9f;
+      float adv = 0.0f, side = 0.9f;
+      if (b->wp.cur == WPN_KN) {
+        // A BLADE HAS NO RANGE BAND: it closes. The strafe is kept, weakened,
+        // as the zig-zag that makes a charging man hard to track.
+        adv = tdist > 1.2f ? 1.0f : 0.0f;
+        side = tdist > 4.0f ? 0.45f : 0.2f;
+      } else if (tdist > 16.0f) adv = f_clamp((tdist - 16.0f) / 7.0f, 0.0f, 1.0f) * 0.9f;
       else if (tdist < 8.0f) adv = -f_clamp((8.0f - tdist) / 4.0f, 0.0f, 1.0f) * 0.9f;
-      wx = -tz * (float)b->strafe_dir * 0.9f + tx * adv;
-      wz =  tx * (float)b->strafe_dir * 0.9f + tz * adv;
+      wx = -tz * (float)b->strafe_dir * side + tx * adv;
+      wz =  tx * (float)b->strafe_dir * side + tz * adv;
       // Tactical slide: close the gap fast, or break off sideways when being
       // shot at. Gated by a cooldown and by skill so EASY bots rarely do it.
       // Rate matters as much as the behaviour: a slide is a once-every-several-
@@ -11487,8 +14261,9 @@ static void bot_tick(int bi) {
       // a slide a THIRD of the time, which reads as a bug, not as tactics.
       if (!b->sliding && b->grounded && b->slide_cd == 0 &&
           rng_rangef(&g_rng_bot, 0.0f, 1.0f) < sk->tac * 0.006f) {
-        int dodge = b->hurt_t > 0 && tdist < 13.0f;
-        if (dodge || tdist > 14.0f) {
+        int knife = b->wp.cur == WPN_KN;
+        int dodge = !knife && b->hurt_t > 0 && tdist < 13.0f;
+        if (dodge || tdist > (knife ? 5.0f : 14.0f)) {
           // Steer into the slide and ask for it; the shared entry gate decides
           // whether the bot is actually moving fast enough to have one.
           wx = dodge ? -tz * (float)(b->strafe_dir ? b->strafe_dir : 1) : tx;
@@ -11502,6 +14277,7 @@ static void bot_tick(int bi) {
     // a pose. Never while closing, never while suppressed.
     if (!b->sliding) {
       int want_cr = tdist > 13.0f && b->strafe_dir == 0 && b->hurt_t == 0 &&
+                    b->wp.cur != WPN_KN &&
                     b->wp.reload_t == 0 && b->flank_t == 0 && b->dl_t == 0;
       if (b->crouch_t < 0) b->crouch_t++;  // standing again, briefly
       if (b->crouch) {
@@ -11550,8 +14326,11 @@ static void bot_tick(int bi) {
       want_yaw = atan2f(dx, -dz);
       want_pitch = f_clamp(atan2f(dy, hl), -1.2f, 1.2f);
       if (hl > 1.8f && fabsf(wrap_pi(want_yaw - b->yaw)) <= 1.0471976f) {
-        wx = dx / hl;
-        wz = dz / hl;
+        // Look at the sound, WALK the route to it (the sound itself off a
+        // routed map).
+        v3 rw = bot_route(b, b->hear_pos);
+        float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+        if (rl > 0.01f) { wx = rx / rl; wz = rz / rl; }
         pace = BOT_PATROL_PACE;
       }
     }
@@ -11608,6 +14387,13 @@ static void bot_tick(int bi) {
       float sdx = b->search_pos.x - b->pos.x;
       float sdz = b->search_pos.z - b->pos.z;
       float sl = sqrtf(sdx * sdx + sdz * sdz);
+      // `sl` stays the distance to the search point itself (arrival is about
+      // getting THERE); the walk direction below follows the route to it.
+      v3 rw = bot_route(b, b->search_pos);
+      if (map_routes()) {
+        float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+        if (rl > 0.01f) { sdx = rx / rl * sl; sdz = rz / rl * sl; }
+      }
       if (sl > 0.01f) want_yaw = atan2f(sdx, -sdz);
       if (b->belief == BOT_BELIEF_INVESTIGATE) {
         if (b->search_t > 0) b->search_t--;
@@ -11670,6 +14456,9 @@ static void bot_tick(int bi) {
     if (al < BOT_ALERT_ARRIVE) {
       b->alert_t = 0;                    // checked it; stand down
     } else {
+      v3 rw = bot_route(b, b->alert_p);
+      float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+      if (rl > 0.01f) { adx = rx; adz = rz; al = rl; }
       want_yaw = atan2f(adx, -adz);
       wx = adx / al;
       wz = adz / al;
@@ -11709,6 +14498,11 @@ static void bot_tick(int bi) {
       b->stuck = 0;
       dx = b->target.x - b->pos.x;
       dz = b->target.z - b->pos.z;
+    }
+    if (map_routes()) {           // face (and so walk) the route, not the goal
+      v3 rw = bot_route(b, b->target);
+      dx = rw.x - b->pos.x;
+      dz = rw.z - b->pos.z;
     }
     want_yaw = atan2f(dx, -dz);
     float fdiff = wrap_pi(want_yaw - b->yaw);
@@ -11780,29 +14574,54 @@ static void bot_tick(int bi) {
   // The small outward term is separate and only lives inside the elbow band.
   {
     float bh_ = b->crouch ? HEIGHT_CROUCH : HEIGHT_STAND;
-    for (int i = 0; i < g_num_solids; i++) {
+    // HEAD-ON IS THE PROJECTION'S BLIND SPOT. Walking square into a face, the
+    // inward component IS the whole wish, so removing it leaves nothing: the bot
+    // stands still, and the pin escape below never runs because it needs a wish
+    // to rotate. Measured in LAST MAN STANDING, two survivors pinging each other
+    // through one wall stood 1.9 m apart for minutes. So the face that took the
+    // most is remembered, and a wish it cancelled is turned along that face.
+    float w0 = sqrtf(wx * wx + wz * wz), big_into = 0.0f, fnx = 0.0f, fnz = 0.0f;
+    BP_BOX(i, b->pos.x - PLAYER_RADIUS - 2.0f, b->pos.z - PLAYER_RADIUS - 2.0f,
+           b->pos.x + PLAYER_RADIUS + 2.0f, b->pos.z + PLAYER_RADIUS + 2.0f) {
       const solid_t *sd = &g_solids[i];
       if (!sd->pen) continue;                       // the shell clamps elsewhere
       // Only solids this body actually shares height with — a bot standing ON a
       // platform is inside it in plan view and must not be shoved off its own
       // footing. 0.2 m of lift is the step the locomotion already swallows.
-      if (sd->max.y <= b->pos.y + 0.20f || sd->min.y >= b->pos.y + bh_) continue;
+      // ...and on a stepped map, nothing the locomotion will step UP onto: a
+      // stair's face is not a wall, and steering off it (measured) left two
+      // bots routed up a stair standing in front of the first step for good.
+      if (sd->max.y <= b->pos.y + fmaxf(0.20f, STEP_H) || sd->min.y >= b->pos.y + bh_)
+        continue;
       // Signed distance in XZ to the face, through the box grown by the
       // collision radius — the same expansion move_axis resolves against.
       float ex = fmaxf(sd->min.x - PLAYER_RADIUS - b->pos.x,
                        b->pos.x - (sd->max.x + PLAYER_RADIUS));
       float ez = fmaxf(sd->min.z - PLAYER_RADIUS - b->pos.z,
                        b->pos.z - (sd->max.z + PLAYER_RADIUS));
-      float d = fmaxf(ex, ez);
-      if (d >= BOT_WALL_BAND) continue;
-      // Outward normal = the axis the bot is least buried along, which for a
-      // body beside a long wall is the wall's own face and for a body at a
-      // corner is the nearer of the two. Axis-aligned by construction: these
-      // ARE the AABBs the world is built from.
-      float nx = 0.0f, nz = 0.0f;
-      if (ex >= ez) nx = b->pos.x > sd->max.x ? 1.0f : -1.0f;
-      else          nz = b->pos.z > sd->max.z ? 1.0f : -1.0f;
+      // PAST BOTH FACES IS A CORNER, NOT A FACE. Outside the box's span on
+      // both axes, the nearest thing is the edge where the faces meet, so the
+      // distance is the diagonal and the normal points away from that edge.
+      // Picking the nearer face's axis there (as this once did) blocked
+      // motion ALONG the other face — a bot just past the end of a crate
+      // could not walk past the end of the crate, measured as a bot frozen
+      // there for a whole LAST MAN STANDING round.
+      float d, nx = 0.0f, nz = 0.0f;
+      if (ex > 0.0f && ez > 0.0f) {
+        d = sqrtf(ex * ex + ez * ez);
+        if (d >= BOT_WALL_BAND) continue;
+        nx = (b->pos.x > sd->max.x ? 1.0f : -1.0f) * ex / d;
+        nz = (b->pos.z > sd->max.z ? 1.0f : -1.0f) * ez / d;
+      } else {
+        d = fmaxf(ex, ez);
+        if (d >= BOT_WALL_BAND) continue;
+        // Beside a face: the outward normal is that face's own axis (the one
+        // the bot is least buried along). These ARE the world's AABBs.
+        if (ex >= ez) nx = b->pos.x > sd->max.x ? 1.0f : -1.0f;
+        else          nz = b->pos.z > sd->max.z ? 1.0f : -1.0f;
+      }
       float into = wx * nx + wz * nz;
+      if (into < big_into) { big_into = into; fnx = nx; fnz = nz; }
       if (into < 0.0f) { wx -= nx * into; wz -= nz * into; }  // slide, don't press
       // The elbow band: the last 50 mm, where the figure is wider than the box
       // it collides with. A nudge, not a shove — it has to be too weak to pull
@@ -11810,6 +14629,22 @@ static void bot_tick(int bi) {
       if (d < BOT_WALL_ELBOW) {
         float k = (BOT_WALL_ELBOW - d) * (1.0f / BOT_WALL_ELBOW) * 0.35f;
         wx += nx * k; wz += nz * k;
+      }
+    }
+    // ...and a wish the projection only MOSTLY cancelled is a slide that
+    // creeps: measured at a wall's end, 15% of the wish left a bot standing
+    // on the corner for the rest of a round. So a wish cut below half keeps
+    // the direction it has left at the speed it came in with, which is how a
+    // player slides along a wall; one cut to nothing picks a side by strafe_dir.
+    float wr = sqrtf(wx * wx + wz * wz);
+    if (w0 > 0.3f && wr < 0.5f * w0 && big_into < 0.0f) {
+      if (wr > 0.05f * w0) {
+        wx *= w0 / wr;
+        wz *= w0 / wr;
+      } else {
+        float s = b->strafe_dir >= 0 ? 1.0f : -1.0f;
+        wx = -fnz * s * w0;
+        wz =  fnx * s * w0;
       }
     }
   }
@@ -11968,7 +14803,40 @@ static void bot_tick(int bi) {
     b->stare++;
   else if (b->stare > 0)
     b->stare--;
-  if (trigger && b->wp.cool[b->wp.cur] == 0 && b->wp.reload_t == 0 &&
+  if (b->wp.cur == WPN_GR) {
+    // The throw runs the player's own clock (gr_t through NADE_RELEASE_T and
+    // NADE_THROW_T), so the arm animates the same; the solution is taken at
+    // the release, against where the target is THEN.
+    weapon_t *w = &b->wp;
+    if (w->gr_t > 0) {
+      if (++w->gr_t == NADE_RELEASE_T) {
+        v3 at, vel;
+        int fuse;
+        v3 tp = b->tgt >= 0 ? ent_pos(b->tgt) : b->last_seen;
+        if (bot_nade_solve(b, tp, sk->err1 * 2.0f + 1.5f, &at, &vel, &fuse)) {
+          nade_throw(at, vel, fuse, bi + 1);
+          w->ammo[WPN_GR]--;
+        }
+      }
+      if (w->gr_t > NADE_THROW_T) {
+        w->gr_t = 0;
+        w->cool[WPN_GR] = TICK_HZ * 3 / 2;     // a breath between throws
+        mode_nade_refill(bi + 1, w);
+      }
+    } else if (engaging && b->react_t == 0 && b->wp.switch_t == 0 &&
+               w->ammo[WPN_GR] > 0 && w->cool[WPN_GR] == 0 &&
+               diff > -0.15f && diff < 0.15f &&
+               tdist >= BOT_NADE_MIN && tdist <= BOT_NADE_MAX) {
+      w->gr_t = 1;
+      ev_push((event_t){.type = EV_RELOAD, .src = bi + 1, .a = b->pos, .wpn = WPN_GR});
+    }
+  } else if (b->wp.cur == WPN_KN) {
+    // The AI's only knife decision is the range: everything else is the gate
+    // the guns already use, so a bot still has to be facing you to cut you.
+    v3 bo = {{b->pos.x, b->pos.y + bot_eye(b), b->pos.z}};
+    melee_tick(bi + 1, &b->wp, bo, b->yaw, b->pitch, &b->anim,
+               trigger && tdist < MELEE[b->wp.melee_n % 3].reach);
+  } else if (trigger && b->wp.cool[b->wp.cur] == 0 && b->wp.reload_t == 0 &&
       b->wp.ammo[b->wp.cur] > 0) {
     bot_fire(bi);
     if (--b->burst <= 0) {
@@ -11989,6 +14857,14 @@ static void bot_tick(int bi) {
   // pose being tuned can be reached deterministically, and ADS is the pose that
   // decides where a buttstock ends up — measuring it by waiting for a live bot
   // to find a distant target is not a measurement, it is a coincidence.
+  // With the knife out, ADS is the guard. A bot reads an incoming swing's windup
+  // and catches every other one: often enough to matter, not a wall.
+  if (b->wp.cur == WPN_KN) {
+    const weapon_t *tw = b->tgt >= 0 ? ent_weapon(b->tgt) : NULL;
+    want_ads = tw && tw->cur == WPN_KN && tw->melee_t > 0 && b->wp.melee_t == 0 &&
+               tw->melee_t <= MELEE[tw->melee_v].strike1 && (tw->melee_n & 1);
+    b->wp.guard_t = want_ads && b->wp.ads_lin > 0.0f ? b->wp.guard_t + 1 : 0;
+  }
   gun_ads(&b->wp, want_ads);
   // Recoil recovers the same way it does for the player: only once the trigger
   // is off, so a bot has to fight its own climb through a burst.
@@ -12027,6 +14903,7 @@ static void match_counters_clear(void) {
   memset(g_match.deaths, 0, sizeof g_match.deaths);
   memset(g_match.shots, 0, sizeof g_match.shots);
   memset(g_match.hits, 0, sizeof g_match.hits);
+  memset(g_match.mscore, 0, sizeof g_match.mscore);
 }
 static void match_scores_clear(void) {
   match_counters_clear();
@@ -12037,7 +14914,12 @@ static void match_restart(void) {
   int n = g_match.nbots;
   memset(&g_match, 0, sizeof g_match);   // the human roster lives OUTSIDE
   g_match.nbots = n;                     // g_match and survives this on purpose
-  // Fresh procedural arena every match; everyone respawns onto it.
+  g_match.mode = g_cfg.sp_mode;          // the MATCH tab's choice lands HERE
+  g_match.round_win = -1;
+  g_match.round_no = 1;
+  // Fresh procedural arena every match (or the next map of the rotation, or
+  // the chosen handmade one); everyone respawns onto it.
+  map_pick_apply(1);
   g_map_seed = map_seed_next(g_map_seed);
   map_generate(g_map_seed);
   g_world_dirty = 1;
@@ -12109,6 +14991,113 @@ static int match_over_secs(void) {
   return (left + TICK_HZ - 1) / TICK_HZ;
 }
 
+// LAST MAN STANDING. A round is over when at most one combatant is left
+// standing — among at least two, so a lone player on an empty server is not
+// awarded a round every tick. The survivor scores it; ROUNDS TO WIN of them take
+// the match. Between rounds a short intermission holds the result on screen,
+// then everyone respawns on the SAME arena (a fresh one per round would be a
+// seed change mid-match for every client, for no gain in a short round).
+#define LMS_INTERMISSION_TICKS (3 * TICK_HZ)
+#define LMS_HUNT_ALIVE 2
+#define LMS_HUNT_TICKS (45 * TICK_HZ)
+#define LMS_MAX_TICKS  (180 * TICK_HZ)
+static void lms_round_reset(void) {
+  for (int h = 0; h < MAX_HUMANS; h++)
+    if (g_humans_on[h]) player_respawn(&g_players[h], ent_of_human(h));
+  for (int i = 0; i < g_match.nbots; i++) {
+    bot_t *b = &g_bots[i];
+    if (!b->active) continue;
+    if (!b->alive)   // the body stays where it fell, as it does on a respawn
+      corpse_add(&b->anim, b->pos, b->prev_pos, b->rag, b->yaw, b->topple,
+                 b->prev_topple, gun_anim(&b->wp, 1.0f), b->wp.cur, 0, i + 1);
+    bot_spawn(i);
+  }
+  g_match.round_t = 0;
+  g_match.round_clock = 0;
+  g_match.round_no++;
+}
+
+static int lms_alive(int *last) {
+  int n = 0;
+  ENT_FOREACH(e) if (ent_alive(e)) { n++; if (last) *last = e; }
+  return n;
+}
+
+static void lms_tick(void) {
+  if (game_mode() != GM_LMS || g_match.over) return;
+  if (g_match.round_t > 0) {
+    if (--g_match.round_t == 0) lms_round_reset();
+    return;
+  }
+  int total = 0;
+  ENT_FOREACH(e) { (void)e; total++; }
+  int last = -1;
+  int alive = lms_alive(&last);
+  g_match.round_clock++;
+  // THE HUNT. Two survivors on opposite sides of the arena patrol past each
+  // other indefinitely — measured, a 6-bot round sat at two alive for minutes.
+  // So in the endgame (LMS_HUNT_ALIVE or fewer standing, or a round past
+  // LMS_HUNT_TICKS) every two seconds each bot is told where its nearest living
+  // rival is, as TARGET MEMORY — the same evidence being shot gives it — not
+  // as a noise. A noise is walked at in a straight line, and with no pathing
+  // two bots either side of one wall pinned on it for minutes; a remembered
+  // target gets the occluded-target tactics instead (search, flank, the
+  // deadlock push/break). A round that still will not end is drawn at
+  // LMS_MAX_TICKS.
+  if (alive > 1 && (alive <= LMS_HUNT_ALIVE || g_match.round_clock > LMS_HUNT_TICKS) &&
+      g_match.round_clock % (TICK_HZ / 4) == 0) {
+    nav_ready();
+    const uint16_t *field = NULL;
+    int field_for = -1;
+    for (int i = 0; i < g_match.nbots; i++) {
+      bot_t *b = &g_bots[i];
+      if (!b->active || !b->alive) continue;
+      int best = -1;
+      float bd = 1e9f;
+      ENT_FOREACH(e) {
+        if (e == i + 1 || !ent_alive(e)) continue;
+        v3 d = v3_sub(ent_pos(e), b->pos);
+        float dd = v3_dot(d, d);
+        if (dd < bd) { bd = dd; best = e; }
+      }
+      if (best < 0) continue;
+      // In a fight already: the combat code has it.
+      if (b->tgt == best && b->belief == BOT_BELIEF_VISIBLE) continue;
+      // The reveal gives it the target (and the reaction delay a surprise
+      // costs), once; after that it is only ever told where to walk. Holding
+      // the reveal's OCCLUDED_HOLD was measured to deadlock — two survivors
+      // each held an angle on the other for minutes.
+      if (b->tgt != best) bot_damage_reveal(b, best, 16);
+      v3 pp = ent_pos(best);
+      if (field_for != best) {
+        int goal = nav_snap(pp);
+        if (goal < 0) continue;
+        field = nav_field_for(goal);
+        field_for = best;
+      }
+      v3 wp;
+      if (!nav_next(field, b->pos, 8, &wp)) wp = pp;   // no route: straight
+      bot_belief_seed(b, pp, (v3){{0, 0, 0}});
+      b->belief = BOT_BELIEF_INVESTIGATE;
+      b->search_pos = wp;
+      b->search_t = TICK_HZ;
+      b->search_visited = 0;
+    }
+  }
+  if (alive > 1 && g_match.round_clock > LMS_MAX_TICKS) {
+    g_match.round_win = -1;
+    g_match.round_t = LMS_INTERMISSION_TICKS;
+    return;
+  }
+  if (total < 2 || alive > 1) return;
+  g_match.round_win = alive == 1 ? last : -1;
+  if (alive == 1 && ++g_match.mscore[last] >= g_cfg.sp_rounds) {
+    match_end(last);
+    return;
+  }
+  g_match.round_t = LMS_INTERMISSION_TICKS;
+}
+
 // Runs once per sim tick: live-applies the BOTS slider (fresh bots spawn,
 // extras retire), services a queued restart, then ticks every active bot.
 static void match_tick(void) {
@@ -12131,10 +15120,15 @@ static void match_tick(void) {
   }
 
   for (int i = 0; i < g_match.nbots; i++) bot_tick(i);
+  nade_tick(1);
+  lms_tick();
 }
 
 static void match_init(void) {
   memset(&g_match, 0, sizeof g_match);
+  g_match.mode = g_cfg.sp_mode;
+  g_match.round_win = -1;
+  g_match.round_no = 1;
   memset(g_bots, 0, sizeof g_bots);
   g_match.nbots = sp_bot_count();
   for (int i = 0; i < g_match.nbots; i++) bot_spawn(i);
@@ -12161,6 +15155,78 @@ static void weapon_fire(player_t *p, int ent) {
             &g_rng_gun[h], &g_player_anim[h]);
 }
 
+// WHERE A THROW STARTS AND HOW FAST, one copy: the throw and the arc preview both
+// read this, so the line on screen is the line the grenade takes.
+static void nade_launch(const player_t *p, int lob, v3 *at, v3 *vel) {
+  float pa = p->pitch + (lob ? -0.10f : 0.13f), ya = p->yaw;
+  v3 dir = {{cosf(pa) * sinf(ya), sinf(pa), -cosf(pa) * cosf(ya)}};
+  v3 rt = {{cosf(ya), 0, sinf(ya)}};
+  v3 eye = player_eye_pos(p);
+  *at = v3_add(eye, v3_add(v3_scale(rt, 0.14f), v3_add(v3_scale(dir, 0.42f),
+                                                       (v3){{0, -0.08f, 0}})));
+  // Up against a wall the hand is past it: let go at the eye instead.
+  v3 wn;
+  int ws;
+  if (trace_world(eye, dir, &wn, &ws) < 0.6f) *at = eye;
+  *vel = v3_add(v3_scale(p->vel, 0.6f), v3_scale(dir, lob ? NADE_LOB : NADE_SPEED));
+}
+
+// The grenade in the hand. Press pulls the pin and starts the fuse, release winds
+// through the throw, and the hand opens at NADE_RELEASE_T. Prediction runs all of
+// this on a client except the spawn itself (nade_throw returns there).
+static void grenade_tick(player_t *p, int ent, weapon_t *w, const int held[IN_COUNT]) {
+  if (w->switch_t > 0) return;
+  if (w->gr_t > 0) {
+    if (++w->gr_t == NADE_RELEASE_T) {
+      v3 at, vel;
+      nade_launch(p, w->gr_lob, &at, &vel);
+      nade_throw(at, vel, w->gr_fuse, ent);
+      w->ammo[WPN_GR]--;
+    }
+    if (w->gr_t > NADE_THROW_T) {
+      w->gr_t = 0;
+      mode_nade_refill(ent, w);                  // the bottomless GUN GAME rung
+      if (w->ammo[WPN_GR] <= 0) {                // out: back to the gun you had
+        w->cur = w->gr_prev == WPN_GR ? WPN_AR : w->gr_prev;
+        if (!mode_allowed(ent, w->cur)) w->cur = mode_primary(ent);
+        w->switch_t = GUN_SWITCH_TICKS;
+      }
+    }
+    return;
+  }
+  if (w->ammo[WPN_GR] <= 0 || !p->alive || g_match.over) { w->gr_cook = 0; return; }
+  if (w->gr_cook == 0) {
+    if (held[IN_FIRE] && !p->prev_held[IN_FIRE]) {
+      w->gr_cook = 1;
+      ev_push((event_t){.type = EV_RELOAD, .src = ent, .a = p->pos, .wpn = WPN_GR});
+    }
+    return;
+  }
+  w->gr_cook++;
+  // The pin clears and the spoon goes: the fuse is committed and everyone close
+  // hears it. It flies off the hand on its own little arc.
+  if (w->gr_cook == NADE_PIN_T) {
+    v3 rt = {{cosf(p->yaw), 0, sinf(p->yaw)}};
+    v3 sv = v3_add(p->vel, v3_add(v3_scale(rt, 2.2f), (v3){{0, 3.4f, 0}}));
+    v3 sp = v3_add(player_eye_pos(p), v3_add(v3_scale(rt, 0.26f), (v3){{0, -0.10f, 0}}));
+    ev_push((event_t){.type = EV_NADE, .k = 2, .a = sp, .b = sv, .src = ent, .dst = -1});
+  }
+  if (w->gr_cook >= NADE_FUSE) {                 // held too long
+    w->gr_cook = 0;
+    w->ammo[WPN_GR]--;
+    if (!g_predicting) nade_blast(player_eye_pos(p), ent);
+    return;
+  }
+  // The pin has to finish coming out before the hand can let go, so a tap still
+  // makes a full, honest throw.
+  if (!held[IN_FIRE] && w->gr_cook >= NADE_PIN_T) {
+    w->gr_fuse = NADE_FUSE - w->gr_cook;
+    w->gr_lob = held[IN_ADS];
+    w->gr_cook = 0;
+    w->gr_t = 1;
+  }
+}
+
 static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   weapon_t *w = &p->wp;
   const wpn_def_t *def = &WPN_DEF[w->cur];
@@ -12183,7 +15249,43 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   if (held[IN_SWAP] && !p->prev_held[IN_SWAP]) want = (w->cur + 1) % WPN_COUNT;
   if (held[IN_SLOT1] && !p->prev_held[IN_SLOT1]) want = WPN_AR;
   if (held[IN_SLOT2] && !p->prev_held[IN_SLOT2]) want = WPN_SR;
+  if (held[IN_SLOT3] && !p->prev_held[IN_SLOT3]) want = WPN_PT;
+  if (held[IN_SLOT4] && !p->prev_held[IN_SLOT4]) want = WPN_KN;
+  if (held[IN_SLOT5] && !p->prev_held[IN_SLOT5]) want = WPN_GR;
+  mode_nade_refill(ent, w);
+  // THE MODE'S WEAPON GATE. The cycle walks on to the next weapon the mode
+  // allows (with grenades in stock); a slot key for a forbidden weapon does
+  // nothing; and a weapon in the hands that the mode no longer allows — a GUN
+  // GAME promotion, a respawn preference — is swapped out by the same path.
+  int cycling = held[IN_SWAP] && !p->prev_held[IN_SWAP];
+  if (cycling) {
+    want = -1;
+    for (int k = 1; k <= WPN_COUNT; k++) {
+      int c = (w->cur + k) % WPN_COUNT;
+      if (!mode_allowed(ent, c) || (c == WPN_GR && w->ammo[WPN_GR] <= 0)) continue;
+      want = c;
+      break;
+    }
+  } else if (want >= 0 && !mode_allowed(ent, want)) {
+    want = -1;
+  }
+  if (want < 0 && !mode_allowed(ent, w->cur)) want = mode_primary(ent);
+  // No grenades left: the cycle steps past the slot and the key does nothing.
+  if (want == WPN_GR && w->ammo[WPN_GR] <= 0)
+    want = cycling && mode_allowed(ent, WPN_AR) ? WPN_AR : -1;
+  // A live grenade stays in the hand: the pin does not go back in.
+  if (w->gr_cook > 0 || w->gr_t > 0) want = -1;
+  // Dying with the pin out drops it where you fall, on what is left of the fuse.
+  if (!p->alive && w->gr_cook > 0) {
+    nade_throw(v3_add(p->pos, (v3){{0, 0.25f, 0}}), p->vel,
+               NADE_FUSE - w->gr_cook, ent);
+    w->gr_cook = 0;
+  }
   if (want >= 0 && want != w->cur && w->switch_t == 0) {
+    if (want == WPN_GR) {
+      w->gr_prev = w->cur;
+      ev_push((event_t){.type = EV_NADE, .k = 3, .a = p->pos, .src = ent, .dst = -1});
+    }
     // The abandoned reload's SOUND stops with it — otherwise the buffer plays
     // to its end and announces A LIVE WEAPON (the bolt cue) for a magazine
     // that never went in.
@@ -12196,6 +15298,7 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
     def = &WPN_DEF[w->cur];
     w->switch_t = GUN_SWITCH_TICKS;
     w->reload_t = 0;
+    w->melee_t = 0;
     w->dry_done = 0;         // a fresh weapon gets its own one click
     // cool[] is deliberately NOT touched: the outgoing weapon's cycle keeps
     // running (a quick-switch must not reset the SR's bolt) and the incoming
@@ -12204,10 +15307,32 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   }
   int busy = w->reload_t > 0 || w->switch_t > 0;
 
-  gun_ads(w, held[IN_ADS] && !busy);
+  // With the knife out the aim button is the guard. It cannot be held through a
+  // swing or a stagger, and guard_t is what makes a timed raise a parry.
+  int guarding = held[IN_ADS] && !busy && w->cur != WPN_GR &&
+                 !(w->cur == WPN_KN && (w->melee_t > 0 || w->stagger_t > 0));
+  gun_ads(w, guarding);
+  w->guard_t = guarding ? w->guard_t + 1 : 0;
+
+  if (w->cur == WPN_KN) {
+    melee_tick(ent, w, player_eye_pos(p), p->yaw, p->pitch,
+               &g_player_anim[human_of_ent(ent)],
+               held[IN_FIRE] && p->alive && !g_match.over && !guarding);
+    gun_recover(w, held[IN_FIRE]);
+    return;
+  }
+  if (w->cur == WPN_GR) {
+    grenade_tick(p, ent, w, held);
+    gun_recover(w, 0);
+    return;
+  }
 
   gun_reload_tick(w);
-  if (held[IN_RELOAD] && !p->prev_held[IN_RELOAD] && !busy &&
+  // AUTO RELOAD: an empty magazine starts its own reload as soon as the last shot
+  // has cycled. Same path as the key, so it predicts, sounds and animates alike,
+  // and a swap onto an empty weapon reloads once the raise finishes.
+  int auto_rl = w->ammo[w->cur] == 0 && w->cool[w->cur] == 0 && p->alive;  // the grenade returned above
+  if (((held[IN_RELOAD] && !p->prev_held[IN_RELOAD]) || auto_rl) && !busy &&
       w->ammo[w->cur] < def->mag) {
     w->reload_tac = w->ammo[w->cur] > 0;
     w->reload_t = w->reload_tac ? def->reload_tac_ticks : def->reload_ticks;
@@ -12229,7 +15354,8 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   // a held trigger — the case the old press-edge test made unreachable, and the
   // commonest way anybody empties a magazine.
   if (!held[IN_FIRE]) w->dry_done = 0;
-  if (trigger && w->cool[w->cur] == 0 && w->reload_t == 0 && w->switch_t == 0) {
+  if (trigger && w->cool[w->cur] == 0 && w->reload_t == 0 && w->switch_t == 0 &&
+      w->stagger_t == 0) {
     if (w->ammo[w->cur] > 0) weapon_fire(p, ent);
     else if (!w->dry_done) {
       ev_push((event_t){.type = EV_DRYFIRE, .src = ent, .a = p->pos});
@@ -12361,7 +15487,8 @@ static void player_lean_tick(player_t *p, const int held[IN_COUNT]) {
     // two-probe design exists to prevent.
     float oy2 = o.y - lean_eye_drop(fabsf(p->lean_in));
     float bn = dist, ba = dist;
-    for (int i = 0; i < g_num_solids; i++) {
+    BP_BOX(i, fminf(o.x, ah.x) - dist - 1.0f, fminf(o.z, ah.z) - dist - 1.0f,
+           fmaxf(o.x, ah.x) + dist + 1.0f, fmaxf(o.z, ah.z) + dist + 1.0f) {
       v3 n;
       for (int hgt = 0; hgt < 2; hgt++) {
         v3 oh = o, ahh = ah;
@@ -12438,7 +15565,7 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
   const int *raw_held = held;
   int dead_held[IN_COUNT] = {0};
   if (!p->alive) {
-    if (!g_match.over && --p->respawn_t <= 0) {
+    if (!g_match.over && mode_respawns() && --p->respawn_t <= 0) {
       player_respawn(p, ent);
     } else {
       dead_held[IN_SCORE] = held[IN_SCORE];
@@ -12611,7 +15738,8 @@ static void player_present_tick(player_t *p, int ent) {
               p->crouched && !p->sliding, p->tuck_y, p->sliding, p->wp.ads_s,
               p->lean,
               p->prev_held[IN_FIRE] || p->prev_held[IN_ADS] ||
-                  p->wp.cool[p->wp.cur] > 0,
+                  p->wp.cool[p->wp.cur] > 0 || p->wp.melee_t > 0 ||
+                  p->wp.gr_cook > 0 || p->wp.gr_t > 0,
               ent);
   else {
     g_player_anim[h].prev_pose = g_player_anim[h].pose;
@@ -12736,7 +15864,7 @@ typedef struct {
   uint32_t    in_next;            // next input tick to consume
   uint32_t    in_high;            // highest input tick buffered (backlog gauge)
   int         in_started;         // first input adopted the client's tick clock
-  uint16_t    btn_carry;          // buttons of backlog-dropped ticks, OR-ed
+  uint32_t    btn_carry;          // buttons of backlog-dropped ticks, OR-ed
                                   // into the next played one so a press EDGE
                                   // inside a dropped tick still fires
   int         rtt_ms;             // smoothed g_tick - input.view at consume
@@ -12976,17 +16104,25 @@ static void net_srv_packet(const unsigned char *b, int n, uint32_t ip, uint16_t 
     // Floats travel as raw IEEE bits (np_wf/np_rf): quantizing a tunable the
     // two sims multiply with every tick would rebuild the very divergence
     // this exists to remove.
-    unsigned char out[168]; np_wr w = {out, sizeof out, 0, 0};
+    // SIZED FOR THE WHOLE TABLE: 19 bytes of header, MV_COUNT + WPN_COUNT x
+    // WP_COUNT floats. It was 168 from the two-weapon days, so with five
+    // weapons the writer ran out partway through the pistol's row and every
+    // client predicted the pistol, knife and grenade on each tunable's LOW
+    // bound (np_rf reads 0 past the end).
+    unsigned char out[19 + 4 * (MV_COUNT + WPN_COUNT * WP_COUNT)];
+    np_wr w = {out, sizeof out, 0, 0};
     np_w16(&w, NET_PROTO); np_w8(&w, NP_ACCEPT);
     np_w8(&w, (uint8_t)ent_of_human(g_conns[conn].human));
     np_w8(&w, (uint8_t)g_lobby);          // WHICH arena, and
     np_w8(&w, (uint8_t)g_srv.lobbies);    // how many this process runs
     np_w32(&w, g_map_seed);
+    np_w8(&w, (uint8_t)g_map_id);
     np_w32(&w, net_world_hash());
     np_w32(&w, g_conns[conn].token);
     for (int i = 0; i < MV_COUNT; i++) np_wf(&w, g_cfg.mv[i]);
     for (int wp = 0; wp < WPN_COUNT; wp++)
       for (int i = 0; i < WP_COUNT; i++) np_wf(&w, g_cfg.wp[wp][i]);
+    if (w.bad) slog("ACCEPT overflow at %zu of %zu bytes", w.at, sizeof out);
     net_udp_send(g_srv_fd, ip, port, out, (int)w.at);
   } else if (type == NP_LEAVE) {
     int conn = net_conn_find(ip, port);     // token-gated: a bare LEAVE
@@ -13260,7 +16396,7 @@ static net_client_t g_cl;
 // this player's own preference and lies about the match he actually joined.
 static uint8_t  g_net_ping_all[SRV_LOBBIES][MAX_ENTS];
 #define g_net_ping (g_net_ping_all[g_lobby])
-static uint16_t g_net_fraglimit;
+static uint16_t g_net_fraglimit;   // (g_net_rounds, its LMS twin, is up by the mode helpers)
 static int g_cl_corrections;         // reconciliation count, for the proof
 static float g_cl_worst_err_mm;
 static int g_cl_ev_applied, g_cl_ev_dupes;   // event channel, for the proof
@@ -13302,7 +16438,8 @@ static void net_cl_restore_pred(player_t *p, int h, uint32_t li) {
 // real desync and stays the move solver's problem.
 static void net_cl_depenetrate(player_t *p) {
   float height = player_col_height(p);
-  for (int i = 0; i < g_num_solids; i++) {
+  BP_BOX(i, p->pos.x - PLAYER_RADIUS - 1.0f, p->pos.z - PLAYER_RADIUS - 1.0f,
+         p->pos.x + PLAYER_RADIUS + 1.0f, p->pos.z + PLAYER_RADIUS + 1.0f) {
     const solid_t *s = &g_solids[i];
     if (!(p->pos.x + PLAYER_RADIUS > s->min.x && p->pos.x - PLAYER_RADIUS < s->max.x &&
           p->pos.y + height        > s->min.y && p->pos.y                 < s->max.y &&
@@ -13381,6 +16518,7 @@ static void net_cl_disconnect(void) {
   g_cl.fd = -1;
   memset(g_net_ping, 0, sizeof g_net_ping);  // scoreboard furniture goes local
   g_net_fraglimit = 0;
+  g_net_rounds = 0;
 }
 
 // ...and WHOSE BODY THAT IS. A dead bot's position has one owner: from the
@@ -13413,6 +16551,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     p->alive = e->flags & 1; p->grounded = (e->flags >> 1) & 1;
     p->crouched = (e->flags >> 2) & 1; p->sliding = (e->flags >> 3) & 1;
     p->hp = e->hp; p->wp.cur = e->weapon;
+    net_melee_apply(&p->wp, e);
     if (!g_humans_on[h]) { g_humans_on[h] = 1; anim_reset(&g_player_anim[h], pos, p->yaw); }
     else if (tele) anim_reset(&g_player_anim[h], pos, p->yaw);
   } else {
@@ -13443,6 +16582,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     b->alive = e->flags & 1; b->grounded = (e->flags >> 1) & 1;
     b->crouch = (e->flags >> 2) & 1; b->sliding = (e->flags >> 3) & 1;
     b->hp = e->hp; b->wp.cur = e->weapon; b->active = 1;
+    net_melee_apply(&b->wp, e);
     if (tele) anim_reset(&b->anim, pos, b->yaw);
     if (e->id > g_match.nbots) g_match.nbots = e->id;   // grow the roster to fit
   }
@@ -13515,7 +16655,8 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
   net_ent_t es[MAX_ENTS];
   net_ev_t  evs[NET_EV_SNAP_MAX];
   int full = 0, nev = 0;
-  int cnt = net_snapshot_read(b, (size_t)n, &st, &li, &wh, &sd, &qd, es, MAX_ENTS,
+  uint8_t mid = 0;
+  int cnt = net_snapshot_read(b, (size_t)n, &st, &li, &wh, &sd, &mid, &qd, es, MAX_ENTS,
                               &full, evs, NET_EV_SNAP_MAX, &nev);
   if (cnt < 0) return;
   // Signed-difference like every other monotone-counter compare in this layer
@@ -13538,7 +16679,8 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
   // same way the join does — if the two disagree after regenerating from the
   // server's own seed, the two builds do not agree on the generator, and the join
   // says refuse rather than play a divergent map.
-  if (sd != g_map_seed) {
+  if (sd != g_map_seed || mid != g_map_id) {
+    g_map_id = mid;
     map_generate(sd); g_map_seed = sd;
     g_world_dirty = 1;
   }
@@ -13922,6 +17064,7 @@ static int net_cl_poll(void) {
       int me = np_r8(&r);
       int lob = np_r8(&r), lobn = np_r8(&r);
       uint32_t seed = np_r32(&r);
+      int mapid = np_r8(&r);
       uint32_t world = np_r32(&r);
       uint32_t token = np_r32(&r);
       // The id the server hands out is an INDEX into g_players for the rest of
@@ -13931,6 +17074,10 @@ static int net_cl_poll(void) {
       if (me >= MAX_ENTS || human_of_ent(me) < 0) {
         g_cl.reject = NR_PROTO; g_cl.state = NC_FAILED; return 0;
       }
+      if (mapid >= MAP_COUNT) {
+        g_cl.reject = NR_PROTO; g_cl.state = NC_FAILED; return 0;
+      }
+      g_map_id = mapid;
       map_generate(seed); g_map_seed = seed;  // adopt the server's arena
       // A DIVERGENT ARENA IS REFUSED, NOT PLAYED. Both sides generate
       // the map from the seed, so the hashes agree unless the generators do
@@ -13986,7 +17133,8 @@ static int net_cl_poll(void) {
       uint8_t over = 0, winner = 0;
       uint16_t frag = 0;
       int nn = 0;
-      int nr = net_scores_read(b, (size_t)n, &over, &winner, &frag, rows,
+      net_mode_t nm = {0};
+      int nr = net_scores_read(b, (size_t)n, &over, &winner, &frag, &nm, rows,
                                MAX_ENTS, names, MAX_HUMANS, &nn);
       if (nr >= 0) {
         // WHOLESALE MEANS WHOLESALE (fixed 2026-08-18). The rows and the
@@ -14007,7 +17155,13 @@ static int net_cl_poll(void) {
           g_match.shots[e] = rows[i].shots;
           g_match.hits[e] = rows[i].hits;
           g_net_ping[e] = rows[i].ping;
+          g_match.mscore[e] = rows[i].mscore;
         }
+        g_match.mode = nm.mode;
+        g_match.round_t = nm.round_secs * TICK_HZ;   // display only on a client
+        g_match.round_win = nm.round_win == 0xFF ? -1 : nm.round_win;
+        g_match.round_no = nm.round_no;
+        g_net_rounds = nm.rounds;
         for (int i = 0; i < nn; i++) {
           int h = human_of_ent(names[i].id);
           if (h >= 0)
@@ -14236,6 +17390,8 @@ static const atm_t ATM[] = {
 };
 #define ATM_COUNT ((int)(sizeof ATM / sizeof ATM[0]))
 static const atm_t *atm_now(void) {
+  int ma = MAP_DEFS[map_id_valid(g_map_id)].atm;   // a handmade map's own sky
+  if (ma >= 0 && ma < ATM_COUNT) return &ATM[ma];
   // A Murmur-style mix: map seeds step by a constant, which would otherwise walk
   // the presets in lockstep.
   uint32_t h = g_map_seed ^ 0x9e3779b9u;
@@ -14391,7 +17547,20 @@ static const char *WORLD_FS =
   "    vec2 cp = vec2(lp.x + lp.y * 0.8, lp.z) * 24.0;\n"
   "    float knit = vnoise2(cp * 30.0);\n"
   "    float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
-  "    if (mf < -3.5) {\n"
+  "    if (mf < -6.5) {\n"            // 45-deg diamond-knurled tactical grip leather
+  "      vec3 nl = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
+  "      nl *= nl; nl *= nl; nl /= nl.x + nl.y + nl.z + 1e-4;\n"
+  "      vec3 sg = vec3(0.0);\n"
+  "      for (int i = 0; i < 3; i++) {\n"
+  "        vec2 uv = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 340.0;\n"
+  "        vec2 d2 = vec2(uv.x + uv.y, uv.x - uv.y);\n"
+  "        vec2 f2 = abs(fract(d2) - 0.5) * 2.0;\n"
+  "        sg[i] = 1.0 - smoothstep(0.56, 0.86, max(f2.x, f2.y));\n"
+  "      }\n"
+  "      float stip = dot(sg, nl);\n"
+  "      alb *= (0.64 + 0.56 * stip) * (0.94 + 0.12 * knit);\n"
+  "      rough = clamp(rough + 0.14 - 0.28 * stip, 0.24, 1.0);\n"
+  "    } else if (mf < -3.5) {\n"
   "      float gr = vnoise2(cp * 42.0) * 0.6 + vnoise2(cp * 7.0) * 0.4;\n"
   "      float blot = vnoise2(cp * 1.6);\n"
   "      if (mf < -5.5) {\n"             // painted alloy: wear opens to bare metal
@@ -14412,18 +17581,18 @@ static const char *WORLD_FS =
   "    } else if (mf < -2.5) {\n"        // lit inlay: ignores the scene's light
   "      oCol = vec4(tonemap(alb * vec3(1.0, 0.86, 0.72) * 1.05 / EXPOSURE), 1.0);\n"
   "      return;\n"
-  "    } else if (mf < -1.5) {\n"        // glove: triplanar mesh, so it never stretches
+  "    } else if (mf < -1.5) {\n"        // glove: fine tactical weave, triplanar
   "      vec3 nl = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
   "      nl *= nl; nl *= nl; nl /= nl.x + nl.y + nl.z + 1e-4;\n"
   "      vec3 hg = vec3(0.0);\n"
   "      for (int i = 0; i < 3; i++) {\n"
-  "        vec2 m2 = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 260.0;\n"
+  "        vec2 m2 = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 1080.0;\n"
   "        m2.x += floor(m2.y) * 0.5;\n"
-  "        hg[i] = 1.0 - smoothstep(0.22, 0.34, length(fract(m2) - 0.5));\n"
+  "        hg[i] = 1.0 - smoothstep(0.20, 0.36, length(fract(m2) - 0.5));\n"
   "      }\n"
   "      float hole = dot(hg, nl);\n"
-  "      float panel = smoothstep(0.45, 0.55, vnoise2(cp * 1.3 + 5.0));\n"
-  "      alb *= mix(1.0 - 0.50 * hole, 0.46, panel) * (0.86 + 0.28 * knit);\n"
+  "      alb *= (1.0 - 0.18 * hole) * (0.92 + 0.16 * knit);\n"
+  "      rough = clamp(rough + 0.06 * hole, 0.35, 1.0);\n"
   "    } else {\n"                       // sleeve: plain ripstop
   "      vec2 rg = abs(fract(cp * 1.5) - 0.5);\n"
   "      alb *= (0.86 + 0.28 * knit) * (1.0 - 0.14 * step(0.47, max(rg.x, rg.y)));\n"
@@ -14861,6 +18030,10 @@ static const char *WORLD_FS =
   "  if (uVm > 0.5) {\n"
   "    col += lit(n, V, uFill, diff, F0, rough, VM_FILL);\n"
   "    col += lit(n, V, uRim, diff, F0, rough, VM_RIM);\n"
+  // A view-space rim on top: the upper silhouette catches a cool edge in any
+  // arena, so a blade or a gauntlet stays crisp against walls of its own colour.
+  "    { float fr = 1.0 - clamp(dot(n, V), 0.0, 1.0);\n"
+  "      col += vec3(0.42, 0.48, 0.58) * fr * fr * fr * (0.35 + 0.65 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0)); }\n"
   // A shot is the brightest light source in the player's world for two ticks,
   // and it used to illuminate nothing: the additive flash ribbon was drawn in
   // front of a rifle that stayed exactly as dark as it had been the tick
@@ -15349,13 +18522,19 @@ static int g_hud_visible = 1;  // harness capture switch; menus remain visible
 // One map over the whole 48 m arena: 4096 px gives ~1.3 cm texels, which is fine
 // enough that a figure self-shadows its own arms.
 #define SHADOW_TEX    4096
-#define SHADOW_HALF   37.0f   // light-space half extent: arena + the height smear
+// Light-space half extent: the whole 48 m arena plus the height smear; on a
+// large map the same map follows the camera and spans 64 m each way (2.9 cm
+// texels), far enough that its edge sits inside the fog.
+#define SHADOW_HALF   (ARENA_HALF > ARENA_HALF_DEF ? 64.0f : 37.0f)
 #define SHADOW_DEPTH  96.0f
 // World depth range. See the comment at the main projection: 1/near sets the
 // depth resolution, and sub-millimetre nesting on a figure is only stable if the
 // buffer can still separate it at across-the-arena distance.
 #define ZNEAR         0.12f
-#define ZFAR          140.0f
+// 140 fits the 48 m arena (and keeps its frames bit-identical); a 104 m map's
+// diagonal alone is 147, so the large maps push it out. Depth precision is set by
+// ZNEAR, so the far plane costs nothing measurable either way.
+#define ZFAR          (ARENA_HALF > ARENA_HALF_DEF ? 240.0f : 140.0f)
 #define SCOPE_OCU_Z   -0.052f // gun-space z of the ocular glass
 #define SCOPE_OCU_R    0.0205f // ocular bell radius
 #define SCOPE_TUBE_R   0.0142f // main tube radius
@@ -15560,9 +18739,18 @@ static float ao_at(float y) {
 // the 1.3 m contact skirt, so 1.5 m still carries every term it has to carry —
 // and the grid is drawn twice a frame at 1280x720 on a CPU rasteriser, where
 // 13824 vertices of flat floor measured 1.45 ms/frame against 6144.
-#define GROUND_CELLS 32
+// THE CELL SIZE IS KEPT, NOT THE CELL COUNT: 32 across the 48 m arena, scaled
+// with the map, so a 104 m map's floor carries the same 1.5 m skirt detail
+// instead of stretching 32 cells over twice the ground. GROUND_CELLS_MAX sizes
+// the arrays; ground_cells() is the live count.
+#define GROUND_CELLS_MAX 80
+static int ground_cells(void) {
+  int n = (int)(32.0f * ARENA_HALF / ARENA_HALF_DEF + 0.5f);
+  return n < 32 ? 32 : n > GROUND_CELLS_MAX ? GROUND_CELLS_MAX : n;
+}
+#define GROUND_CELLS (ground_cells())
 #define GROUND_STEP  (2.0f * ARENA_HALF / (float)GROUND_CELLS)
-#define GROUND_VERTS (GROUND_CELLS * GROUND_CELLS * 6)
+#define GROUND_VERTS (GROUND_CELLS_MAX * GROUND_CELLS_MAX * 6)
 
 // What the floor is MADE OF at one point, as three independent scalars. Kept as
 // a struct rather than three parallel loops because all three want the same
@@ -15740,7 +18928,7 @@ static void mesh_quad(v3 a, v3 b, v3 c, v3 d, v3 n, v3 col) {
 // component that the interpolation cannot hide, and it costs nothing at runtime
 // because the whole thing is a bake.
 typedef struct { float tint, rough, ao; } gvert_t;
-static gvert_t g_gbake[(GROUND_CELLS + 1) * (GROUND_CELLS + 1)];
+static gvert_t g_gbake[(GROUND_CELLS_MAX + 1) * (GROUND_CELLS_MAX + 1)];
 
 static void ground_bake(void) {
   float H = ARENA_HALF;
@@ -15754,7 +18942,7 @@ static void ground_bake(void) {
       float r = WORLD_GROUND_R + 0.13f * g.drift - 0.08f * g.compact;
       g_gbake[iz * N + ix] = (gvert_t){t, r, 1.0f - 0.34f * g.skirt};
     }
-  static gvert_t tmp[(GROUND_CELLS + 1) * (GROUND_CELLS + 1)];
+  static gvert_t tmp[(GROUND_CELLS_MAX + 1) * (GROUND_CELLS_MAX + 1)];
   memcpy(tmp, g_gbake, sizeof tmp);
   for (int iz = 0; iz < N; iz++)
     for (int ix = 0; ix < N; ix++) {
@@ -15820,8 +19008,9 @@ static void mesh_build(void) {
   mat_set(WORLD_GROUND_R, 0.0f);
   ao_off();
   ground_bake();
-  for (int iz = 0; iz < GROUND_CELLS; iz++)
-    for (int ix = 0; ix < GROUND_CELLS; ix++) {
+  const int gc = GROUND_CELLS;
+  for (int iz = 0; iz < gc; iz++)
+    for (int ix = 0; ix < gc; ix++) {
       mesh_ground_vert(ix,     iz,     ground_col);
       mesh_ground_vert(ix,     iz + 1, ground_col);
       mesh_ground_vert(ix + 1, iz + 1, ground_col);
@@ -16053,6 +19242,26 @@ static float g_ui_mode = UIM_RAW;  // batch state, set by every primitive
 // 1/60 step and screenshots stay deterministic. Sim state never reads this.
 static float g_ui_dt = 1.0f / 60.0f;
 static float g_ui_time;
+
+// LAST MAN STANDING's spectator: once the local player has been down long
+// enough to see who did it (1.5 s on the presentation clock), the camera
+// follows the killer if they still stand, else the first combatant who does.
+// -1 = not spectating (other modes, alive, the death beat, nobody left).
+// Presentation only, read by the camera and the death caption alike.
+static int spec_target(void) {
+  static float dead_since = -1.0f;
+  int me = g_local_ent;
+  if (me < 0 || game_mode() != GM_LMS || g_match.over || ent_alive(me)) {
+    dead_since = -1.0f;
+    return -1;
+  }
+  if (dead_since < 0.0f || dead_since > g_ui_time) dead_since = g_ui_time;
+  if (g_ui_time - dead_since < 1.5f) return -1;
+  int lk = g_match.last_killer;
+  if (lk >= 0 && lk < MAX_ENTS && lk != me && ent_alive(lk)) return lk;
+  ENT_FOREACH(e) if (e != me && ent_alive(e)) return e;
+  return -1;
+}
 static float ui_smooth(float cur, float target, float speed) {
   return target + (cur - target) * expf(-speed * g_ui_dt);
 }
@@ -17265,9 +20474,13 @@ static void ui_home_cards(float vw, float vh) {
   int wc = lp ? lp->wp.cur : WPN_AR;
   // Descriptions, not trademarks. The file's own reference notes name the real
   // hardware; a shipped screen says what the thing IS.
-  static const char *const WNAME[WPN_COUNT] = {"ASSAULT RIFLE", "SNIPER RIFLE"};
+  static const char *const WNAME[WPN_COUNT] = {"ASSAULT RIFLE", "SNIPER RIFLE",
+                                               "SIDEARM", "COMBAT KNIFE", "FRAG GRENADE"};
   static const char *const WSPEC[WPN_COUNT] = {"5.56 x 45   /   FULL AUTO",
-                                               ".338 MAGNUM   /   BOLT ACTION"};
+                                               ".338 MAGNUM   /   BOLT ACTION",
+                                               "9 x 19   /   SEMI AUTO",
+                                               "FIXED BLADE   /   SLASH + GUARD",
+                                               "3.5 S FUSE   /   9 M BLAST"};
   // The cards live in the corner the rail does not own, and at 4:3 that corner
   // is 160 units narrower than at 16:9 — enough that a card sized for a
   // widescreen monitor lands ON the QUIT tile. Cleared against the rail's own
@@ -17354,12 +20567,17 @@ static void ui_home(int click, float cx, float cy) {
   // ASCII only: the HARDLINE atlas is printable ASCII plus its icon block, so
   // a typographic middot is two bytes of nothing and the caption silently
   // loses its separators.
-  static const char *const DIFF[3] = {"EASY", "NORMAL", "HARD"};
-  char sub[48];
-  snprintf(sub, sizeof sub, "DEATHMATCH / %d BOT%s / %s / %d FRAGS",
-           g_cfg.sp_bots, g_cfg.sp_bots == 1 ? "" : "S",
-           DIFF[g_cfg.sp_diff < 0 || g_cfg.sp_diff > 2 ? 1 : g_cfg.sp_diff],
-           g_cfg.sp_frag);
+  char sub[64];
+  int gm = g_cfg.sp_mode >= 0 && g_cfg.sp_mode < GM_COUNT ? g_cfg.sp_mode : GM_DM;
+  char goal[20];
+  if (gm == GM_GUN)      snprintf(goal, sizeof goal, "%d RUNGS", GG_LEVELS);
+  else if (gm == GM_LMS) snprintf(goal, sizeof goal, "%d ROUNDS", g_cfg.sp_rounds);
+  else                   snprintf(goal, sizeof goal, "%d FRAGS", g_cfg.sp_frag);
+  // Mode, map, opponents, goal: difficulty lives on the page behind the tile,
+  // because five fields no longer fit the caption's width.
+  int mp = g_cfg.sp_map >= 0 && g_cfg.sp_map <= MAP_ROTATE ? g_cfg.sp_map : 0;
+  snprintf(sub, sizeof sub, "%s / %s / %d BOT%s / %s", GM_NAMES[gm], MAP_PICK_NAMES[mp],
+           g_cfg.sp_bots, g_cfg.sp_bots == 1 ? "" : "S", goal);
   // TWO DESTINATIONS, AND NEITHER OF THEM IS "GO BACK". The rail used to open
   // with a PLAY/RESUME tile above ONLINE and MATCH, which is three ways of
   // saying "a session" stacked on top of each other — and the top one meant
@@ -17697,13 +20915,13 @@ static void ui_menu(void) {
   // title when the player changes page.
   #define UI_FOOTER_H 24.0f
   #define UI_PANEL_MAX 348.0f
-  #define UI_BIND_ROW  14.0f   // see the keyboard binding page's loop
+  #define UI_BIND_ROW  11.8f   // see the keyboard binding page's loop
   // Self-sizing across FRAMES now, not within one: a rounded panel cannot be
   // bottom-patched the way the old flat quad was (ui_rect_bottom rewrote three
   // vertices; ui_panel is a hundred). The height cache is per page and the
   // layout is stable per state, so the worst case is one frame of lag after a
   // row appears — invisible, and the hit-tests never read ph.
-  static float ph_page[UI_PAGE_COUNT] = {276, 177, 319, 344, 344};
+  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344};
   ui_page_t drawn_page = g_ui_page;
   float pw = 340, px = g_ui_vw * 0.5f - pw * 0.5f;
   float ph = ph_page[drawn_page];
@@ -17757,11 +20975,10 @@ static void ui_menu(void) {
   // header and Back/hint block do not fit a 360-unit screen at 15, and what
   // that looked like was the last bind drawn straight through the permanent
   // version line — both illegible, on the row a player is most likely to be
-  // rebinding last. 14 fits both bind pages with the tightest one (GAMEPAD ->
-  // BUTTONS, which also carries the local selector) landing 1 px clear.
+  // rebinding last. 11.8 fits both bind pages with the five weapon slots.
   for (int i = 0; i < IN_COUNT; i++, y += UI_BIND_ROW) {
     // zebra bridges the dead middle between label and key chip
-    if ((i & 1) == 0) ui_rect(px + 12, y, pw - 24, 13, C_BONE, 0.03f);
+    if ((i & 1) == 0) ui_rect(px + 12, y, pw - 24, UI_BIND_ROW, C_BONE, 0.03f);
     int armed = g_ui_rebind == i && !g_ui_rebind_pad;
     const char *tok = armed ? "PRESS KEY" : g_cfg.bind[i];
     if (ui_pill(ACTION_DEF[i].label, tok, px, pw, y, armed, 0, click, cx, cy)) {
@@ -17938,7 +21155,7 @@ static void ui_menu(void) {
       // broken screen, and the section title says where movement actually is.
       static const int PAD_ROW[IN_COUNT] = {
         IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R, IN_FIRE, IN_ADS, IN_RELOAD,
-        IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SCORE, IN_VIEW,
+        IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SCORE, IN_VIEW,
         IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT,
       };
       // The pad status belongs on THIS page too — a player arming a PRESS BTN
@@ -17957,7 +21174,7 @@ static void ui_menu(void) {
       // screen. Hand-binding movement buttons stays possible in the config.
       for (int k = 0; k < IN_COUNT - 4; k++, y += UI_BIND_ROW) {
         int i = PAD_ROW[k];
-        if ((k & 1) == 0) ui_rect(px + 12, y, pw - 24, 13, C_BONE, 0.03f);
+        if ((k & 1) == 0) ui_rect(px + 12, y, pw - 24, UI_BIND_ROW, C_BONE, 0.03f);
         int armed = g_ui_rebind == i && g_ui_rebind_pad;
         const char *tok = armed ? "PRESS BTN" : pad_disp(g_cfg.padbind[i]);
         if (ui_pill(ACTION_DEF[i].label, tok, px, pw, y, armed, 0, click, cx, cy)) {
@@ -18032,14 +21249,20 @@ static void ui_menu(void) {
     y += 24;
     ui_section("RULES", px, pw, y);
     y += 14;
-    ui_text("MODE", px + 16, y + 3, 1, C_TEXT, 1);
-    {  // every enum value wears the chip, even a read-only one
-      float mw2 = ui_text_width("DEATHMATCH", 1) + 16;
-      ui_rrect_c(px + pw - 16 - mw2, y + 1, mw2, 12, 0, C4(1, 1, 1, 0.07f),
-                 C4(1, 1, 1, 0.05f));
-      ui_textb("DEATHMATCH", px + pw - 16 - mw2 + 8, y + 4, 1, C_BONE, 1);
-    }
+    // MODE latches at the next (re)start: changing the rules of a match in
+    // progress would hand somebody a promotion or a round they never earned.
+    // So the row says so while the choice is still pending, right under the
+    // RESTART button that applies it.
+    ui_cycle("MODE", GM_NAMES, GM_COUNT, &g_cfg.sp_mode, px, pw, y, click, cx, cy);
     y += 15;
+    // MAP latches the same way. ROTATE steps to the next map every match.
+    ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
+    y += 15;
+    if (!g_home && !g_online &&
+        (g_cfg.sp_mode != g_match.mode || g_cfg.sp_map != g_map_pick)) {
+      ui_text("APPLIES ON RESTART", px + 16, y + 1, 0.9f, C_BLAZE, 0.9f);
+      y += 12;
+    }
     {
       float v = (float)g_cfg.sp_bots;
       y = ui_param_row(&SP_BOTS_DEF, &v, DRAG_BOTS, px, y, click, cx, cy);
@@ -18048,10 +21271,22 @@ static void ui_menu(void) {
     static const char *const DIFF_OPTS[3] = {"EASY", "NORMAL", "HARD"};
     ui_cycle("DIFFICULTY", DIFF_OPTS, 3, &g_cfg.sp_diff, px, pw, y, click, cx, cy);
     y += 15;
-    {
+    // The win condition is the mode's: frags, rounds, or (GUN GAME) the ladder,
+    // which has no knob. The rounds slider borrows DRAG_FRAG — the two rows are
+    // never on screen together.
+    if (g_cfg.sp_mode == GM_LMS) {
+      float v = (float)g_cfg.sp_rounds;
+      y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
+      g_cfg.sp_rounds = (int)v;
+    } else if (g_cfg.sp_mode != GM_GUN) {
       float v = (float)g_cfg.sp_frag;
       y = ui_param_row(&SP_FRAG_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
       g_cfg.sp_frag = (int)v;
+    } else {
+      ui_text("WIN", px + 16, y + 3, 1, C_TEXT, 1);
+      const char *gw = "KNIFE KILL ON LAST RUNG";
+      ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
+      y += 15;
     }
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
@@ -18280,11 +21515,18 @@ static void ui_scoreboard(void) {
   int n = 0;
   int idx[MAX_ENTS];
   ENT_FOREACH(e) idx[n++] = e;
-  for (int i = 1; i < n; i++) {  // insertion sort: kills desc, deaths asc
+  // The mode's own number ranks first where it IS the score: the GUN GAME
+  // rung, LAST MAN STANDING rounds. A deathmatch board is unchanged.
+  int gm = game_mode();
+  int mcol = gm == GM_GUN || gm == GM_LMS;
+  const int *ms = g_match.mscore;
+  for (int i = 1; i < n; i++) {  // insertion sort: [mode desc,] kills desc, deaths asc
     int v = idx[i], j = i;
-    while (j > 0 && (g_match.kills[idx[j - 1]] < g_match.kills[v] ||
-                     (g_match.kills[idx[j - 1]] == g_match.kills[v] &&
-                      g_match.deaths[idx[j - 1]] > g_match.deaths[v]))) {
+    while (j > 0 && ((mcol && ms[idx[j - 1]] < ms[v]) ||
+                     ((!mcol || ms[idx[j - 1]] == ms[v]) &&
+                      (g_match.kills[idx[j - 1]] < g_match.kills[v] ||
+                       (g_match.kills[idx[j - 1]] == g_match.kills[v] &&
+                        g_match.deaths[idx[j - 1]] > g_match.deaths[v]))))) {
       idx[j] = idx[j - 1];
       j--;
     }
@@ -18305,7 +21547,7 @@ static void ui_scoreboard(void) {
   // Online the panel grows a PING column (the row data arrives via NP_SCORES
   // at 4 Hz); offline the layout stays byte-identical to the historical board.
   int show_ping = g_online;
-  float pw = show_ping ? 336 : 300,
+  float pw = (show_ping ? 336 : 300) + (mcol ? 40 : 0),
         ph = 42 + (float)shown * 11 + 8 + (hidden ? 10.0f : 0.0f);
   float px = g_ui_vw * 0.5f - pw * 0.5f;
   // Centred on the REAL virtual height — 180 is only the centre when the
@@ -18317,13 +21559,15 @@ static void ui_scoreboard(void) {
   // ONE PROCESS, MANY ARENAS: online the board says WHICH one, because
   // "am I in the same arena as my friend" is otherwise unanswerable from
   // inside the game — every lobby shares the host and the port.
-  char title[32];
+  char title[48];
   if (g_online && g_cl.lobbies > 1)
-    snprintf(title, sizeof title, "DEATHMATCH \x05 ARENA %d/%d",
+    snprintf(title, sizeof title, "%s \x05 %s \x05 %d/%d", GM_NAMES[gm],
+             MAP_DEFS[map_id_valid(g_map_id)].name,
              (g_cl.lobby + 1) & 31, g_cl.lobbies & 31);
-  else snprintf(title, sizeof title, "DEATHMATCH");
+  else snprintf(title, sizeof title, "%s \x05 %s", GM_NAMES[gm],
+                MAP_DEFS[map_id_valid(g_map_id)].name);
   ui_textb(title, px + 12, py + 9, 1.2f, C_BONE, 1);
-  char sub[28];
+  char sub[32];
   // "N PLAYERS · M BOTS" makes 1-human-vs-7-bots legible instead of sad:
   // the player knows exactly what he fights, and a second human arriving is an
   // event. In a networked session the instance code sits on the line below
@@ -18331,6 +21575,8 @@ static void ui_scoreboard(void) {
   int nh = 0, nb = 0;
   ENT_FOREACH(e) { if (human_of_ent(e) >= 0) nh++; else nb++; }
   if (nh > 1) snprintf(sub, sizeof sub, "%d PLAYERS \x05 %d BOTS", nh & 63, nb & 63);
+  else if (gm == GM_GUN) snprintf(sub, sizeof sub, "KNIFE KILL WINS");
+  else if (gm == GM_LMS) snprintf(sub, sizeof sub, "FIRST TO %d ROUNDS", mode_round_goal());
   else        snprintf(sub, sizeof sub, "FIRST TO %d",
                        g_online && g_net_fraglimit ? g_net_fraglimit
                                                    : g_cfg.sp_frag);
@@ -18355,6 +21601,11 @@ static void ui_scoreboard(void) {
   if (show_ping)
     ui_text_ex("PING", xp - ui_text_width_tr("PING", 0.85f, 0.8f), y, 0.85f,
                TXT_REG, 0.8f, C4(C_HAZE, 1));
+  float xm = px + pw - 12;
+  const char *mh = gm == GM_GUN ? "RUNG" : "RND";
+  if (mcol)
+    ui_text_ex(mh, xm - ui_text_width_tr(mh, 0.85f, 0.8f), y, 0.85f, TXT_REG, 0.8f,
+               C4(C_BLAZE, 1));
   y += 10;
   // A human is MARKED, not a bot: there are one or two humans and twenty
   // bot names, so the rarer mark reads as a badge — the chevron glyph, tinted;
@@ -18393,8 +21644,11 @@ static void ui_scoreboard(void) {
     snprintf(buf, sizeof buf, "%.1f", (double)g_match.kills[e] /
              (double)(g_match.deaths[e] ? g_match.deaths[e] : 1));
     ui_text(buf, xkd - ui_text_width(buf, 1), y, 1, C_HAZE, 1);
+    // Capped: one grenade can wound three people, so splash-heavy play would
+    // otherwise read past 100%.
     snprintf(buf, sizeof buf, "%d%%", g_match.shots[e] ?
-             g_match.hits[e] * 100 / g_match.shots[e] : 0);
+             (g_match.hits[e] >= g_match.shots[e] ? 100
+              : g_match.hits[e] * 100 / g_match.shots[e]) : 0);
     ui_text(buf, xa - ui_text_width(buf, 1), y, 1, C_HAZE, 1);
     if (show_ping) {
       // Humans carry a measured conn RTT; bots are simulated in-process and a
@@ -18402,6 +21656,11 @@ static void ui_scoreboard(void) {
       if (is_human) snprintf(buf, sizeof buf, "%d", g_net_ping[e]);
       else          snprintf(buf, sizeof buf, "-");
       ui_text(buf, xp - ui_text_width(buf, 1), y, 1, C_HAZE, 1);
+    }
+    if (mcol) {
+      if (gm == GM_GUN) snprintf(buf, sizeof buf, "%d/%d", gg_level(e) + 1, GG_LEVELS);
+      else              snprintf(buf, sizeof buf, "%d", g_match.mscore[e]);
+      ui_textb(buf, xm - ui_text_width(buf, 1), y, 1, C_BONE, 1);
     }
     y += 11;
   }
@@ -18608,7 +21867,21 @@ static void ui_menu_backdrop(void) {
 static_assert(PARTS_SKID_LO < MAX_PARTICLES, "skid region must be inside the pool");
 #define MAX_MARKS     64
 #define MAX_FLASHES   8
-#define TRACER_TICKS  8
+#define TRACER_TICKS  19     // ceiling on a bolt's life: the arena diagonal
+// LONG, AND PROPORTIONAL TO THE SHOT, because the shooter watches it from behind.
+// Past the first couple of metres a round runs nearly down the view axis: filmed,
+// a fixed 9 m streak on a 17 m shot spanned 25 px beside the crosshair and read as
+// nothing. So the nose flies out from the barrel, the tail lets go only when the
+// nose is most of the way there, and then it runs in to the impact. Read from the
+// gun: a streak leaving it, reaching the target, and collapsing into the hit.
+#define TRACER_LEN    9.0f   // the shortest streak, metres
+#define TRACER_SPAN   0.85f  // ...and as a fraction of the shot
+// THE BOLT IS SLOWED FOR THE EYE. At a true 900 m/s a 17 m shot is over in 2.3
+// ticks, which is at most one rendered frame at 60 Hz: filmed at that speed the
+// round simply never appeared. 3.4 m/tick (408 m/s) is what a tracer looks like
+// to a human, and the pistol runs a little under it. Nothing in the sim reads
+// this; the hit has already been decided on the same line.
+#define TRACER_V      3.4f
 #define FLASH_TICKS   3
 // 14 and 26, not 10 and 20 (117 ms / 217 ms). The marker is decremented on the
 // tick it is armed, so 10 rendered as 9 ticks = 75 ms — three frames at 60 fps
@@ -18825,7 +22098,16 @@ static float fx_range_k(float d) {
 #define KILLFEED_TICKS 480   // 4 s on screen, the last 0.5 s fading
 #define DMG_TICKS      36    // incoming-damage flash
 
-typedef struct { v3 a, b; int life, src; } tracer_t;
+// A round in flight, for the eye. The sim is hitscan, so the impact already
+// happened; this is the bolt that visibly crosses the same line at the weapon's
+// display speed (TRACER_V). `a` is fixed in the WORLD once anchored: a bullet does not
+// stay attached to the gun that fired it, however the shooter turns afterwards.
+typedef struct {
+  v3 a, b, d;       // launch point, end point, shot direction
+  int life, life0, src, wpn;
+  int anchor;       // still to be placed on the muzzle by the next rendered frame
+  float v;          // metres per tick
+} tracer_t;
 // `fresh` is a render latch, not a lifetime: it marks a flash no frame has
 // shown yet and is cleared by the first draw. Tick counting alone cannot
 // survive tick BATCHING — app_frame runs every due tick and renders once, so
@@ -18834,7 +22116,7 @@ typedef struct { v3 a, b; int life, src; } tracer_t;
 // exactly one full-strength frame per shot at any frame rate; `t0` bounds it
 // (12 ticks) so a harness script that fires and only screenshots much later
 // does not get a bright star from a long-dead shot.
-typedef struct { v3 pos, dir; int life, src; long t0; uint32_t seed; int fresh; } flash_t;
+typedef struct { v3 pos, dir; int life, src; long t0; uint32_t seed; int fresh, wpn; } flash_t;
 // kind: 0 = impact spark, 1 = skid dust, 2 = skid spark, 3 = contact flare.
 // `life0` is the spawn life, because the fade has to normalise against the
 // particle's OWN lifetime once lifetimes vary — a "hero" skid spark outlives a
@@ -19218,6 +22500,154 @@ static void mark_stamp(v3 at, v3 n, int solid) {
   if (!merged) g_mark_head = (g_mark_head + 1) % MAX_MARKS;
 }
 
+// THE BLAST'S PICTURE. Everything else in the FX pass is additive, which can only
+// add light: that is right for a fireball and useless for smoke, which is dark. So
+// puffs are drawn in a second pass that MULTIPLIES the frame, white at the rim (no
+// change) and the puff's density at the centre, which gives soft dark smoke with no
+// alpha channel anywhere. Clods are the same thing, small, heavy and dense.
+#define MAX_PUFFS 1100
+#define MAX_SCORCH 14
+#define MAX_FIRE  64
+#define MAX_SHOCK 6
+#define MAX_BRANDS 27
+#define SHOCK_LIFE 26
+typedef struct { v3 pos, vel; float r0, r1, dens, grav, drag; int life, life0; float soot; } puff_t;
+typedef struct { v3 pos; float r; int life; } scorch_t;
+typedef struct { v3 pos, vel; float r; int life, life0, dull; } fire_t;
+typedef struct { v3 pos; float gy; int life, open; uint32_t seed; } shock_t;
+// A brand: a burning scrap on a real arc, drawing its own line of smoke across the sky.
+typedef struct { v3 pos, vel; int life, life0; } brand_t;
+static puff_t   g_puffs[MAX_PUFFS];
+static scorch_t g_scorch[MAX_SCORCH];
+static fire_t   g_fire[MAX_FIRE];
+static shock_t  g_shock[MAX_SHOCK];
+static brand_t  g_brands[MAX_BRANDS];
+static int      g_shock_at;
+static float    g_shake, g_blast_light;
+static v3       g_blast_p;
+static int      g_scorch_at;
+
+// Spoons in the air: presentation only, tumbling once and gone.
+#define MAX_SPOONS 8
+typedef struct { v3 pos, prev, vel, axis; float a; int life; } spoon_t;
+static spoon_t g_spoons[MAX_SPOONS];
+
+static void puff_add(v3 pos, v3 vel, float r0, float r1, float dens, float grav,
+                     float drag, int life, float soot) {
+  for (int i = 0; i < MAX_PUFFS; i++)
+    if (g_puffs[i].life <= 0) {
+      g_puffs[i] = (puff_t){pos, vel, r0, r1, dens, grav, drag, life, life, soot};
+      return;
+    }
+}
+
+static void vfx_blast(v3 at, int open) {
+  #define RV(lo, hi) rng_rangef(&g_rng_vfx, lo, hi)
+  g_blast_p = v3_add(at, (v3){{0, 0.5f, 0}});
+  g_blast_light = 1.0f;
+  // The camera takes the shock front, harder the closer it is.
+  float cd = v3_len(v3_sub(g_listen, at));
+  g_shake = fmaxf(g_shake, f_clamp(1.0f - cd / 36.0f, 0.0f, 1.0f));
+  fx_flare(v3_add(at, (v3){{0, 0.35f, 0}}), 1.15f, 5);
+  // Everything that rises from the ground rises from THIS ground: a charge bursts
+  // on its way down as often as at rest, and the cloud must still have a root.
+  float gy = rag_support(at);
+  v3 g0 = {{at.x, gy, at.z}};
+  // The fireball: a hard, brief burst, as a fragmentation charge's is.
+  for (int i = 0, n = 0; i < MAX_FIRE && n < 16; i++)
+    if (g_fire[i].life <= 0) {
+      v3 d = {{RV(-1, 1), RV(0.1f, 1.2f), RV(-1, 1)}};
+      g_fire[i] = (fire_t){v3_add(at, v3_scale(d, 0.30f)), v3_scale(d, RV(0.012f, 0.045f)),
+                           RV(0.75f, 1.9f), (int)RV(10, 26), 0, 0};
+      g_fire[i].life0 = g_fire[i].life;
+      n++;
+    }
+  // The heart of it: dull fire that stays alight inside the smoke as it rises.
+  for (int i = 0, n = 0; i < MAX_FIRE && n < 11; i++)
+    if (g_fire[i].life <= 0) {
+      v3 p = {{at.x + RV(-1.3f, 1.3f), gy + RV(0.3f, 1.9f), at.z + RV(-1.3f, 1.3f)}};
+      g_fire[i] = (fire_t){p, (v3){{RV(-0.003f, 0.003f), RV(0.004f, 0.012f), RV(-0.003f, 0.003f)}},
+                           RV(0.7f, 1.5f), (int)RV(50, 125), 0, 1};
+      g_fire[i].life0 = g_fire[i].life;
+      n++;
+    }
+  // The shock front, seen: a shell of bent air, and the rays of the first instant.
+  g_shock[g_shock_at] = (shock_t){v3_add(at, (v3){{0, 0.35f, 0}}), gy, SHOCK_LIFE, open,
+                                  (uint32_t)(g_tick * 2654435761u)};
+  g_shock_at = (g_shock_at + 1) % MAX_SHOCK;
+  // Burning scraps thrown high, each trailing smoke.
+  for (int i = 0, n = 0; i < MAX_BRANDS && n < 9; i++)
+    if (g_brands[i].life <= 0) {
+      float a = (float)n / 9.0f * F_TAU + RV(-0.3f, 0.3f), sp = RV(2.5f, 7.5f);
+      int l = (int)RV(55, 110);
+      g_brands[i] = (brand_t){v3_add(g0, (v3){{0, 0.3f, 0}}),
+                              (v3){{cosf(a) * sp, RV(6.5f, 13.0f), sinf(a) * sp}}, l, l};
+      n++;
+    }
+  // Fragments, fast and flat and gone in a tenth of a second, then the embers:
+  // slower hot grit that hangs, arcs over and dies on the way down.
+  impact_free_slot(80);
+  for (int n = 0, i = 0; i < MAX_PARTICLES && n < 78; i++)
+    if (g_parts[i].life <= 0) {
+      int ember = n >= 44, life = ember ? (int)RV(50, 120) : 15;
+      float a = RV(0, F_TAU), up = ember ? RV(0.5f, 1.3f) : RV(0.04f, 0.62f);
+      float sp = ember ? RV(3.0f, 9.0f) : RV(16.0f, 34.0f);
+      g_parts[i] = (particle_t){.pos = v3_add(at, (v3){{0, 0.10f, 0}}),
+          .vel = {{cosf(a) * sp, up * sp, sinf(a) * sp}}, .y0 = gy,
+          .sz = ember ? RV(0.40f, 0.80f) : RV(0.7f, 1.4f),
+          .life = life, .life0 = life, .kind = 2};
+      n++;
+    }
+  if (open) {
+    // The ground ring: the shock front drags dust out flat along the floor.
+    for (int i = 0; i < 40; i++) {
+      float a = (float)i / 40.0f * F_TAU + RV(-0.1f, 0.1f), sp = RV(9.0f, 17.0f);
+      puff_add(v3_add(g0, (v3){{cosf(a) * 0.4f, 0.14f, sinf(a) * 0.4f}}),
+               (v3){{cosf(a) * sp, RV(0.2f, 0.9f), sinf(a) * sp}},
+               0.30f, RV(1.2f, 2.0f), 0.16f, -0.02f, 0.950f, (int)RV(160, 340), 0.0f);
+    }
+    // The spray: dirt jets thrown up and out of the crater, falling back as dust.
+    for (int i = 0; i < 16; i++) {
+      float a = RV(0, F_TAU), sp = RV(1.0f, 5.0f);
+      puff_add(v3_add(g0, (v3){{0, 0.15f, 0}}), (v3){{cosf(a) * sp, RV(7.0f, 14.0f), sinf(a) * sp}},
+               0.16f, RV(0.8f, 1.3f), 0.28f, 5.0f, 0.982f, (int)RV(100, 200), 0.0f);
+    }
+  }
+  // Thrown earth: heavy clods on real arcs.
+  for (int i = 0; i < 46; i++) {
+    float a = RV(0, F_TAU), sp = RV(2.5f, 10.0f), up = RV(3.0f, 11.5f);
+    float r = RV(0.025f, 0.085f);
+    puff_add(v3_add(g0, (v3){{0, 0.12f, 0}}), (v3){{cosf(a) * sp, up, sinf(a) * sp}},
+             r, r, 0.62f, 9.81f, 0.999f, (int)RV(55, 110), 0.0f);
+  }
+  // The body of the cloud: smoke punched out in a few uneven lobes, stopped dead by
+  // the air within a few metres, then swelling and climbing slowly on its own heat.
+  // Lobes are what make it billow: one even burst reads as a balloon.
+  for (int l = 0; l < 7; l++) {
+    float la = RV(0, F_TAU), le = RV(0.08f, 1.2f), ls = RV(2.0f, 8.5f);
+    v3 ld = {{cosf(la) * cosf(le), sinf(le), sinf(la) * cosf(le)}};
+    for (int i = 0; i < 8; i++) {
+      v3 d = v3_norm(v3_add(ld, (v3){{RV(-0.4f, 0.4f), RV(-0.25f, 0.4f), RV(-0.4f, 0.4f)}}));
+      puff_add(v3_add(g0, (v3){{d.x * 0.4f, 0.35f + fabsf(d.y) * 0.4f, d.z * 0.4f}}),
+               v3_scale(d, ls * RV(0.6f, 1.1f)), RV(0.35f, 0.7f), RV(1.1f, 2.5f),
+               RV(0.06f, 0.14f), RV(-0.9f, -0.2f), 0.985f, (int)RV(500, 1400), RV(0.3f, 0.8f));
+    }
+  }
+  // What stays: a wide thin haze on the floor, long after the bang.
+  if (open)
+    for (int i = 0; i < 16; i++) {
+      float a = RV(0, F_TAU), rr = RV(0.5f, 3.0f);
+      puff_add(v3_add(g0, (v3){{cosf(a) * rr, RV(0.4f, 1.2f), sinf(a) * rr}}),
+               (v3){{cosf(a) * 0.5f, 0.05f, sinf(a) * 0.5f}},
+               1.2f, RV(3.5f, 5.5f), 0.055f, -0.04f, 0.995f, (int)RV(1400, 2300), 0.3f);
+    }
+  if (open && gy < 0.05f) {
+    g_scorch[g_scorch_at] = (scorch_t){at, RV(2.0f, 2.7f), 7200};
+    g_scorch_at = (g_scorch_at + 1) % MAX_SCORCH;
+  }
+  #undef RV
+}
+
 static void vfx_on_event(const event_t *e) {
   switch (e->type) {
   case EV_FIRE: {
@@ -19286,7 +22716,16 @@ static void vfx_on_event(const event_t *e) {
       }
       if (slot < 0 && e->src == g_local_ent) slot = oldest;
       if (slot >= 0)
-        g_tracers[slot] = (tracer_t){muz, e->a, TRACER_TICKS, e->src};
+      {
+        float mv = TRACER_V * (e->wpn == WPN_PT ? 0.8f : 1.0f);
+        float sl = v3_len(v3_sub(e->a, muz));
+        float fly = (sl + fmaxf(TRACER_LEN, TRACER_SPAN * sl)) / mv;
+        int life = (int)fly + 2;
+        life = life < 3 ? 3 : life > TRACER_TICKS ? TRACER_TICKS : life;
+        g_tracers[slot] = (tracer_t){.a = muz, .b = e->a, .d = e->b, .life = life,
+                                     .life0 = life, .src = e->src, .wpn = e->wpn,
+                                     .anchor = 1, .v = mv};
+      }
     }
     if (e->src == g_local_ent) {
       g_muzzle_t = 3;
@@ -19300,7 +22739,7 @@ static void vfx_on_event(const event_t *e) {
     for (int i = 0; i < MAX_FLASHES; i++)
       if (g_flashes[i].life <= 0) {
         g_flashes[i] = (flash_t){muz, e->b, FLASH_TICKS, e->src, g_tick,
-                                 (uint32_t)(e->i * 61 + e->src * 7), 1};
+                                 (uint32_t)(e->i * 61 + e->src * 7), 1, e->wpn};
         break;
       }
     break;
@@ -19498,6 +22937,33 @@ static void vfx_on_event(const event_t *e) {
   case EV_DRYFIRE:
   case EV_RELOAD:
   case EV_RELOAD_CANCEL:
+  case EV_MELEE: break;
+  case EV_NADE:
+    if (!e->k && g_online) nade_add(e->a, e->b, e->i, e->src);
+    if (e->k == 2)
+      for (int i = 0; i < MAX_SPOONS; i++)
+        if (g_spoons[i].life <= 0) {
+          g_spoons[i] = (spoon_t){e->a, e->a, e->b, v3_norm((v3){{0.6f, 0.2f, 0.7f}}), 0.0f, 150};
+          break;
+        }
+    break;
+  case EV_BLAST:
+    vfx_blast(e->a, e->g > 0.5f);
+    if (g_online)                           // the local copy is spent
+      for (int i = 0; i < MAX_NADES; i++)
+        if (g_nades[i].fuse > 0 && v3_len(v3_sub(g_nades[i].pos, e->a)) < 2.5f)
+          g_nades[i].fuse = 0;
+    break;
+  case EV_BLOCK: {
+    // Steel on steel: a hard white star where the blades met. On a client this
+    // is also how the two men learn what the server decided, since the guard's
+    // jolt and the attacker's stagger are not in the snapshot.
+    fx_flare(e->a, e->k ? 0.11f : 0.07f, 5);
+    int vh = human_of_ent(e->dst), ah = human_of_ent(e->src);
+    if (vh >= 0) g_players[vh].wp.block_k = e->k ? 1.0f : 0.6f;
+    if (ah >= 0 && e->k) g_players[ah].wp.stagger_t = MELEE_STAGGER_TICKS;
+    break;
+  }
   case EV_RESPAWN:
   case EV_STEP:
   case EV_LAND:
@@ -19904,6 +23370,63 @@ static void vfx_tick(void) {
     if (g_tracers[i].life > 0) g_tracers[i].life--;
   for (int i = 0; i < MAX_FLASHES; i++)
     if (g_flashes[i].life > 0) g_flashes[i].life--;
+  if (g_online) nade_tick(0);
+  for (int i = 0; i < MAX_SPOONS; i++)
+    if (g_spoons[i].life > 0) {
+      spoon_t *q = &g_spoons[i];
+      q->life--;
+      q->prev = q->pos;
+      q->vel.y -= 9.81f * TICK_DT;
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      q->a += 0.42f;
+      if (q->pos.y < 0.03f) {
+        q->pos.y = 0.03f;
+        q->vel = (v3){{q->vel.x * 0.4f, -q->vel.y * 0.28f, q->vel.z * 0.4f}};
+      }
+    }
+  g_shake *= expf(-4.2f * TICK_DT);
+  for (int i = 0; i < MAX_SHOCK; i++)
+    if (g_shock[i].life > 0) g_shock[i].life--;
+  for (int i = 0; i < MAX_BRANDS; i++)
+    if (g_brands[i].life > 0) {
+      brand_t *q = &g_brands[i];
+      q->life--;
+      q->vel.y -= 9.81f * TICK_DT;
+      q->vel = v3_scale(q->vel, 0.996f);
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      if (q->pos.y < rag_support(q->pos)) q->life = 0;
+      else if ((g_tick & 3) == 0) {
+        float f = (float)q->life / (float)q->life0;
+        puff_add(q->pos, v3_scale(q->vel, 0.06f), 0.09f, rng_rangef(&g_rng_vfx, 0.35f, 0.75f),
+                 0.10f + 0.16f * f, -0.5f, 0.985f, (int)rng_rangef(&g_rng_vfx, 180, 420), 0.8f);
+      }
+    }
+  g_blast_light *= expf(-12.0f * TICK_DT);
+  for (int i = 0; i < MAX_FIRE; i++)
+    if (g_fire[i].life > 0) {
+      g_fire[i].life--;
+      g_fire[i].pos = v3_add(g_fire[i].pos, g_fire[i].vel);
+    }
+  for (int i = 0; i < MAX_SCORCH; i++)
+    if (g_scorch[i].life > 0) g_scorch[i].life--;
+  for (int i = 0; i < MAX_PUFFS; i++)
+    if (g_puffs[i].life > 0) {
+      puff_t *q = &g_puffs[i];
+      q->life--;
+      q->vel.y -= q->grav * TICK_DT;
+      if (q->r1 >= 0.2f) {
+        // Smoke rolls: a little eddy that depends on where it is, and a light wind.
+        q->vel.x += (0.55f + sinf(q->pos.y * 1.3f + q->pos.z * 0.7f + (float)i) * 1.5f) * TICK_DT;
+        q->vel.z += cosf(q->pos.y * 1.1f + q->pos.x * 0.7f + (float)i * 1.7f) * 1.5f * TICK_DT;
+      }
+      q->vel = v3_scale(q->vel, q->drag);
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      if (q->pos.y < q->r0 * 0.5f) {
+        q->pos.y = q->r0 * 0.5f;
+        if (q->r1 >= 0.2f) q->vel.y = 0.0f;             // dust runs on along the floor
+        else q->vel = (v3){{0, 0, 0}};
+      }
+    }
   for (int i = 0; i < MAX_PARTICLES; i++)
     if (g_parts[i].life > 0) {
       particle_t *q = &g_parts[i];
@@ -20061,6 +23584,14 @@ static void vfx_tick(void) {
 static void vfx_match_reset(void) {
   memset(g_feed, 0, sizeof g_feed);
   memset(g_tracers, 0, sizeof g_tracers);
+  memset(g_puffs, 0, sizeof g_puffs);
+  memset(g_spoons, 0, sizeof g_spoons);
+  memset(g_scorch, 0, sizeof g_scorch);
+  memset(g_fire, 0, sizeof g_fire);
+  memset(g_shock, 0, sizeof g_shock);
+  memset(g_brands, 0, sizeof g_brands);
+  memset(g_nades, 0, sizeof g_nades);
+  g_shake = g_blast_light = 0.0f;
   memset(g_flashes, 0, sizeof g_flashes);
   g_muzzle_fresh = 0;
   memset(g_parts, 0, sizeof g_parts);
@@ -20280,7 +23811,7 @@ static void scene_quad(v3 a, v3 b, v3 c, v3 d, v3 n, v3 col) {
 // in the figure's OWN frame (x right, y up from the feet, z forward) in mm, so
 // every edit is a checked delta against ANSUR II rather than a guess.
 // Off by default: one predictable branch per part, nothing per vertex.
-#define PROBE_MAX 64
+#define PROBE_MAX 96
 typedef struct { const char *name; int v0, v1; } probe_t;
 static probe_t g_probe[PROBE_MAX];
 static int g_nprobe, g_probe_on;
@@ -22306,8 +25837,11 @@ static void fig_tube(v3 a, v3 b, float rox, float roz, float rix, float riz,
 
 // Where the trigger hand grips, in gun-local space: what a third-person figure
 // anchors the model to, so the hands land on the gun instead of near it.
-static const float GUN_GRIP[2][3] = {{0.0f, -0.034f, 0.006f},    // AR
-                                     {0.0f, -0.038f, -0.036f}};  // SR
+static const float GUN_GRIP[WPN_COUNT][3] = {{0.0f, -0.034f, 0.006f},    // AR
+                                             {0.0f, -0.038f, -0.036f},   // SR
+                                             {0.0f, -0.034f, 0.006f},    // pistol
+                                             {0.0f, -0.034f, 0.006f},    // knife
+                                             {0.0f, -0.034f, 0.006f}};   // grenade
 
 // Barrel tip in gun-local space, one row per weapon. gun_build places its
 // muzzle geometry at this point and the tracer/flash spawn reads the same row
@@ -22316,8 +25850,11 @@ static const float GUN_GRIP[2][3] = {{0.0f, -0.034f, 0.006f},    // AR
 // the camera", which read as shooting from the eye.
 // Third-person rifle stylisation scale — see the note at g_gun_girth below.
 #define GUN_GIRTH_3P 1.05f
-static const float GUN_MUZ[2][3] = {{0.0f, 0.0225f, 0.494f},     // AR
-                                    {0.0f, 0.016f,  0.498f}};    // SR
+static const float GUN_MUZ[WPN_COUNT][3] = {{0.0f, 0.0225f, 0.494f},     // AR
+                                            {0.0f, 0.016f,  0.498f},     // SR
+                                            {0.0f, 0.0060f, 0.150f},     // pistol
+                                            {0.0f, 0.1931f, 0.0941f},    // knife tip
+                                            {0.0f, 0.0f, 0.0f}};         // grenade
 
 // HOW FAR THE MODEL HANGS BELOW ITS OWN ORIGIN, in model units, per weapon.
 // The origin sits at the receiver; the magazine and the floor plate reach a
@@ -22331,7 +25868,7 @@ static const float GUN_MUZ[2][3] = {{0.0f, 0.0225f, 0.494f},     // AR
 // two copies drifts. Filled by scene_draw_figure / the viewmodel long before
 // any corpse exists, so it costs one predictable branch per figure and one
 // scan per weapon per session.
-static float g_gun_low[2];
+static float g_gun_low[WPN_COUNT];
 
 // The rifle model's frame from a solved pose: exactly the anchor
 // scene_draw_figure uses to place gun_build so the trigger hand lands on the
@@ -22382,12 +25919,18 @@ static void pose_gun_frame(const pose_t *P, int wpn,
   // the `weld` rows measured eye_up +21 mm on the AR and -7 on the sniper
   // standing, -8 and -36 crouched, from the same head. Mounting an optic
   // makes a rifle ride LOWER in the hands, and that is what this is.
-  static const float GUN_BUTT_Z[WPN_COUNT] = {-0.2220f, -0.2480f};  // figbury-butt
+  static const float GUN_BUTT_Z[WPN_COUNT] = {-0.2220f, -0.2480f, 0, 0, 0};  // figbury-butt
   #define GUN_SEAT_(w, gz) (GUN_BUTT_Z[w] * GUN_GIRTH_3P - (gz))
   float seat = GUN_SEAT_(WPN_AR, GUN_GRIP[WPN_AR][2]) - GUN_SEAT_(wpn, gp[2]);
   #undef GUN_SEAT_
   float rise = -(gun_sight_y(wpn) - VM_SIGHT_AR) * GUN_GIRTH_3P;
   gw = v3_add(gw, v3_add(v3_scale(*fw, seat), v3_scale(*up, rise)));
+  // A SIDEARM HAS NO STOCK, so the shoulder-pocket arithmetic above means nothing
+  // to it. It rides out on both arms, centred under the eye; tracers and flashes
+  // read this same frame through pose_muzzle.
+  if (wpn == WPN_PT)
+    gw = v3_add(P->gun_o, v3_add(v3_scale(*fw, 0.135f),
+                 v3_add(v3_scale(*up, -0.045f), v3_scale(*rt, -0.080f))));
   *org = v3_sub(gw, v3_add(v3_scale(*rt, gp[0]),
                v3_add(v3_scale(*up, gp[1]), v3_scale(*fw, gp[2]))));
 }
@@ -22473,7 +26016,7 @@ static v3 pose_muzzle(const pose_t *P, int wpn) {
 // lift is added. At 0.4 m through a 62-degree viewport that is 3.5 px of daylight
 // under the little finger, which is exactly the "resting near it" read a grip
 // must not have.
-static const float GUN_HOLD[2][4][7] = {
+static const float GUN_HOLD[WPN_COUNT][4][7] = {
   // THE PUBLISHED RADIUS IS THE ONE THE HAND CLOSES ON, so it has to be the
   // radius the grip ACTUALLY HAS along the row the fingers occupy — not an
   // independent number. Computed from the grip chain's own nodes, the surface
@@ -22482,7 +26025,7 @@ static const float GUN_HOLD[2][4][7] = {
   // digit was buried to a third of its girth and the four of them read as small
   // blobs stuck to the side of the grip instead of as a hand closed round it.
   { { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f },   // AR grip
-    { 0.0f,  0.0190f,   0.3050f, 0.0123f,  0.0f, 0.0f,    1.0f   },   // AR fore-end
+    { 0.0f,  0.0190f,   0.2640f, 0.0123f,  0.0f, 0.0f,    1.0f   },   // AR fore-end
     // The magazine. A hand wraps its NARROW axis, so the radius is the small
     // half-extent of the mag chain at that station, not its 19 mm depth.
     // High on the magazine, right under the magwell, not at its middle. The
@@ -22522,6 +26065,24 @@ static const float GUN_HOLD[2][4][7] = {
     // the third-person station moves less; it still moves, because the sniper's
     // butt is further back again.
     { 0.0f,  0.0130f,   0.1480f, 0.0128f,  0.0f, 0.0f,    1.0f   } }, // SR fore, 3p
+  // The pistol shares the AR's grip stations, which is why the sculpted firing
+  // hand fits it unchanged. The support hand wraps that same grip from the front.
+  { { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f },   // PT grip
+    { 0.0f, -0.0760f,   0.0020f, 0.0170f,  0.0f, 0.921f,  0.386f },   // PT cup
+    { 0.0f, -0.1180f,  -0.0170f, 0.0124f,  0.0f, 0.921f,  0.386f },   // PT mag
+    { 0.0f, -0.0760f,   0.0020f, 0.0170f,  0.0f, 0.921f,  0.386f } }, // PT cup, 3p
+  // The knife's handle lies on the same cylinder. Its off-hand rows are unused
+  // (that hand holds nothing); they stay valid because proofs walk every row.
+  { { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f },   // KN handle
+    { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f } },
+  // The hand closes round the grenade's own body, seated forward of the handle
+  // station by that body's radius.
+  { { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },   // GR body
+    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f } },
 };
 // The magazine's reload travel (down, camera-side) per weapon, published ONCE
 // beside the grip surfaces for the same reason they are: the model (gun_build),
@@ -22529,9 +26090,10 @@ static const float GUN_HOLD[2][4][7] = {
 // move a hand with this magazine, and the third copy had already drifted to a
 // weapon-independent 0.058/0.033 — the exact hand/magazine decoupling the
 // hand-follow was written to fix. Sites apply their own signs.
-static const float GUN_MAG_TRAVEL[2][2] = {
+static const float GUN_MAG_TRAVEL[WPN_COUNT][2] = {
   [WPN_AR] = {0.060f, 0.034f},
   [WPN_SR] = {0.056f, 0.032f},
+  [WPN_PT] = {0.082f, 0.0f},
 };
 // Third-person rifle stylisation: at 20 m the true-scale barrel is 1-2 px
 // and the class-defining prop vanishes; the genre oversizes weapons x1.2-1.5.
@@ -22552,14 +26114,25 @@ static void gun_hold(int cur, int which, v3 org, v3 gx, v3 gy, v3 gz,
   *r = h[3] * gg;
 }
 
-static float gun_sight_y(int cur) { return cur == WPN_SR ? VM_SIGHT_SR : VM_SIGHT_AR; }
+// The first-person holo sight, as scaled by SIGHT_K in tools/build_models.py. The
+// third-person rifle keeps its own compact sight at VM_SIGHT_AR.
+#define VM_HOLO_Y 0.0741f     // the window's centre: the line ADS puts on the eye
+#define VM_HOLO_Z 0.1680f     // ...its front glass
+#define VM_HOLO_R 0.0133f     // ...and its half-height
+#define VM_HOLO_DOT_Z 0.1600f // the dot, inside the hood
+#define VM_SIGHT_PT 0.0345f   // top of the pistol's sights: the line the eye sits on
+static float gun_sight_y(int cur) {
+  return cur == WPN_SR ? VM_SIGHT_SR : cur == WPN_PT ? VM_SIGHT_PT : VM_SIGHT_AR;
+}
 // ...and WHERE along the bore the shooter's eye is supposed to sit behind. The
 // height alone defines a LINE, which is enough to ask "is the eye on the axis"
 // and not enough to ask "is the eye behind the glass or in front of it" — and
 // in a crouch it was in front of it. One copy: gun_build draws the AR's
 // aperture at this station and the sniper's ocular at SCOPE_OCU_Z.
 #define AR_APERTURE_Z 0.1835f
-static float gun_sight_z(int cur) { return cur == WPN_SR ? SCOPE_OCU_Z : AR_APERTURE_Z; }
+static float gun_sight_z(int cur) {
+  return cur == WPN_SR ? SCOPE_OCU_Z : cur == WPN_PT ? -0.0405f : AR_APERTURE_Z;
+}
 
 // The bolt cycle, as two scalars: how far the handle is LIFTED and how far it is
 // DRAWN. Three beats inside one 0..1 — lift, draw and return, drop — with sines
@@ -22580,7 +26153,7 @@ static void gun_bolt_phase(float bolt01, float *lift, float *draw) {
 // handle chains with them and gun_bolt_knob hands the same point to the hand
 // that grips it — a second copy of these is how a fist ends up closing on air
 // 30 mm behind a bolt.
-#define BOLT_LIFT_A  -1.22f   // rad of bolt lift at full phase (~70 degrees)
+#define BOLT_LIFT_A   1.12f   // rad of bolt lift at full phase (~64 degrees UP, +gy)
 #define BOLT_PIVOT_Y  0.014f  // the bolt axis the handle rotates about
 #define BOLT_KNOB_U   0.030f  // knob station along the receiver's right
 #define BOLT_KNOB_Z  -0.037f  // ...and along the bore
@@ -22646,9 +26219,12 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
              v3_add(v3_scale(ay, q[1] * MODEL_SCALE), v3_scale(az, q[2] * MODEL_SCALE))));
       v3 n = v3_add(v3_scale(ax, q[3] * MODEL_NSCALE),
              v3_add(v3_scale(ay, q[4] * MODEL_NSCALE), v3_scale(az, q[5] * MODEL_NSCALE)));
-      scene_push(p, n, v3_scale(c, (float)q[6] / 255.0f));   // baked occlusion
+      float ao = (float)q[6] / 255.0f;
+      g_ao_rate = 0.0f; g_ao_min = ao;
+      scene_push(p, n, v3_scale(c, 0.78f + 0.22f * ao));   // baked occlusion
     }
   }
+  ao_off();
 }
 
 static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
@@ -23241,11 +26817,80 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     g_gun_sight_p = GUNP(0, sight_y, gun_sight_z(cur));   // one copy; see figm weld
     g_gun_sight_r = 0.0105f;      // the window's inner HALF-HEIGHT, the tighter one
     mat_set(MAT_POLY_R, 0.0f);
+  } else if (cur == WPN_PT) {
+    // ---- sidearm: the stations of tools/build_models.py pistol() ----
+    mat_set(MAT_PARK_R, MAT_PARK_M);
+    GBOX(0, 0.0075f, 0.047f, 0.0122f, 0.0170f, 0.0985f, upper);   // slide
+    GBOX(0, 0.0290f, 0.1305f, 0.0021f, 0.0052f, 0.0052f, black);  // front sight
+    GBOX(0, 0.0290f, -0.0405f, 0.0100f, 0.0052f, 0.0042f, black); // rear sight
+    mat_set(MAT_POLY_R, 0.0f);
+    GBOX(0, -0.0170f, 0.042f, 0.0128f, 0.0098f, 0.0920f, body);   // frame
+    GBOX(0, -0.0500f, 0.046f, 0.0038f, 0.0026f, 0.0250f, body);   // trigger guard
+    GBOX(0, -0.0340f, 0.0735f, 0.0038f, 0.0160f, 0.0030f, body);
+    GCH(14, 1, 1, gz, {  // grip
+      GN(0, -0.020f, 0.006f, 0.0128f, 0.0190f, black),
+      GN(0, -0.104f, -0.016f, 0.0120f, 0.0170f, black),
+    });
+    mat_set(MAT_STEEL_R, MAT_STEEL_M);
+    GBOX(0, -0.0290f, 0.0460f, 0.0028f, 0.0120f, 0.0028f, steel); // trigger
+    g_gun_trig_p = GUNP(0, -0.0300f, 0.0450f);
+    g_gun_sight_p = GUNP(0, sight_y, gun_sight_z(cur));
+    g_gun_sight_r = 0.0026f;      // half the rear notch
+    mat_set(MAT_POLY_R, 0.0f);
+  } else if (cur == WPN_GR) {
+    // ---- grenade: gone from the hand once bolt01 says it was released ----
+    if (bolt01 < 0.5f) {
+      v3 olive = {{0.270f, 0.300f, 0.220f}};
+      v3 ka = v3_norm(v3_add(v3_scale(gy, 0.921f), v3_scale(gz, 0.386f)));
+      mat_set(MAT_POLY_R, 0.0f);
+      fnode_t nd[] = {
+        {.p = v3_sub(GUNP(0, -0.0643f, 0.0263f), v3_scale(ka, 0.034f * gg)), .col = olive, .bcol = olive,
+         .rx = 0.014f * gg, .rz = 0.014f * gg},
+        {.p = v3_sub(GUNP(0, -0.0643f, 0.0263f), v3_scale(ka, 0.016f * gg)), .col = olive, .bcol = olive,
+         .rx = 0.030f * gg, .rz = 0.030f * gg},
+        {.p = v3_add(GUNP(0, -0.0643f, 0.0263f), v3_scale(ka, 0.014f * gg)), .col = olive, .bcol = olive,
+         .rx = 0.030f * gg, .rz = 0.030f * gg},
+        {.p = v3_add(GUNP(0, -0.0643f, 0.0263f), v3_scale(ka, 0.046f * gg)), .col = upper, .bcol = upper,
+         .rx = 0.011f * gg, .rz = 0.011f * gg}};
+      fig_chain(nd, 4, 12, 1, 1, gx);
+    }
+    g_gun_trig_p = GUNP(0, -0.0300f, 0.0450f);
+    g_gun_sight_p = GUNP(0, 0, 0);
+    g_gun_sight_r = 0.01f;
+  } else if (cur == WPN_KN) {
+    // ---- combat knife: lies along the grip cylinder, spine toward the wrist ----
+    #define KNP(x_, sp_, ax_) GUNP((x_), -0.0500f + 0.386f * (sp_) + 0.921f * (ax_), \
+                                   -0.0078f - 0.921f * (sp_) + 0.386f * (ax_))
+    v3 ka = v3_norm(v3_add(v3_scale(gy, 0.921f), v3_scale(gz, 0.386f)));
+    v3 ks = v3_norm(v3_add(v3_scale(gy, 0.386f), v3_scale(gz, -0.921f)));
+    mat_set(MAT_POLY_R, 0.0f);
+    scene_box(KNP(0, 0, -0.004f), v3_scale(gx, 0.0120f * gg), v3_scale(ks, 0.0130f * gg),
+              v3_scale(ka, 0.0660f * gg), black);                 // handle
+    scene_box(KNP(0, -0.003f, 0.0640f), v3_scale(gx, 0.0130f * gg), v3_scale(ks, 0.0265f * gg),
+              v3_scale(ka, 0.0060f * gg), upper);                 // crossguard
+    scene_box(KNP(0, 0, -0.0720f), v3_scale(gx, 0.0108f * gg), v3_scale(ks, 0.0110f * gg),
+              v3_scale(ka, 0.0068f * gg), body);                  // pommel
+    mat_set(MAT_STEEL_R, MAT_STEEL_M);
+    scene_box(KNP(0, -0.0035f, 0.1480f), v3_scale(gx, 0.0024f * gg), v3_scale(ks, 0.0160f * gg),
+              v3_scale(ka, 0.0780f * gg), steel);                 // blade
+    scene_box(KNP(0, -0.0060f, 0.2440f), v3_scale(gx, 0.0014f * gg), v3_scale(ks, 0.0092f * gg),
+              v3_scale(ka, 0.0200f * gg), steel);                 // towards the tip
+    #undef KNP
+    g_gun_trig_p = GUNP(0, -0.0300f, 0.0450f);   // nothing to pull; a sane contact
+    g_gun_sight_p = GUNP(0, 0, 0);
+    g_gun_sight_r = 0.01f;
+    mat_set(MAT_POLY_R, 0.0f);
   } else {
     // ---- bolt-action precision rifle ----
     mat_set(MAT_PARK_R, MAT_PARK_M);
     GBOX(0,  0.013f,  0.030f, 0.0138f, 0.0152f, 0.115f, upper);  // receiver
+    GBOX( 0.0128f, 0.0180f, 0.036f, 0.0028f, 0.0054f, 0.028f, black); // ejection port
+    GBOX(-0.0128f, 0.0165f, 0.038f, 0.0028f, 0.0050f, 0.036f, black); // left relief flute
+    GBOX(-0.0136f, 0.0055f, -0.056f, 0.0026f, 0.0038f, 0.0062f, acc); // thumb safety
+    GBOX(-0.0138f, 0.0095f, -0.076f, 0.0032f, 0.0095f, 0.0060f, black); // folding hinge boss
     GBOX(0,  0.0315f, 0.020f, 0.0076f, 0.0028f, 0.078f, black);  // scope rail
+    for (int r = 0; r < 4; r++)                                   // exposed rear/front rail teeth
+      GBOX(0, 0.0358f, -0.048f + 0.014f * (float)r, 0.0088f, 0.0018f, 0.0034f, upper);
     // A DETACHABLE BOX MAGAZINE, because the reload is a magazine change now.
     // What was here was an 20 x 34 mm blob buried under the magwell — nothing
     // that could drop, be gripped or be seen, which is why the sniper's reload
@@ -23254,6 +26899,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // body, straight (a .308 case is nearly parallel, unlike the AR's raked
     // 5.56 curve), with a proud floor plate and a finger hook at the front.
     GBOX(0, -0.010f,  0.052f, 0.0152f, 0.0152f, 0.0242f, body);  // magwell
+    GBOX(0, -0.0226f, 0.0535f, 0.0168f, 0.0040f, 0.0258f, acc);  // flared magwell collar
     {
       // Same two-component travel as the AR's: down AND toward the camera, so
       // the magazine gets BIGGER in frame as it leaves rather than sliding off
@@ -23267,6 +26913,10 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
         GN(mdx, -0.076f - md, 0.051f, 0.0196f, 0.0121f, mag),
         GN(mdx, -0.098f - md, 0.050f, 0.0188f, 0.0117f, mag),
       });
+      // Stamped vertical reinforcement ribs on both sides of the AICS box.
+      for (int r = 0; r < 2; r++)
+        GBOX(mdx, -0.062f - md, 0.043f + 0.016f * (float)r,
+             0.0138f, 0.0240f, 0.0028f, black);
       // Floor plate, on the magazine's OWN axis: this one is nearly vertical
       // (z 0.052 -> 0.050 over 78 mm of drop), so `mup` is almost gy — but it is
       // derived rather than assumed, because the AR learned that lesson as a
@@ -23290,7 +26940,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     {
       float lift, draw;
       gun_bolt_phase(bolt01, &lift, &draw);
-      float ba = lift * BOLT_LIFT_A;      // 70 degrees of bolt lift
+      float ba = lift * BOLT_LIFT_A;      // 64 degrees of upward bolt lift
       float bz = draw * -BOLT_DRAW_M;
       #define BOLTP(U, VY, WZ) GUNP((U) * cosf(ba) - ((VY) - BOLT_PIVOT_Y) * sinf(ba), \
                                     (U) * sinf(ba) + ((VY) - BOLT_PIVOT_Y) * cosf(ba) + BOLT_PIVOT_Y, \
@@ -23303,6 +26953,11 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
         {BOLTP(BOLT_KNOB_U, 0.000f, BOLT_KNOB_Z), upper, upper, 0.0069f * gg, 0.0067f * gg, 0, 0.0f},
         {BOLTP(BOLT_KNOB_U, -0.008f, BOLT_KNOB_Z), upper, upper, 0.0062f * gg, 0.0062f * gg, 0, 0.0f}};
       fig_chain(bk, 2, 12, 1, 1, gz);
+      // Rear bolt shroud & cocking piece sliding straight back out of the action.
+      GCH(12, 1, 1, gy, {
+        GN(0, 0.0155f, -0.074f + bz, 0.0076f, 0.0074f, black),
+        GN(0, 0.0155f, -0.096f + bz, 0.0068f, 0.0066f, steel),
+      });
       #undef BOLTP
     }
     mat_set(MAT_POLY_R, 0.0f);
@@ -23478,8 +27133,10 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       GN(0, 0.016f, 0.490f, 0.0108f, 0.0104f, black),
       GN(0, 0.016f, 0.494f, 0.0082f, 0.0080f, upper),
     });
-    GBOX( 0.0100f, 0.016f, 0.472f, 0.0028f, 0.0025f, 0.0075f, black);  // port
-    GBOX(-0.0100f, 0.016f, 0.472f, 0.0028f, 0.0025f, 0.0075f, black);  // port
+    GBOX( 0.0102f, 0.016f, 0.464f, 0.0028f, 0.0026f, 0.0048f, black);  // rear port
+    GBOX(-0.0102f, 0.016f, 0.464f, 0.0028f, 0.0026f, 0.0048f, black);  // rear port
+    GBOX( 0.0102f, 0.016f, 0.481f, 0.0028f, 0.0026f, 0.0048f, black);  // front port
+    GBOX(-0.0102f, 0.016f, 0.481f, 0.0028f, 0.0026f, 0.0048f, black);  // front port
     fig_tube(GUNP(0, 0.016f, 0.4905f), GUNP(0, 0.016f, 0.4985f),
              0.0075f * gg, 0.0075f * gg, 0.0042f * gg, 0.0042f * gg, 16, black, gy);   // bore
     // ---- scope: a SOLID round tube now ----
@@ -23506,6 +27163,15 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       GN(0.011f, sight_y, 0.062f, 0.0082f, 0.0079f, upper),
       GN(0.024f, sight_y, 0.062f, 0.0072f, 0.0073f, black),
     });
+    GCH(16, 1, 1, gy, {  // left parallax & illumination turret
+      GN(-0.011f, sight_y, 0.062f, 0.0086f, 0.0083f, upper),
+      GN(-0.026f, sight_y, 0.062f, 0.0078f, 0.0079f, black),
+    });
+    GCH(20, 1, 1, gz, {  // magnification power ring collar
+      GN(0, sight_y, -0.016f, 0.0160f, 0.0157f, black),
+      GN(0, sight_y, -0.006f, 0.0158f, 0.0160f, black),
+    });
+    GBOX(-0.0135f, sight_y + 0.0125f, -0.011f, 0.0038f, 0.0036f, 0.0032f, acc); // throw lever
     // Rings AND the mount posts that carry them down to the rail. Without the
     // posts the whole optic hung in the air over the receiver with a 3 cm gap
     // under it — a scope has to be bolted to something.
@@ -23571,6 +27237,9 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     GBOX(0, sight_y - 0.0295f, 0.036f, 0.0058f, 0.0225f, 0.0050f, black); // rear post
     GBOX(0, sight_y - 0.0295f, 0.082f, 0.0054f, 0.0225f, 0.0046f, black); // front post
     GBOX(0, sight_y - 0.0475f, 0.059f, 0.0072f, 0.0052f, 0.0295f, upper); // mount base
+    mat_set(MAT_STEEL_R, MAT_STEEL_M);
+    GBOX(-0.0076f, sight_y - 0.0475f, 0.041f, 0.0024f, 0.0024f, 0.0030f, steel); // clamp bolt
+    GBOX(-0.0076f, sight_y - 0.0475f, 0.077f, 0.0024f, 0.0024f, 0.0030f, steel); // clamp bolt
   }
   muzzle = GUNP(GUN_MUZ[cur][0], GUN_MUZ[cur][1], GUN_MUZ[cur][2]);
   #undef GN
@@ -23582,6 +27251,8 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
 
 // (death_t is declared with pose_t, above the sim: the corpse pool hands one
 // over from bot_tick and the renderer consumes it, so it cannot live down here.)
+
+static void rot2(v3 *a, v3 *b, float ang);   // the viewmodel's rotation step
 
 // A FIGURE BUILDER IS A SOURCE DECOMPOSITION AND MUST NOT BE ANYTHING ELSE, and
 // under -O3 -ffast-math that is not free. Reassociation is legal here, so once a
@@ -23906,7 +27577,7 @@ FIG_INLINE void fig_death_pose(pose_t *P, const death_t *dth, v3 pos,
   for (int pass = 0; pass < 2; pass++)
   for (int k = 0; k < POSE_NPOS; k++) {
     float rad = POSE_RAD[k];
-    for (int i = 0; i < g_num_solids; i++) {
+    BP_BOX(i, j[k].x - rad - 1.0f, j[k].z - rad - 1.0f, j[k].x + rad + 1.0f, j[k].z + rad + 1.0f) {
       const solid_t *sd = &g_solids[i];
       v3 q = j[k];
       if (q.x <= sd->min.x - rad || q.x >= sd->max.x + rad ||
@@ -24254,6 +27925,44 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   g_fig_jit = 0.45f;
   fig_chain(pc, 4, 8, 1, 1, prt);
   g_fig_jit = 1.0f;
+  // Front carrier placard: three compact rifle mag pouches on the lower plate
+  // and a low-profile admin panel above them, rotated to the carrier's own
+  // twist station so they ride flush with its front facet at every aim angle.
+  {
+    v3 pbase = fig_perp(spine, prt);
+    v3 crt = v3_rot_axis(pbase, spine, 0.80f * tw);
+    v3 cfw_p = v3_norm(v3_cross(spine, crt));
+    v3 dk_web = v3_scale(kt->web, 0.92f);
+    v3 pouch_c = v3_scale(kt->gear, 0.86f);
+    for (int mp_i = -1; mp_i <= 1; mp_i++) {
+      float mx = (float)mp_i * 0.052f;
+      #define MP_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
+                         v3_add(v3_scale(crt, mx), v3_scale(cfw_p, (D)))))
+      fnode_t fmp[4] = {
+        {MP_P(0.204f, 0.166f), pouch_c, pouch_c, 0.018f, 0.016f, 0, 0.58f},
+        {MP_P(0.220f, 0.174f), pouch_c, pouch_c, 0.023f, 0.022f, 0, 0.0f},
+        {MP_P(0.276f, 0.176f), pouch_c, dk_web,  0.023f, 0.022f, 0, 0.0f},
+        {MP_P(0.296f, 0.172f), dk_web,  dk_web,  0.019f, 0.017f, 0, 0.0f}};
+      #undef MP_P
+      probe("placard");
+      g_fig_jit = 0.35f;
+      fig_chain(fmp, 4, 8, 1, 1, crt);
+      g_fig_jit = 1.0f;
+    }
+    v3 urt = v3_rot_axis(pbase, spine, 0.94f * tw);
+    v3 ufw = v3_norm(v3_cross(spine, urt));
+    #define AP_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), v3_scale(ufw, (D))))
+    v3 adm_c = v3_scale(kt->gear, 0.80f);
+    fnode_t adm[3] = {
+      {AP_P(0.322f, 0.176f), adm_c, adm_c, 0.052f, 0.015f, 0, 0.0f},
+      {AP_P(0.350f, 0.180f), adm_c, adm_c, 0.058f, 0.018f, 0, 0.0f},
+      {AP_P(0.376f, 0.174f), adm_c, adm_c, 0.050f, 0.014f, 0, 0.0f}};
+    #undef AP_P
+    probe("placard");
+    g_fig_jit = 0.30f;
+    fig_chain(adm, 3, 8, 1, 1, urt);
+    g_fig_jit = 1.0f;
+  }
   // Shoulder straps: the carrier is otherwise one black slab across the chest
   // with a hard top edge and nothing holding it up. Two short runs over each
   // trapezius break that mass and give the torso a visible harness.
@@ -24303,76 +28012,91 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     probe("trap");
     fig_chain(tp, 3, 8, 1, 1, spine);
   }
-  // Utility pouch on the carrier's back — the rear silhouette is otherwise one
-  // flat plate, which is the view you get of a fleeing enemy.
-  // As a CHAIN, not a box: a 176 x 140 x 64 mm slab standing 50 mm off a
-  // bevelled torso reads as a crate strapped to the man's back, because it is
-  // the only thing on the whole figure with hard 90-degree corners. A chain
-  // shares the body's corner radius, so it reads as a pouch.
+  // Unified tactical assault pack on the carrier's back — EVERY element (main
+  // compartment, top comms/bedroll housing, external rear pocket, twin side
+  // sustainment pouches, vertical compression straps and whip antenna) is built
+  // in the chest's own (Rc, spine, cfw) frame off P->chest, so the whole pack
+  // moves as one rigid assembly with the upper torso instead of shearing
+  // against pelvis-framed geometry.
   v3 cfw = v3_norm(v3_cross(spine, Rc));
   {
-    // Swept UP the spine, not backward. Swept backward its rear end cap faces
-    // whoever is behind the figure, and a flat cap lit head-on reads as a bright
-    // oval hole in the man's back. Swept vertically both caps are buried — the
-    // bottom in the belt, the top under the carrier's yoke — and the pouch is
-    // taller than it is deep, which is what a pouch is.
-    v3 pb = v3_add(P->chest, v3_add(v3_scale(spine, -0.060f),
-                                   v3_scale(cfw, -0.178f)));
-    // An assault pack rather than a pouch. Bulk on a soldier reads mostly from
-    // the SIDE and from behind — the front is already covered by the carrier —
-    // so a pack is the cheapest 8 cm of depth the silhouette can gain. Its front
-    // face sits 4 cm inside the carrier's back surface, so those two parallel
-    // surfaces are nowhere near each other; only the pack's side walls cross the
-    // carrier's shell, and they cross it end-on.
-    // Chamfered-box pack in GEAR coyote (it was near-black webbing — the back
-    // view's biggest mass sat at the value floor), with a FLAP: the top two
-    // nodes step wider then close quickly, which is the lid-over-body read a
-    // strapless scuba capsule never had.
-    fnode_t up[6] = {
-      {v3_add(pb, v3_scale(spine, -0.104f)), kt->gear, kt->gear, 0.088f, 0.048f, 0, 0.55f},
-      {v3_add(pb, v3_scale(spine, -0.052f)), kt->gear, kt->gear, 0.112f, 0.070f, 0, 0.0f},
-      {v3_add(pb, v3_scale(spine,  0.020f)), kt->gear, kt->gear, 0.118f, 0.076f, 0, 0.0f},
-      {v3_add(pb, v3_scale(spine,  0.052f)), kt->gear, kt->gear, 0.112f, 0.070f, 0, 0.0f},
-      {v3_add(pb, v3_scale(spine,  0.070f)), kt->gear, kt->gear, 0.121f, 0.079f, 0, 0.0f},  // flap lip
-      {v3_add(pb, v3_scale(spine,  0.108f)), kt->gear, kt->gear, 0.086f, 0.052f, 0, 0.0f}};
+    #define PP(X, Y, Z) v3_add(P->chest, v3_add(v3_scale(Rc, (X)), \
+                        v3_add(v3_scale(spine, (Y)), v3_scale(cfw, (Z)))))
+    v3 pack_col = v3_scale(kt->gear, 0.72f);
+    v3 side_col = v3_scale(kt->gear, 0.88f);
+    v3 top_col  = v3_scale(kt->web, 0.92f);
+    // Main faceted compartment, front buried inside the carrier's backplate.
+    fnode_t up[5] = {
+      {PP(0.0f, -0.182f, -0.162f), pack_col, pack_col, 0.094f, 0.046f, 0, 0.55f},
+      {PP(0.0f, -0.154f, -0.168f), pack_col, pack_col, 0.118f, 0.064f, 0, 0.0f},
+      {PP(0.0f, -0.040f, -0.168f), pack_col, pack_col, 0.118f, 0.064f, 0, 0.0f},
+      {PP(0.0f,  0.024f, -0.168f), pack_col, pack_col, 0.116f, 0.062f, 0, 0.0f},
+      {PP(0.0f,  0.048f, -0.166f), pack_col, pack_col, 0.096f, 0.048f, 0, 0.0f}};
     probe("pack");
-    g_fig_jit = 0.45f;
-    fig_chain(up, 6, 8, 1, 1, Rc);
+    g_fig_jit = 0.35f;
+    fig_chain(up, 5, 8, 1, 1, Rc);
+    // Horizontal top comms / bedroll housing crowning the main compartment,
+    // kept clear below the helmet nape in crouch and slide poses.
+    fnode_t pt[4] = {
+      {PP(-0.106f, 0.064f, -0.172f), top_col, top_col, 0.022f, 0.040f, 0, 0.0f},
+      {PP(-0.088f, 0.064f, -0.172f), top_col, top_col, 0.030f, 0.054f, 0, 0.0f},
+      {PP( 0.088f, 0.064f, -0.172f), top_col, top_col, 0.030f, 0.054f, 0, 0.0f},
+      {PP( 0.106f, 0.064f, -0.172f), top_col, top_col, 0.022f, 0.040f, 0, 0.0f}};
+    probe("pack");
+    g_fig_jit = 0.30f;
+    fig_chain(pt, 4, 8, 1, 1, spine);
+    // Deliberate external lower utility pouch in carrier coyote, seated cleanly
+    // into the main pack's rear face and standing 18 mm proud.
+    fnode_t rp[4] = {
+      {PP(0.0f, -0.148f, -0.220f), kt->gear, kt->gear, 0.068f, 0.018f, 0, 0.50f},
+      {PP(0.0f, -0.128f, -0.224f), kt->gear, kt->gear, 0.082f, 0.026f, 0, 0.0f},
+      {PP(0.0f, -0.032f, -0.224f), kt->gear, kt->gear, 0.082f, 0.026f, 0, 0.0f},
+      {PP(0.0f, -0.012f, -0.220f), kt->gear, kt->gear, 0.068f, 0.018f, 0, 0.0f}};
+    probe("pack");
+    g_fig_jit = 0.30f;
+    fig_chain(rp, 4, 8, 1, 1, Rc);
+    // Twin side sustainment pouches on the pack's flanks (clear behind the
+    // carrier's rear bevel, buried inboard into the main compartment).
+    for (int sp_i = 0; sp_i < 2; sp_i++) {
+      float sx = sp_i ? 1.0f : -1.0f;
+      fnode_t sp2[4] = {
+        {PP(sx * 0.118f, -0.150f, -0.188f), side_col, side_col, 0.018f, 0.022f, 0, 0.50f},
+        {PP(sx * 0.118f, -0.130f, -0.188f), side_col, side_col, 0.026f, 0.030f, 0, 0.0f},
+        {PP(sx * 0.118f, -0.026f, -0.188f), side_col, side_col, 0.026f, 0.030f, 0, 0.0f},
+        {PP(sx * 0.118f, -0.006f, -0.188f), side_col, side_col, 0.018f, 0.022f, 0, 0.0f}};
+      probe("pack");
+      g_fig_jit = 0.30f;
+      fig_chain(sp2, 4, 8, 1, 1, Rc);
+    }
     g_fig_jit = 1.0f;
-    // Two vertical compression straps down the pack's rear face: the only
-    // landmarks the biggest rear mass has, and they say "webbing", not "tank".
+    // Two vertical compression straps hugging the external pouch and upper pack.
     mat_set(MAT_GEAR_R, 0.0f);
     for (int cs2 = 0; cs2 < 2; cs2++) {
       float ss = cs2 ? 1.0f : -1.0f;
-      fnode_t vb[3] = {
-        {v3_add(pb, v3_add(v3_scale(spine, -0.088f),
-           v3_add(v3_scale(Rc, ss * 0.042f), v3_scale(cfw, -0.062f)))),
-         kt->web, kt->web, 0.017f, 0.021f, 0, 0.0f},
-        {v3_add(pb, v3_add(v3_scale(spine,  0.016f),
-           v3_add(v3_scale(Rc, ss * 0.042f), v3_scale(cfw, -0.082f)))),
-         kt->web, kt->web, 0.017f, 0.020f, 0, 0.0f},
-        {v3_add(pb, v3_add(v3_scale(spine,  0.096f),
-           v3_add(v3_scale(Rc, ss * 0.042f), v3_scale(cfw, -0.058f)))),
-         kt->web, kt->web, 0.015f, 0.018f, 0, 0.0f}};
+      fnode_t vb[4] = {
+        {PP(ss * 0.044f, -0.158f, -0.226f), kt->web, kt->web, 0.015f, 0.016f, 0, 0.0f},
+        {PP(ss * 0.044f, -0.128f, -0.244f), kt->web, kt->web, 0.015f, 0.014f, 0, 0.0f},
+        {PP(ss * 0.044f, -0.030f, -0.244f), kt->web, kt->web, 0.015f, 0.014f, 0, 0.0f},
+        {PP(ss * 0.044f,  0.038f, -0.226f), kt->web, kt->web, 0.014f, 0.014f, 0, 0.0f}};
       probe("packstrap");
-      fig_chain(vb, 3, 8, 1, 1, spine);
+      fig_chain(vb, 4, 8, 1, 1, Rc);
     }
-    // Whip antenna off the pack's strong-side corner. The best silhouette per
-    // triangle available anywhere on the figure: it breaks the head-shoulder
-    // line, it says "radio operator" rather than "man in green", and it is the
-    // only thing on the model that reads against the sky from behind.
+    // Whip antenna seated in the strong-side top comms housing.
     {
-      v3 ab = v3_add(pb, v3_add(v3_scale(Rc, 0.072f), v3_scale(spine, 0.070f)));
-      fnode_t an[3] = {
-        {ab, kt->rub, kt->rub, 0.0105f, 0.0072f, 0, 0.62f},
-        {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.150f), v3_scale(cfw, -0.020f))),
+      v3 ab = PP(0.076f, 0.088f, -0.172f);
+      fnode_t an[4] = {
+        {PP(0.076f, 0.078f, -0.172f), kt->rub, kt->rub, 0.0120f, 0.0120f, 0, 0.62f},
+        {PP(0.076f, 0.104f, -0.172f), kt->rub, kt->rub, 0.0095f, 0.0095f, 0, 0.0f},
+        {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.120f), v3_scale(cfw, -0.016f))),
          v3_scale(P->ant_sway, 0.40f)),
-         kt->rub, kt->rub, 0.0068f, 0.0044f, 0, 0.0f},
-        {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.286f), v3_scale(cfw, -0.076f))),
+         kt->rub, kt->rub, 0.0064f, 0.0044f, 0, 0.0f},
+        {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.248f), v3_scale(cfw, -0.062f))),
          P->ant_sway),
-         kt->rub, kt->rub, 0.0036f, 0.0024f, 0, 0.0f}};
-      fig_chain(an, 3, 6, 1, 1, Rc);
+         kt->rub, kt->rub, 0.0034f, 0.0024f, 0, 0.0f}};
+      probe("antenna");
+      fig_chain(an, 4, 6, 1, 1, Rc);
     }
+    #undef PP
   }
   // Two mag pouches on the belt line; they also mark which way the hips face.
   v3 pfw = v3_norm(v3_cross(spine, prt));
@@ -24489,6 +28213,7 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // (vest over a T-shirt), and a hue break on a curved mass's equator reads
       // as a ball-joint seam. Colour boundaries belong on geometric lines.
       v3 dcol = v3_scale(kt->sleeve, 0.94f);
+      v3 strap_col = v3_scale(kt->web, 0.92f);
       fnode_t sp[5] = {
         // Re-spaced for the elongated joint below: -0.035/+0.015 was authored
         // against a SPHERE, and against a mass that runs 84 mm down the arm the
@@ -24498,11 +28223,37 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         // states, applied to the shape that is actually there now.
         {v3_add(P->sho[i], v3_scale(uad, -0.058f)), dcol, dcol, 0.044f, 0.046f, 0, 0.66f},
         {v3_add(P->sho[i], v3_scale(uad,  0.034f)), dcol, dcol, 0.076f, 0.078f, 0, 0.0f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.055f)), dcol, dcol, 0.073f, 0.075f, 0, 0.0f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.092f)), dcol, dcol, 0.066f, 0.068f, 0, 0.0f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.055f)), dcol, strap_col, 0.073f, 0.075f, 0, 0.0f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.092f)), strap_col, dcol, 0.068f, 0.070f, 0, 0.0f},
         {v3_add(P->sho[i], v3_scale(uad,  0.122f)), dcol, dcol, 0.055f, 0.057f, 0, 0.0f}};
       probe("deltoid");
       fig_chain(sp, 5, 8, 1, 1, spine);
+      // Articulated composite shoulder pauldron: crowns P->sho[i] along the
+      // live bladed clavicle (sdir) and tilts smoothly with upper-arm elevation
+      // without rolling onto the chest or floating off the deltoid.
+      {
+        v3 sdir = fig_perp(spine, v3_sub(P->sho[i], P->chest));
+        v3 sfw  = v3_norm(v3_cross(spine, v3_scale(sdir, s)));
+        float arm_up = 0.24f * (v3_dot(uad, spine) + 0.55f);
+        float arm_fw = 0.16f * v3_dot(uad, sfw);
+        v3 pax = v3_norm(v3_add(v3_scale(sdir, 0.78f),
+                         v3_add(v3_scale(spine, -0.62f + arm_up),
+                                v3_scale(sfw, arm_fw))));
+        v3 dout = fig_perp(pax, v3_add(v3_scale(sdir, 0.62f), v3_scale(spine, 0.78f)));
+        v3 dfw  = v3_norm(v3_cross(pax, dout));
+        #define PA_P(A, D) v3_add(P->sho[i], v3_add(v3_scale(pax, (A)), v3_scale(dout, (D))))
+        mat_set(MAT_HELM_R, 0.0f);
+        fnode_t pa[4] = {
+          {PA_P(-0.046f, 0.056f), kt->helm, kt->helm, 0.046f, 0.022f, 0, 0.0f},
+          {PA_P(-0.012f, 0.068f), kt->helm, kt->helm, 0.064f, 0.024f, 0, 0.0f},
+          {PA_P( 0.044f, 0.068f), kt->helm, kt->helm, 0.058f, 0.024f, 0, 0.0f},
+          {PA_P( 0.078f, 0.056f), kt->helm, kt->helm, 0.038f, 0.018f, 0, 0.0f}};
+        #undef PA_P
+        probe("pauldron");
+        g_fig_jit = 0.30f;
+        fig_chain(pa, 4, 8, 1, 1, dfw);
+        g_fig_jit = 1.0f;
+      }
       mat_set(MAT_CLOTH_R, 0.0f);
     }
     // Hand: the SAME wrap the viewmodel uses, closed round the SAME published
@@ -24515,6 +28266,11 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     {
       v3 hc, ha; float hr;
       gun_hold(wpn, i ? GH_GRIP : GH_FORE3, g_org, g_rt, g_up, g_fw, &hc, &ha, &hr);
+      if (i == 0 && (wpn == WPN_KN || wpn == WPN_GR)) {  // the free hand closes on nothing
+        ha = g_rt;
+        hr = 0.013f;
+        hc = v3_add(P->wri[i], v3_scale(v3_norm(v3_sub(P->wri[i], P->elb[i])), 0.075f));
+      }
       if (i == 0 && brace_k > 0.5f) {
         // Slide brace: a KNUCKLE-DRAG FIST. The fat-cylinder palm-flat
         // attempt wrapped the fingers ~90 deg around a deeply buried axis —
@@ -24890,52 +28646,20 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       probe("chinstrap");
       fig_chain(cs, 3, 8, 1, 1, hf);
     }
-    #undef HP
-  }
-  // Field kit. Hard-edged plates over the soft body are what make the outline
-  // read as a soldier in armour rather than a mannequin in a colour.
-  if (g_fig_k >= 8 && !fig_diss_cut(P.chest)) {
-    v3 kfw = v3_norm(v3_cross(spine, prt));
-    v3 pack = v3_scale(kt.gear, 0.70f), plate = v3_scale(kt.gear, 0.88f);
-    v3 dk2 = v3_scale(kt.web, 0.90f);
-    #define KP(a, b, c) v3_add(P.chest, v3_add(v3_scale(prt, a), \
-                        v3_add(v3_scale(spine, b), v3_scale(kfw, c))))
-    #define KBOX(a, b, c, hx, hy, hz, col) scene_box(KP(a, b, c), v3_scale(prt, hx), \
-                        v3_scale(spine, hy), v3_scale(kfw, hz), col)
-    mat_set(MAT_CLOTH_R, 0.0f);
-    KBOX(0, -0.030f, -0.150f, 0.128f, 0.175f, 0.062f, pack);      // pack
-    KBOX(0, 0.134f, -0.163f, 0.114f, 0.034f, 0.064f, dk2);        // bedroll
-    KBOX(-0.150f, -0.070f, -0.145f, 0.024f, 0.095f, 0.046f, plate);  // side pouches
-    KBOX( 0.150f, -0.070f, -0.145f, 0.024f, 0.095f, 0.046f, plate);
-    KBOX(0, 0.010f, 0.128f, 0.104f, 0.124f, 0.016f, plate);       // front plate
-    KBOX(-0.070f, -0.165f, 0.122f, 0.032f, 0.052f, 0.032f, dk2);  // mag pouches
-    KBOX( 0.000f, -0.161f, 0.126f, 0.031f, 0.056f, 0.036f, dk2);
-    KBOX( 0.070f, -0.168f, 0.119f, 0.030f, 0.049f, 0.029f, dk2);
-    #undef KBOX
-    #undef KP
-    for (int i = 0; i < 2; i++) {                                 // shoulder armour
-      float sd = i ? 1.0f : -1.0f;
-      v3 c = v3_add(P.sho[i], v3_add(v3_scale(spine, 0.050f), v3_scale(prt, sd * 0.030f)));
-      v3 ou = v3_norm(v3_add(v3_scale(spine, 0.82f), v3_scale(prt, sd * 0.58f)));
-      v3 ac = v3_norm(v3_cross(ou, kfw));
-      scene_box(c, v3_scale(ac, 0.074f), v3_scale(ou, 0.022f), v3_scale(kfw, 0.082f), kt.helm);
+    // Low-profile NVG brow shroud bolted flush to the helmet's front facet in
+    // the head's own canted frame (hr, hu, hf), tagged cleanly as its own part.
+    {
+      v3 sh_col = v3_scale(kt.web, 0.90f);
+      fnode_t nv[3] = {
+        {HP(0, 0.054f, 0.098f), sh_col, sh_col, 0.024f, 0.016f, 0, 0.0f},
+        {HP(0, 0.074f, 0.094f), sh_col, sh_col, 0.026f, 0.017f, 0, 0.0f},
+        {HP(0, 0.092f, 0.086f), sh_col, sh_col, 0.020f, 0.014f, 0, 0.0f}};
+      probe("nvg");
+      g_fig_jit = 0.30f;
+      fig_chain(nv, 3, 8, 1, 1, hr);
+      g_fig_jit = 1.0f;
     }
-    v3 hd = v3_norm(P.head_f), hrr = v3_norm(P.right);
-    v3 hup = v3_norm(v3_cross(hrr, hd));
-    if (v3_dot(hup, spine) < 0.0f) hup = v3_scale(hup, -1.0f);
-    #define NP(a, b, c) v3_add(P.head, v3_add(v3_scale(hrr, a), \
-                        v3_add(v3_scale(hup, b), v3_scale(hd, c))))
-    scene_box(NP(0, 0.062f, 0.122f), v3_scale(hrr, 0.028f), v3_scale(hup, 0.022f),
-              v3_scale(hd, 0.020f), dk2);                         // night vision mount
-    scene_box(NP(-0.024f, 0.034f, 0.146f), v3_scale(hrr, 0.017f), v3_scale(hup, 0.017f),
-              v3_scale(hd, 0.030f), dk2);
-    scene_box(NP( 0.024f, 0.034f, 0.146f), v3_scale(hrr, 0.017f), v3_scale(hup, 0.017f),
-              v3_scale(hd, 0.030f), dk2);
-    scene_box(NP(-0.024f, 0.034f, 0.178f), v3_scale(hrr, 0.011f), v3_scale(hup, 0.011f),
-              v3_scale(hd, 0.003f), kt.gm2);                      // the lit lenses
-    scene_box(NP( 0.024f, 0.034f, 0.178f), v3_scale(hrr, 0.011f), v3_scale(hup, 0.011f),
-              v3_scale(hd, 0.003f), kt.gm2);
-    #undef NP
+    #undef HP
   }
   // Legs: the chain starts INSIDE the pelvis, so the thigh's end cap can never
   // peek out of the hip, and the knee bevel lands as a faceted pad.
@@ -25361,6 +29085,46 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   v3 g_org, g_rt, g_up, g_fw;
   pose_gun_frame(&P, wpn, &g_org, &g_rt, &g_up, &g_fw);
   g_gun_girth = GUN_GIRTH_3P;
+  // SIDEARM AND BLADE: the pose was solved for a two-handed long gun, so the arms
+  // are re-aimed here, the one place that knows what is in the hands. Wrists are
+  // derived from the weapon's own grip cylinders, then both elbows are re-solved.
+  if (wpn == WPN_KN || wpn == WPN_PT || wpn == WPN_GR) {
+    v3 aim = v3_norm(P.head_f);
+    v3 wup = {{0, 1, 0}};
+    v3 ar = v3_cross(aim, wup);
+    ar = v3_dot(ar, ar) > 1e-6f ? v3_norm(ar) : Rc;
+    v3 au = v3_cross(ar, aim);
+    if (wpn != WPN_PT) {
+      // The same timeline the viewmodel plays, measured from the same eye, opened
+      // out a little because an arm is longer than a viewmodel's foreshortening.
+      g_rt = ar; g_up = au; g_fw = aim;
+      rot2(&g_fw, &g_up, gs.kn[3]);
+      rot2(&g_rt, &g_fw, gs.kn[4]);
+      rot2(&g_rt, &g_up, gs.kn[5]);
+      g_org = v3_add(P.head, v3_add(v3_scale(ar, gs.kn[0] * 1.15f),
+              v3_add(v3_scale(au, gs.kn[1] * 1.15f - 0.06f), v3_scale(aim, gs.kn[2] * 1.20f))));
+      // The off hand rides at the sternum and comes up behind the blade in guard.
+      v3 lo_ = v3_add(P.chest, v3_add(v3_scale(ar, -0.17f),
+               v3_add(v3_scale(au, -0.06f), v3_scale(aim, 0.26f))));
+      v3 hi_ = v3_add(P.chest, v3_add(v3_scale(ar, -0.06f),
+               v3_add(v3_scale(au, 0.15f), v3_scale(aim, 0.33f))));
+      P.wri[0] = v3_lerp(lo_, hi_, gs.guard);
+    }
+    v3 gc, ga; float gr;
+    gun_hold(wpn, GH_GRIP, g_org, g_rt, g_up, g_fw, &gc, &ga, &gr);
+    v3 br = v3_sub(v3_scale(g_fw, -1.0f), v3_scale(ga, -v3_dot(g_fw, ga)));
+    br = v3_norm(br);
+    P.wri[1] = v3_add(gc, v3_add(v3_scale(ga, -0.046f * GUN_GIRTH_3P), v3_scale(br, gr + 0.066f)));
+    if (wpn == WPN_PT) {
+      gun_hold(wpn, GH_FORE3, g_org, g_rt, g_up, g_fw, &gc, &ga, &gr);
+      br = v3_norm(v3_add(v3_scale(g_rt, -0.62f), v3_scale(g_fw, -0.78f)));
+      P.wri[0] = v3_add(gc, v3_add(v3_scale(ga, -0.040f), v3_scale(br, gr + 0.066f)));
+    }
+    v3 p0 = v3_add(v3_scale(Rc, -0.7f), v3_scale(spine, -0.8f));
+    v3 p1 = v3_add(v3_scale(Rc, 0.7f), v3_scale(spine, -0.8f));
+    P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, p0);
+    P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, p1);
+  }
   // THE BODY RELOADS TOO. Filmed from outside at five stations, an AR magazine
   // change was a man standing perfectly still holding a rifle for 1.27 seconds
   // — the viewmodel had a whole choreography and the third-person figure had
@@ -25604,6 +29368,78 @@ static void fx_seg(v3 a, v3 b, v3 eye, float wa, float wb, v3 ca, v3 cb) {
   scene_push(v3_sub(a, sa), FX_N, ca);
 }
 
+// A disc facing the eye: `mid` at the centre, `rim` at the edge. The soft blob both
+// blast passes are built from.
+static void fx_disc(v3 at, v3 eye, float r, v3 mid, v3 rim, int n) {
+  v3 f = v3_norm(v3_sub(eye, at)), up = {{0, 1, 0}};
+  v3 x = v3_cross(up, f);
+  x = v3_dot(x, x) > 1e-6f ? v3_norm(x) : (v3){{1, 0, 0}};
+  v3 y = v3_cross(f, x);
+  for (int i = 0; i < n; i++) {
+    float a0 = (float)i / (float)n * F_TAU, a1 = (float)(i + 1) / (float)n * F_TAU;
+    v3 p0 = v3_add(at, v3_add(v3_scale(x, cosf(a0) * r), v3_scale(y, sinf(a0) * r)));
+    v3 p1 = v3_add(at, v3_add(v3_scale(x, cosf(a1) * r), v3_scale(y, sinf(a1) * r)));
+    scene_push(at, FX_N, mid);
+    scene_push(p0, FX_N, rim);
+    scene_push(p1, FX_N, rim);
+  }
+}
+
+// A soft additive ring: nothing at both edges, `col` on the radius, in the plane u,v.
+static void fx_annulus(v3 c, v3 u, v3 v, float r, float w, v3 col, int n) {
+  static const v3 K = {{0, 0, 0}};
+  for (int i = 0; i < n; i++) {
+    float a0 = (float)i / (float)n * F_TAU, a1 = (float)(i + 1) / (float)n * F_TAU;
+    v3 d0 = v3_add(v3_scale(u, cosf(a0)), v3_scale(v, sinf(a0)));
+    v3 d1 = v3_add(v3_scale(u, cosf(a1)), v3_scale(v, sinf(a1)));
+    float rs[3] = {fmaxf(r - w, 0.0f), r, r + w * 0.35f};
+    for (int k = 0; k < 2; k++) {
+      v3 ci = k == 0 ? K : col, co = k == 0 ? col : K;
+      v3 p00 = v3_add(c, v3_scale(d0, rs[k])), p10 = v3_add(c, v3_scale(d1, rs[k]));
+      v3 p01 = v3_add(c, v3_scale(d0, rs[k + 1])), p11 = v3_add(c, v3_scale(d1, rs[k + 1]));
+      scene_push(p00, FX_N, ci); scene_push(p10, FX_N, ci); scene_push(p11, FX_N, co);
+      scene_push(p00, FX_N, ci); scene_push(p11, FX_N, co); scene_push(p01, FX_N, co);
+    }
+  }
+}
+
+// The multiply pass: dust, smoke, clods and the scorch on the ground.
+static void puffs_build(v3 eye) {
+  scene_reset();
+  for (int i = 0; i < MAX_SCORCH; i++)
+    if (g_scorch[i].life > 0) {
+      const scorch_t *q = &g_scorch[i];
+      float k = 0.68f * f_clamp((float)q->life / 900.0f, 0.0f, 1.0f);
+      float d = 1.0f - k;
+      v3 c = {{q->pos.x, 0.012f, q->pos.z}};
+      for (int a = 0; a < 18; a++) {
+        // Ragged, so it reads as burnt ground and not as a painted circle.
+        float a0 = (float)a / 18.0f * F_TAU, a1 = (float)(a + 1) / 18.0f * F_TAU;
+        float r0 = q->r * (0.82f + 0.18f * sinf(a0 * 3.0f + q->r * 9.0f) * cosf(a0 * 7.0f));
+        float r1 = q->r * (0.82f + 0.18f * sinf(a1 * 3.0f + q->r * 9.0f) * cosf(a1 * 7.0f));
+        scene_push(c, FX_N, (v3){{d, d, d}});
+        scene_push(v3_add(c, (v3){{cosf(a1) * r1, 0, sinf(a1) * r1}}), FX_N, (v3){{1, 1, 1}});
+        scene_push(v3_add(c, (v3){{cosf(a0) * r0, 0, sinf(a0) * r0}}), FX_N, (v3){{1, 1, 1}});
+      }
+    }
+  for (int i = 0; i < MAX_PUFFS; i++)
+    if (g_puffs[i].life > 0) {
+      const puff_t *q = &g_puffs[i];
+      float f = (float)q->life / (float)q->life0, a1 = 1.0f - f;
+      float r = q->r0 + (q->r1 - q->r0) * sqrtf(a1);
+      // Thick while young, and it thins as it spreads and ages.
+      // Inside the cloud every puff stacks on the lens at once and the frame went
+      // near black, so smoke thins out over its last few metres to the eye: you
+      // can still see to fight in it.
+      float ed = v3_len(v3_sub(q->pos, eye));
+      float d = 1.0f - q->dens * f_clamp(f * 2.2f, 0.0f, 1.0f) *
+                       (q->r1 < 0.2f ? 1.0f : 0.15f + 0.85f * smooth01(f_clamp((ed - 1.0f) / 5.0f, 0.0f, 1.0f)));
+      // Dust is warm and soot is a cold grey; the one mixes into the other.
+      v3 mid = {{d, d * (0.97f + 0.03f * q->soot), d * (0.92f + 0.08f * q->soot)}};
+      fx_disc(q->pos, eye, r, mid, (v3){{1, 1, 1}}, q->r1 < 0.2f ? 6 : 12);
+    }
+}
+
 static void fx_ribbon(v3 a, v3 b, v3 eye, float w, v3 col) {
   fx_seg(a, b, eye, w, w, col, col);
 }
@@ -25694,6 +29530,28 @@ static void fx_flash(v3 pos, v3 fw, v3 t1, v3 t2, v3 eye, float s, float f,
 static void scene_build(const player_t *p, float alpha, int show_player) {
   (void)p;   // the roster below covers human 0; parameter kept for callers
   scene_reset();
+  // Live grenades, tumbling. What flies is the body alone: spoon and pin are gone.
+  for (int i = 0; i < MAX_NADES; i++)
+    if (g_nades[i].fuse > 0) {
+      const nade_t *n = &g_nades[i];
+      v3 at = v3_lerp(n->prev_pos, n->pos, alpha);
+      float a = n->prev_spin + (n->spin - n->prev_spin) * alpha;
+      v3 gx = v3_rot_axis((v3){{1, 0, 0}}, n->axis, a), gy = v3_rot_axis((v3){{0, 1, 0}}, n->axis, a);
+      v3 gz = v3_cross(gx, gy);
+      // The model sits on the grip station; bring its body's centre onto `at`.
+      v3 ofs = v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f));
+      mat_set(MAT_PARK_R, MAT_PARK_M);
+      model_draw(GRENADE_V, GRENADE_P, GRENADE_NP, 0, v3_sub(at, ofs), gx, gy, gz);
+    }
+  for (int i = 0; i < MAX_SPOONS; i++)
+    if (g_spoons[i].life > 0) {
+      const spoon_t *q = &g_spoons[i];
+      v3 at = v3_lerp(q->prev, q->pos, alpha);
+      v3 gx = v3_rot_axis((v3){{1, 0, 0}}, q->axis, q->a), gy = v3_rot_axis((v3){{0, 1, 0}}, q->axis, q->a);
+      v3 gz = v3_cross(gx, gy);
+      v3 ofs = v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f));
+      model_draw(GRENADE_V, GRENADE_P, GRENADE_NP, 2, v3_sub(at, ofs), gx, gy, gz);
+    }
   // Every human body (P1-58): the LOCAL one only when the camera is not
   // first-person; the other seven ALWAYS — unseen here they also cast no
   // shadow, because the depth pass draws this same list. Deliberately not
@@ -25752,6 +29610,7 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
 // runs, so the streak's start lands on the same screen pixel as the drawn
 // barrel tip. Live only when the viewmodel pass will actually run this frame.
 static v3  g_fx_muzzle;
+static float g_fx_alpha;   // this frame's tick fraction, for a bolt's flight
 static int g_fx_muz_live;
 static int g_fx_vm_flash;  // this frame's viewmodel pass will draw the
                            // player's flash star — the world pass must not
@@ -25776,53 +29635,171 @@ static void fx_build(v3 eye) {
   scene_reset();
   for (int i = 0; i < MAX_TRACERS; i++)
     if (g_tracers[i].life > 0) {
-      float f = (float)g_tracers[i].life / TRACER_TICKS;
-      v3 a = g_tracers[i].a, b = g_tracers[i].b;
-      if (g_tracers[i].src == g_local_ent && g_fx_muz_live) a = g_fx_muzzle;
-      v3 d = v3_sub(b, a);
+      tracer_t *tr = &g_tracers[i];
+      // ANCHORED ONCE, ON THE FIRST FRAME THAT DRAWS IT, and then left alone. The
+      // event fires before the shooter's pose for this tick is solved, so the
+      // spawn point is one pose stale and, for a rifle coming up from the low
+      // ready, nowhere near the barrel. Your own shot takes the viewmodel's tip;
+      // it used to be re-glued to that tip every frame, which swung the whole
+      // line around the impact with every degree of recoil.
+      if (tr->anchor) {
+        tr->anchor = 0;
+        if (tr->src == g_local_ent && g_fx_muz_live) tr->a = g_fx_muzzle;
+        else if (tr->src >= 0) {
+          int mh = human_of_ent(tr->src);
+          tr->a = pose_muzzle(mh >= 0 ? &g_player_anim[mh].pose
+                                      : &g_bots[tr->src - 1].anim.pose, tr->wpn);
+        }
+        // A muzzle already past the wall the round hit: a contact shot. There is
+        // no line to draw, and drawing it would send the bolt backward.
+        if (v3_dot(v3_sub(tr->b, tr->a), tr->d) < 0.6f) { tr->life = 0; continue; }
+      }
+      v3 d = v3_sub(tr->b, tr->a);
       float len = v3_len(d);
       if (len < 0.6f) continue;
-      // The tail holds AT the barrel for the first half of the life — those
-      // are the ticks in which the eye checks where the shot came from, and
-      // any recede there detaches the streak from the muzzle immediately on
-      // a 17 m shot (a fraction of the LENGTH, not a speed) — then lets go
-      // and collapses into the impact as it dies, which reads as arrival.
-      float age = 1.0f - f;
-      float t0 = smooth01(f_clamp((age - 0.45f) / 0.55f, 0.0f, 1.0f)) * 0.92f;
-      const int N = 8;
+      // Where the bolt is along the line. It starts 3 m out so the very first
+      // frame shows which way it went, then the tail lets go of the barrel.
+      float age = (float)(tr->life0 - tr->life) + g_fx_alpha;
+      float nose = 3.0f + tr->v * age;
+      float t1 = f_clamp(nose / len, 0.0f, 1.0f);
+      float t0 = f_clamp((nose - fmaxf(TRACER_LEN, TRACER_SPAN * len)) / len, 0.0f, 1.0f);
+      if (t1 - t0 < 1e-3f) continue;
+      float f = f_clamp((float)tr->life / 2.0f, 0.0f, 1.0f);   // arrival dies quick
+      const int N = 6;
       for (int sgi = 0; sgi < N; sgi++) {
-        float ua = t0 + (1.0f - t0) * (float)sgi / N;
-        float ub = t0 + (1.0f - t0) * (float)(sgi + 1) / N;
-        v3 pa = v3_add(a, v3_scale(d, ua)), pb = v3_add(a, v3_scale(d, ub));
-        // Colour runs on absolute distance, not on the segment index: a hot
-        // white-amber birth at the barrel cooling to a deep tracer orange by
-        // ~14 m, whatever the shot's length.
+        float ua = t0 + (t1 - t0) * (float)sgi / N;
+        float ub = t0 + (t1 - t0) * (float)(sgi + 1) / N;
+        v3 pa = v3_add(tr->a, v3_scale(d, ua)), pb = v3_add(tr->a, v3_scale(d, ub));
+        // Colour runs on absolute distance, as it always has; the new term is the
+        // comet: brightest at the nose, gone at the tail.
         float ka = f_clamp(ua * len * (1.0f / 14.0f), 0.0f, 1.0f);
         float kb = f_clamp(ub * len * (1.0f / 14.0f), 0.0f, 1.0f);
+        float fa = f * (0.35f + 0.65f * (float)sgi / N);
+        float fb = f * (0.35f + 0.65f * (float)(sgi + 1) / N);
         v3 ca = v3_lerp((v3){{1.65f, 1.36f, 0.92f}}, (v3){{1.10f, 0.50f, 0.14f}}, ka);
         v3 cb = v3_lerp((v3){{1.65f, 1.36f, 0.92f}}, (v3){{1.10f, 0.50f, 0.14f}}, kb);
         v3 ha = v3_lerp((v3){{0.46f, 0.28f, 0.11f}}, (v3){{0.22f, 0.09f, 0.03f}}, ka);
         v3 hb = v3_lerp((v3){{0.46f, 0.28f, 0.11f}}, (v3){{0.22f, 0.09f, 0.03f}}, kb);
-        // Width is an envelope over absolute METRES, not over the fraction of
-        // the shot: a thin filament at the bore blooming to full glow by
-        // ~2.5 m, tapering downrange. The bloom is what keeps the streak out
-        // of the sight picture in ADS — a constant-width halo at 0.3 m from
-        // the eye is a wedge across exactly the pixels the player aims with.
+        // Thin at the bore, full width by 2.5 m: at 0.3 m from the eye a wide halo
+        // is a wedge across exactly the pixels the player aims with.
         float ra = f_clamp(ua * len * (1.0f / 2.5f), 0.0f, 1.0f);
         float rb = f_clamp(ub * len * (1.0f / 2.5f), 0.0f, 1.0f);
         float wha = (0.010f + 0.045f * ra) * (1.0f - 0.5f * ka);
         float whb = (0.010f + 0.045f * rb) * (1.0f - 0.5f * kb);
         float wca = (0.0040f + 0.0050f * ra) * (1.0f - 0.45f * ka);
         float wcb = (0.0040f + 0.0050f * rb) * (1.0f - 0.45f * kb);
-        fx_seg(pa, pb, eye, wha, whb, v3_scale(ha, f * f), v3_scale(hb, f * f));
-        fx_seg(pa, pb, eye, wca, wcb, v3_scale(ca, f), v3_scale(cb, f));
+        fx_seg(pa, pb, eye, wha, whb, v3_scale(ha, fa * fa), v3_scale(hb, fb * fb));
+        fx_seg(pa, pb, eye, wca, wcb, v3_scale(ca, fa), v3_scale(cb, fb));
       }
     }
+  // THE THROW PREVIEW: the real flight, stepped ahead from the real launch while the
+  // pin is out, in dots that fade to where it first lands, with a ring on that spot.
+  {
+    const player_t *lp = local_player();
+    if (lp && lp->alive && lp->wp.cur == WPN_GR && lp->wp.gr_cook > 0 && !g_home) {
+      v3 pos, vel;
+      int lob = lp->prev_held[IN_ADS];
+      nade_launch(lp, lob, &pos, &vel);
+      for (int i = 1; i < 240; i++) {
+        vel.y -= NADE_GRAVITY * TICK_DT;
+        vel = v3_scale(vel, 1.0f - NADE_DRAG);
+        float sp = v3_len(vel), step = sp * TICK_DT;
+        v3 d = v3_scale(vel, 1.0f / fmaxf(sp, 1e-4f)), wn = {{0, 1, 0}};
+        int ws = -1;
+        float hit = trace_world(pos, d, &wn, &ws);
+        if (hit < step + NADE_R) {
+          pos = v3_add(pos, v3_scale(d, hit));
+          for (int a = 0; a < 28; a++) {
+            float a0 = (float)a / 28.0f * F_TAU, a1 = (float)(a + 1) / 28.0f * F_TAU;
+            v3 t1, t2;
+            axis_frame(wn, &t1, &t2);
+            v3 ring0 = v3_add(pos, v3_add(v3_scale(t1, cosf(a0) * 0.45f), v3_scale(t2, sinf(a0) * 0.45f)));
+            v3 ring1 = v3_add(pos, v3_add(v3_scale(t1, cosf(a1) * 0.45f), v3_scale(t2, sinf(a1) * 0.45f)));
+            fx_seg(v3_add(ring0, v3_scale(wn, 0.03f)), v3_add(ring1, v3_scale(wn, 0.03f)), eye,
+                   0.016f, 0.016f, (v3){{0.9f, 0.34f, 0.08f}}, (v3){{0.9f, 0.34f, 0.08f}});
+          }
+          break;
+        }
+        pos = v3_add(pos, v3_scale(vel, TICK_DT));
+        if (i >= 8 && i % 7 == 0) {
+          float f = 1.0f - 0.55f * (float)i / 240.0f;
+          fx_disc(pos, eye, 0.030f, v3_scale((v3){{0.95f, 0.40f, 0.10f}}, f), (v3){{0, 0, 0}}, 8);
+        }
+      }
+    }
+  }
+  // The fireball: a soft disc facing the eye, white at birth, through orange to
+  // a dull red, and swelling as it dies.
+  for (int i = 0; i < MAX_FIRE; i++)
+    if (g_fire[i].life > 0) {
+      const fire_t *q = &g_fire[i];
+      float f = (float)q->life / (float)q->life0, a1 = 1.0f - f;
+      v3 c = fx_cool(a1, 0.34f, (v3){{2.6f, 2.2f, 1.6f}}, (v3){{2.2f, 0.95f, 0.22f}},
+                     (v3){{0.42f, 0.06f, 0.01f}});
+      if (q->dull) {   // banked fire, licking: never white, in and out as it dies
+        float lick = 0.6f + 0.4f * sinf((float)g_tick * 0.31f + (float)i * 2.1f);
+        c = v3_scale(fx_cool(a1, 0.40f, (v3){{0.80f, 0.31f, 0.06f}}, (v3){{0.42f, 0.10f, 0.015f}},
+                             (v3){{0.10f, 0.015f, 0.0f}}), lick * f_clamp(a1 * 8.0f, 0.0f, 1.0f));
+      }
+      fx_disc(q->pos, eye, q->r * (0.55f + 0.75f * sqrtf(a1)), c, (v3){{0, 0, 0}}, 12);
+    }
+  // Young smoke is lit from under by the fire inside it.
+  for (int i = 0; i < MAX_PUFFS; i++)
+    if (g_puffs[i].life > 0 && g_puffs[i].r1 >= 1.0f && g_puffs[i].soot > 0.2f) {
+      const puff_t *q = &g_puffs[i];
+      float age = (float)(q->life0 - q->life) / 170.0f;
+      if (age >= 1.0f) continue;
+      float k = (1.0f - age) * (1.0f - age) * f_clamp(age * 14.0f, 0.0f, 1.0f);
+      float r = q->r0 + (q->r1 - q->r0) * sqrtf((float)(q->life0 - q->life) / (float)q->life0);
+      fx_disc(q->pos, eye, r * 0.85f, v3_scale((v3){{0.10f, 0.036f, 0.007f}}, k), (v3){{0, 0, 0}}, 10);
+    }
+  for (int i = 0; i < MAX_BRANDS; i++)
+    if (g_brands[i].life > 0) {
+      const brand_t *q = &g_brands[i];
+      float f = (float)q->life / (float)q->life0;
+      fx_disc(q->pos, eye, 0.09f + 0.10f * f, v3_scale((v3){{2.2f, 0.85f, 0.16f}}, f_clamp(f * 2.0f, 0.0f, 1.0f)),
+              (v3){{0, 0, 0}}, 8);
+    }
+  for (int i = 0; i < MAX_SHOCK; i++)
+    if (g_shock[i].life > 0) {
+      const shock_t *q = &g_shock[i];
+      float a1 = 1.0f - (float)q->life / (float)SHOCK_LIFE, f = 1.0f - a1;
+      float rr = BLAST_R * (1.0f - f * f * f);
+      // The shell, as seen from here, and its footprint running out over the floor.
+      v3 tow = v3_norm(v3_sub(eye, q->pos)), u, v;
+      axis_frame(tow, &u, &v);
+      fx_annulus(q->pos, u, v, rr, 0.9f + 1.6f * a1, v3_scale((v3){{0.15f, 0.135f, 0.115f}}, f * f), 48);
+      if (q->open)
+        fx_annulus((v3){{q->pos.x, q->gy + 0.04f, q->pos.z}}, (v3){{1, 0, 0}}, (v3){{0, 0, 1}},
+                   rr, 0.7f + 1.5f * a1, v3_scale((v3){{0.42f, 0.31f, 0.19f}}, f * f), 48);
+      // The rays: one instant of hard light, long and thin, uneven in length.
+      if (q->life > SHOCK_LIFE - 15) {
+        float ry = (float)(q->life - (SHOCK_LIFE - 15)) / 15.0f;
+        for (int n = 0; n < 18; n++) {
+          uint32_t h = fx_hash(q->seed + (uint32_t)n * 977u);
+          float az = (float)(h & 1023) / 1023.0f * F_TAU;
+          float el = (float)((h >> 10) & 1023) / 1023.0f * 1.45f;
+          float ln = (3.0f + 8.5f * (float)((h >> 20) & 1023) / 1023.0f) * (0.45f + 0.55f * sqrtf(1.0f - ry));
+          v3 d = {{cosf(az) * cosf(el), sinf(el), sinf(az) * cosf(el)}};
+          fx_seg(q->pos, v3_add(q->pos, v3_scale(d, ln)), eye, 0.20f * ry, 0.0f,
+                 v3_scale((v3){{2.1f, 1.45f, 0.72f}}, ry * ry), (v3){{0, 0, 0}});
+        }
+      }
+    }
+  // The bloom of the flash in the air: on the charge, so a wall still hides it.
+  if (g_blast_light > 0.01f)
+    fx_disc(g_blast_p, eye, 15.0f, v3_scale((v3){{0.75f, 0.52f, 0.30f}}, g_blast_light),
+            (v3){{0, 0, 0}}, 24);
   for (int i = 0; i < MAX_FLASHES; i++) {
     flash_t *fl = &g_flashes[i];
     if (fl->src == g_local_ent && g_fx_vm_flash) continue;  // the vm star owns it
     int fresh = fl->fresh && g_tick - fl->t0 <= 12;
     if (fl->life <= 0 && !fresh) continue;
+    if (fl->fresh && fl->src >= 0) {       // same one-pose-stale spawn as the bolt
+      int mh = human_of_ent(fl->src);
+      fl->pos = pose_muzzle(mh >= 0 ? &g_player_anim[mh].pose
+                                    : &g_bots[fl->src - 1].anim.pose, fl->wpn);
+    }
     float f = fresh ? 1.0f : (float)fl->life / FLASH_TICKS;
     fl->fresh = 0;
     v3 t1, t2;
@@ -26061,7 +30038,7 @@ static void rot2(v3 *a, v3 *b, float ang) {
 // FOV: at 50 degrees a weapon close enough to read is mostly outside the frame.
 // The scope disc derives its radius from this same number, so the two can never
 // drift — that was two hardcoded halves of one constant.
-#define VM_FOV_DEG 62.0f
+#define VM_FOV_DEG 58.0f
 static v3 g_vm_muzzle;  // world-space barrel tip, set by vm_build every frame
 // The weapon's own basis in world space, published by the same vm_build call
 // that builds the mesh. The shader's micro-structure is a function of position
@@ -26116,7 +30093,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
 
   int cur = w->cur;
   // The holographic sight sits higher than the iron sight the shared builder knows.
-  float sight_y = cur == WPN_SR ? VM_SIGHT_SR : 0.0850f;
+  float sight_y = cur == WPN_SR ? VM_SIGHT_SR : cur == WPN_PT ? VM_SIGHT_PT : VM_HOLO_Y;
 
   // Reload, trigger and bolt all come from ONE solver shared with the
   // third-person figure (`gun_anim`) — see the note there. `rl` is the body
@@ -26167,7 +30144,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // view; filmed at 78 and 88 percent with the AR's numbers, the whole receiver
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
-  float px = 0.168f * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
+  int ptl = cur == WPN_PT;    // a pistol sits lower and further out than a rifle
+  float px = (ptl ? 0.112f : 0.148f) * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
            + (lean_d * 0.16f - lean * 0.028f) * hip;
   // DOWN a little and NOT toward the eye. The comment used to call this a "dip
@@ -26176,7 +30154,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // one part of the gun a magazine change is about — off the bottom of the
   // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
   // below frame, so the old failure is not being re-created.
-  float py = -0.112f * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
+  float py = (ptl ? -0.105f : -0.063f) * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
            // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
            // which is the identical failure the reload dip above was already fixed
            // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
@@ -26209,8 +30187,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // byte-identical frames there. 1.5 mm also stays well under the fire kick's
   // own 9.1 mm peak on the same axis, so recoil still dominates either way.
   float tkick = cur == WPN_SR ? hip : 0.45f + 0.55f * hip;
-  float pz = 0.30f - 0.0015f * trig * tkick
-           - 0.022f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
+  float pz = (ptl ? 0.37f : 0.30f) - 0.0015f * trig * tkick
+           - 0.008f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
            + VLERP(lag_z) - sw * 0.03f + rl * 0.050f
            - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f;
 
@@ -26228,9 +30206,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
   rot2(&gz, &gy, -(VLERP(sway_p) + kick * (6.0f + 3.2f * hip)
                  + rl * 0.055f - rch * 0.045f
-                 - rk * 0.075f + sw * 0.42f) + 0.105f * hip);              // pitch
+                 - rk * 0.075f + sw * 0.42f) + 0.022f * hip);              // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (0.195f + lean_d * 0.22f) * hip);                     // yaw
+                 + (0.112f + lean_d * 0.22f) * hip);                     // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
   // (the weapon sits right of centre at the hip, so the camera is on its left);
@@ -26250,7 +30228,18 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // AR's 19: the AR's charging handle is already on the camera's side.
   float cyroll = cur == WPN_SR ? 0.86f : 0.34f;
   rot2(&gx, &gy, VLERP(roll) + rl * -0.46f + rch * cyroll - rk * 0.16f +
-                 (0.030f - lean * 0.10f + lean_d * 0.30f) * hip);          // roll
+                 (-0.086f - lean * 0.10f + lean_d * 0.30f) * hip);         // roll
+  int fistw = cur == WPN_KN || cur == WPN_GR;
+  if (fistw) {
+    // The knife IS its timeline: every other spring only rides on top of it.
+    gx = rgt; gy = upv; gz = fwd;
+    rot2(&gz, &gy, ga_.kn[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
+    rot2(&gx, &gz, ga_.kn[4] + VLERP(sway_y));
+    rot2(&gx, &gy, ga_.kn[5] + VLERP(roll));
+    px = ga_.kn[0] + VLERP(bob_x) + VLERP(lag_x);
+    py = ga_.kn[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
+    pz = ga_.kn[2] + VLERP(lag_z);
+  }
   v3 org = v3_add(eye, v3_add(v3_scale(rgt, px),
            v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
 
@@ -26275,22 +30264,47 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // swings past the lens during a reload, so it is left out for both.
     g_scene_floats = gun_mark;
     int ar = cur == WPN_AR;
-    const int16_t (*mv)[7] = ar ? RIFLE_V : SNIPER_V;
-    const model_part_t *mp = ar ? RIFLE_P : SNIPER_P;
-    int mn = ar ? RIFLE_NP : SNIPER_NP;
-    model_draw(mv, mp, mn, 0, org, gx, gy, gz);
-    if (ads < 0.5f && rl < 0.2f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
+    const int16_t (*mv)[7] = ar ? RIFLE_V : cur == WPN_SR ? SNIPER_V
+                           : cur == WPN_PT ? PISTOL_V : cur == WPN_KN ? KNIFE_V : GRENADE_V;
+    const model_part_t *mp = ar ? RIFLE_P : cur == WPN_SR ? SNIPER_P
+                           : cur == WPN_PT ? PISTOL_P : cur == WPN_KN ? KNIFE_P : GRENADE_P;
+    int mn = ar ? RIFLE_NP : cur == WPN_SR ? SNIPER_NP
+           : cur == WPN_PT ? PISTOL_NP : cur == WPN_KN ? KNIFE_NP : GRENADE_NP;
+    int nade_gone = cur == WPN_GR && ga_.bolt > 0.5f;    // released
+    if (!nade_gone) model_draw(mv, mp, mn, 0, org, gx, gy, gz);
+    if (ads < 0.5f && rl < 0.2f && !nade_gone && ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
     float md = mdrop * GUN_MAG_TRAVEL[cur][0], mx = mdrop * -GUN_MAG_TRAVEL[cur][1];
-    model_draw(mv, mp, mn, 1, v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(gz, mx))),
+    model_draw(mv, mp, mn, 1,
+               v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(ar ? gz : gx, mx))),
                gx, gy, gz);
-    if (ar) {
-      g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.022f), v3_scale(gz, 0.462f)));
-      g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, 0.1835f)));
-      g_gun_sight_r = 0.0185f;
+    if (cur == WPN_PT) {
+      model_draw(mv, mp, mn, 3, v3_add(org, v3_scale(gz, -ga_.slide * 0.034f)), gx, gy, gz);
+      g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, GUN_MUZ[WPN_PT][1]),
+                                       v3_scale(gz, GUN_MUZ[WPN_PT][2])));
+      g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, gun_sight_z(cur))));
+      g_gun_sight_r = 0.0026f;
+    } else if (cur == WPN_GR) {
+      if (!nade_gone && ga_.slide < 0.5f) model_draw(mv, mp, mn, 3, org, gx, gy, gz);
+      g_vm_muzzle = org;
+    } else if (cur == WPN_KN) {
+      g_vm_muzzle = v3_add(org, v3_scale(gy, GUN_MUZ[WPN_KN][1]));
+    } else if (ar) {
+      g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.022f), v3_scale(gz, 0.492f)));
+      g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, VM_HOLO_Z)));
+      g_gun_sight_r = VM_HOLO_R;
       mat_set(0.22f, 0.0f);
-      scene_box(v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, 0.172f))),
+      scene_box(v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, VM_HOLO_DOT_Z))),
                 v3_scale(gx, 0.0008f), v3_scale(gy, 0.0008f), v3_scale(gz, 0.0004f),
                 (v3){{3.200f, 0.420f, 0.220f}});   // the holographic dot
+    } else {
+      float blift, bdraw;
+      gun_bolt_phase(ga_.bolt, &blift, &bdraw);
+      v3 bx = gx, by = gy;
+      rot2(&bx, &by, blift * 1.05f);   // 60-deg precision 3-lug bolt throw around y=0.034
+      v3 bo = v3_add(org, v3_add(v3_scale(v3_sub(gy, by), 0.0340f),
+                                 v3_scale(gz, -bdraw * 0.038f)));
+      model_draw(mv, mp, mn, 3, bo, bx, by, gz);
+      g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.016f), v3_scale(gz, 0.506f)));
     }
   }
   // The tracer re-anchor publish does NOT happen here: vm_build is also the
@@ -26363,11 +30377,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         // and a hand that only follows the vertical half grips 34 mm to the side
         // of the thing it is holding. Exactly the decoupling this line was written
         // to fix, in the other axis.
-        rc = cur == WPN_AR
-           ? v3_add(rc, v3_add(v3_scale(gy, -mdrop * GUN_MAG_TRAVEL[WPN_AR][0]),
-                               v3_scale(gx, -mdrop * GUN_MAG_TRAVEL[WPN_AR][1])))
-           : v3_add(rc, v3_add(v3_scale(gy, -mdrop * GUN_MAG_TRAVEL[WPN_SR][0]),
-                               v3_scale(gx, -mdrop * GUN_MAG_TRAVEL[WPN_SR][1])));
+        rc = v3_add(rc, v3_add(v3_scale(gy, -mdrop * GUN_MAG_TRAVEL[cur][0]),
+                               v3_scale(gx, -mdrop * GUN_MAG_TRAVEL[cur][1])));
         gc = v3_lerp(gc, rc, mgv);
         ga = v3_norm(v3_lerp(ga, ra, mgv));
         gr = gr + (rr - gr) * mgv;
@@ -26607,19 +30618,80 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       #define VP(a, b, c) v3_add(org, v3_add(v3_scale(gx, a), \
                           v3_add(v3_scale(gy, b), v3_scale(gz, c))))
       #define VD(a, b, c) v3_add(v3_scale(gx, a), v3_add(v3_scale(gy, b), v3_scale(gz, c)))
+      v3 rx = gx, ry = gy, rz = gz;
       v3 ro = v3_sub(hd[0].gc, VP(0.0f, -0.0500f, -0.0078f));
-      v3 lo = v3_sub(hd[1].gc, VP(0.0f,  0.0190f,  0.3050f));
-      lo = v3_add(lo, v3_scale(gy, -0.022f * ads));   // the fingers clear the sight picture
-      model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, v3_add(org, ro), gx, gy, gz);
-      model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
+      // The grenade hand is sculpted round the grenade in this same frame, so it
+      // takes no grip offset: applying one drew it 37 mm off the thing it holds.
+      if (cur == WPN_GR) ro = (v3){{0, 0, 0}};
+      if (cur == WPN_SR && ga_.bhand > 0.0f) {
+        float blift, bdraw;
+        gun_bolt_phase(ga_.bolt, &blift, &bdraw);
+        float ba = blift * 1.05f, cb = cosf(ba), sb = sinf(ba);
+        float kx = 0.0328f * cb + 0.0118f * sb;
+        float ky = 0.0340f + 0.0328f * sb - 0.0118f * cb;
+        float kz = -0.0370f - bdraw * 0.038f;
+        rot2(&rx, &ry, -0.32f * ga_.bhand);
+        rot2(&rx, &rz,  0.22f * ga_.bhand);
+        rot2(&rz, &ry, -0.16f * ga_.bhand);
+        v3 k_target = VP(kx + 0.014f, ky - 0.012f, kz + 0.006f);
+        v3 g_local = v3_add(v3_scale(ry, -0.0520f), v3_scale(rz, 0.0080f));
+        v3 o_bolt = v3_sub(k_target, g_local);
+        v3 ro_rest = VD(0.0f, -0.0010f, -0.0366f);
+        ro = v3_lerp(ro_rest, v3_sub(o_bolt, org), ga_.bhand);
+      }
+      // The pistol's support hand was sculpted in the pistol's own frame, so its
+      // rest offset is the station itself; the rifles' hand is shared and keeps
+      // the handguard station it was modelled on.
+      const float *hrest = GUN_HOLD[cur][GH_FORE];
+      v3 lo = v3_sub(hd[1].gc, ptl ? VP(hrest[0], hrest[1], hrest[2])
+                                   : VP(0.0f,  0.0190f,  0.2500f));
+      v3 or_p = v3_add(org, ro);
+      int knf = fistw;
+      if (cur == WPN_GR) model_draw(HAND_G_V, HAND_G_P, HAND_G_NP, 0, or_p, rx, ry, rz);
+      else if (knf) model_draw(HAND_K_V, HAND_K_P, HAND_K_NP, 0, or_p, rx, ry, rz);
+      else     model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, or_p, rx, ry, rz);
+      // The knife's off hand is only in frame in the guard: it rises to brace the
+      // flat of the blade, palm in, and drops away below the screen otherwise.
+      float gk = smooth01(ga_.guard);
+      v3 klx = rgt, kly = upv, klz = fwd, klo = eye;
+      if (knf && gk > 0.01f) {
+        rot2(&klz, &kly, -0.60f + 0.30f * (1.0f - gk));
+        rot2(&klx, &klz, 0.20f);
+        rot2(&klx, &kly, -0.45f);
+        // For the grenade this same rise is the hand coming in for the pin ring.
+        klo = v3_add(eye, v3_add(v3_scale(rgt, cur == WPN_GR ? 0.105f : -0.080f),
+              v3_add(v3_scale(upv, (cur == WPN_GR ? -0.072f : -0.080f) - 0.230f * (1.0f - gk)),
+                     v3_scale(fwd, cur == WPN_GR ? 0.345f : 0.300f))));
+        model_draw(HAND_KL_V, HAND_KL_P, HAND_KL_NP, 0, klo, klx, kly, klz);
+      } else if (cur == WPN_PT) {
+        model_draw(HAND_P_V, HAND_P_P, HAND_P_NP, 0, v3_add(org, lo), gx, gy, gz);
+      } else if (!knf) {
+        model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
+      }
       for (int h = 0; h < 2; h++) {
-        v3 wr = h == 0 ? v3_add(VP(0.058f, -0.100f, -0.098f), ro)
-                       : v3_add(VP(-0.070f, -0.078f, 0.262f), lo);
-        v3 ax = v3_norm(h == 0 ? VD(0.40f, -0.62f, -0.68f) : VD(-0.48f, -0.80f, -0.34f));
+        if (h == 1 && knf && (gk <= 0.01f || cur == WPN_GR)) continue;
+        v3 wr = h == 0
+          ? cur == WPN_GR
+            ? v3_add(or_p, v3_add(v3_scale(rx, -0.0355f),     // the grenade hand's own wrist
+                           v3_add(v3_scale(ry, -0.0816f), v3_scale(rz, -0.0358f))))
+            : v3_add(or_p, v3_add(v3_scale(rx, 0.018f),
+                           v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))))
+          : knf ? v3_add(klo, v3_add(v3_scale(klx, -0.018f),
+                         v3_add(v3_scale(kly, -0.080f), v3_scale(klz, -0.066f))))
+          : ptl ? v3_add(VP(-0.038f, -0.102f, -0.018f), lo)
+                : v3_add(VP(-0.031f, -0.035f, 0.198f), lo);
+        // A rifle pins the arm's angle; a swinging knife does not, and a forearm
+        // rigid to the hand sweeps straight through the camera on every cut. The
+        // knife arm aims at the shoulder instead, so it always leaves the frame.
+        v3 ax = v3_norm(h == 0
+          ? (knf ? v3_sub(v3_add(eye, v3_add(v3_scale(rgt, 0.30f),
+                                 v3_add(v3_scale(upv, -0.42f), v3_scale(fwd, -0.10f)))), wr)
+                 : v3_add(v3_scale(rx, 0.32f), v3_add(v3_scale(ry, -0.66f), v3_scale(rz, -0.68f))))
+          : knf ? v3_add(v3_scale(klx, -0.32f), v3_add(v3_scale(kly, -0.66f), v3_scale(klz, -0.68f)))
+          : ptl ? VD(-0.50f, -0.52f, -0.69f) : VD(-0.41f, -0.82f, -0.39f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
-        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, wr, ax, v3_scale(on, 1.24f),
-                   v3_scale(v3_cross(ax, on), 1.24f));
+        model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, wr, ax, on, v3_cross(ax, on));
       }
       #undef VP
       #undef VD
@@ -27633,6 +31705,14 @@ static void render_frame(const player_t *p, float alpha, int fps,
   float proll = w->prev_punch_roll + (w->punch_roll - w->prev_punch_roll) * alpha;
   float roll = (third || cam_free) ? 0.0f
              : leanv * LEAN_ANGLE * LEAN_VIEW_K + proll * DEG2RAD;
+  // The shock front through the camera: a hard jolt that rings out fast.
+  if (g_shake > 0.002f && !cam_free) {
+    float st = (float)g_tick * TICK_DT;
+    float sa = g_shake * g_shake * 0.055f;
+    pitch += sinf(st * 67.0f) * sa;
+    yaw += sinf(st * 53.0f + 1.3f) * sa;
+    roll += sinf(st * 41.0f + 0.4f) * sa * 0.7f;
+  }
   float tp_dist = 2.7f;  // final camera pull-back; short = body would clip
   if (third) {
     // Shoulder camera: pivot slightly right of and above the head, pulled
@@ -27661,6 +31741,29 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
     tp_dist = f_clamp(tp_dist, 0.30f, 2.7f);
     eye = v3_add(pivot, v3_scale(back, tp_dist));
+    if (eye.y < 0.10f) eye.y = 0.10f;
+  }
+  // THE SPECTATOR CHASE CAM (LAST MAN STANDING, while out of the round): over
+  // the followed combatant's shoulder along their own yaw, pulled in by any
+  // wall behind them exactly as the shoulder cam above is.
+  int spec = cam_free ? -1 : spec_target();
+  if (spec >= 0) {
+    int sh = human_of_ent(spec);
+    v3 sp = sh >= 0 ? v3_lerp(g_players[sh].prev_pos, g_players[sh].pos, alpha)
+                    : v3_lerp(g_bots[spec - 1].prev_pos, g_bots[spec - 1].pos, alpha);
+    yaw = ent_yaw(spec);
+    pitch = -0.20f;
+    roll = 0.0f;
+    v3 fwd = {{cosf(pitch) * sinf(yaw), sinf(pitch), -cosf(pitch) * cosf(yaw)}};
+    v3 back = v3_scale(fwd, -1.0f);
+    v3 pivot = v3_add(sp, (v3){{0, 1.85f, 0}});
+    float sd = 3.4f;
+    for (int i = 0; i < g_num_solids; i++) {
+      v3 n;
+      float t = ray_aabb(pivot, back, g_solids[i].min, g_solids[i].max, &n);
+      if (t > 0 && t - 0.15f < sd) sd = t - 0.15f;
+    }
+    eye = v3_add(pivot, v3_scale(back, f_clamp(sd, 0.4f, 3.4f)));
     if (eye.y < 0.10f) eye.y = 0.10f;
   }
   if (ov && ov->orbit) {
@@ -27712,7 +31815,22 @@ static void render_frame(const player_t *p, float alpha, int fps,
   int shadow_on = R.sm_fbo != 0;
   if (shadow_on) {
     v3 ld = v3_scale(atm_sun(), -1.0f);
-    v3 lc = v3_add((v3){{0, 1.6f, 0}}, v3_scale(ld, -SHADOW_DEPTH * 0.5f));
+    // A MAP BIGGER THAN THE SHADOW FOLLOWS THE CAMERA. The arena fits inside
+    // one map centred on the origin; a large map does not, so the map is
+    // centred on the eye instead, snapped to whole texels along the light's
+    // own axes so standing still and turning never crawls the shadow edges.
+    // Past it the border colour reads as lit, and the fog has taken over.
+    v3 sc = {{0, 1.6f, 0}};
+    if (ARENA_HALF > ARENA_HALF_DEF) {
+      v3 rt = v3_norm(v3_cross(ld, fabsf(ld.y) > 0.99f ? (v3){{1, 0, 0}} : (v3){{0, 1, 0}}));
+      v3 up = v3_cross(rt, ld);
+      float tx = 2.0f * SHADOW_HALF / SHADOW_TEX;
+      v3 c = {{eye.x, 1.6f, eye.z}};
+      float cr = v3_dot(c, rt), cu = v3_dot(c, up);
+      sc = v3_add(c, v3_add(v3_scale(rt, floorf(cr / tx) * tx - cr),
+                            v3_scale(up, floorf(cu / tx) * tx - cu)));
+    }
+    v3 lc = v3_add(sc, v3_scale(ld, -SHADOW_DEPTH * 0.5f));
     R.light_vp = m4_mul(m4_ortho(SHADOW_HALF, SHADOW_HALF, 0.5f, SHADOW_DEPTH),
                         m4_look_dir(lc, ld));
     glBindFramebuffer(GL_FRAMEBUFFER, R.sm_fbo);
@@ -27765,12 +31883,17 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // DIMMER. Measured: a wall patch 0.5 m away read L=80 before any shot and
   // L=184 permanently after one, against 169 on the flash frame itself.
   g_world_muz_c = 0.0f;
+  float blast_c = g_blast_light * 90.0f;
   for (int i = 0; i < MAX_FLASHES; i++)
     if (g_flashes[i].src == g_local_ent && g_tick - g_flashes[i].t0 <= 2 &&
         (g_flashes[i].life > 0 || g_flashes[i].fresh)) {
       g_world_muz_c = 8.0f;
       g_world_muz_p = g_flashes[i].pos;
     }
+  if (blast_c > g_world_muz_c) {            // a detonation lights the arena
+    g_world_muz_c = blast_c;
+    g_world_muz_p = g_blast_p;
+  }
   if (g_world_muz_c > 0.001f) {
     glUniform3f(R.u_muzc, 1.00f * g_world_muz_c, 0.70f * g_world_muz_c,
                 0.36f * g_world_muz_c);
@@ -27848,6 +31971,15 @@ static void render_frame(const player_t *p, float alpha, int fps,
                   v3_add(v3_scale(mu, g_vm_muz_cam.y * mk),
                          v3_scale(mf, g_vm_muz_cam.z))));
     g_fx_muz_live = 1;
+  }
+  g_fx_alpha = alpha;
+  puffs_build(eye);
+  if (g_scene_floats) {
+    fx_pass_begin();
+    glBlendFunc(GL_DST_COLOR, GL_ZERO);       // multiply: smoke darkens the frame
+    scene_draw_vp(&vp);
+    glBlendFunc(GL_ONE, GL_ONE);
+    fx_pass_end();
   }
   fx_build(eye);
   if (g_scene_floats) {
@@ -28182,8 +32314,17 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // The sniper has NO screen-space sight mark: its reticle is drawn inside the
     // scope disc, on the magnified image, and this camera-axis cross used to be
     // drawn on top of it. Two reticles at once, one of them not even in the glass.
+    if (in_play && p->wp.cur == WPN_GR && p->wp.gr_cook >= NADE_PIN_T) {
+      // The fuse, counted in the hand. Reads red in the last second.
+      float left = (float)(NADE_FUSE - p->wp.gr_cook) * TICK_DT;
+      char fs[16];
+      snprintf(fs, sizeof fs, "%.1f", (double)left);
+      float fw_ = ui_text_width(fs, 1.1f);
+      if (left < 1.0f) ui_text_sh(fs, ccx - fw_ * 0.5f, ccy + 12, 1.1f, TXT_BOLD, 0, C4(1.0f, 0.29f, 0.23f, 1.0f));
+      else ui_text_sh(fs, ccx - fw_ * 0.5f, ccy + 12, 1.1f, TXT_BOLD, 0, C4(C_BONE, 0.95f));
+    }
     float dot_a = f_clamp((ads - 0.78f) / 0.17f, 0.0f, 1.0f);
-    if (dot_a > 0.0f && in_play && !third && p->wp.cur != WPN_SR) {
+    if (dot_a > 0.0f && in_play && !third && p->wp.cur == WPN_AR) {
       // A soft radial bloom (the atlas soft cell) under a mid falloff and a
       // saturated core. One 0.9 px core under a 0.22-alpha halo measured as a
       // dim faceted smudge; 1.25 vu of core rather than 1.0: at the 720p
@@ -28230,7 +32371,11 @@ static void render_frame(const player_t *p, float alpha, int fps,
       // over a thin meter. Both bleed toward THREAT as they run out, and an ink
       // shadow keeps them readable on open sky and sand.
       const float hud_mw = 92.0f, hud_bot = g_ui_vh - 13.0f;
-      {
+      if (p->wp.cur == WPN_KN) {         // a blade has no magazine to count
+        float rxe = g_ui_vw - 16;
+        ui_text_sh("KNIFE", rxe - ui_text_width("KNIFE", 1.25f), hud_bot - 15.0f, 1.25f,
+                   TXT_BOLD, 0, C4(C_BONE, 0.92f));
+      } else {
         float rxe = g_ui_vw - 16;
         int mag = WPN_DEF[p->wp.cur].mag, cur = p->wp.ammo[p->wp.cur];
         float a01 = f_clamp((float)cur / (0.25f * (float)mag), 0.0f, 1.0f);
@@ -28316,10 +32461,17 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // index 0 — skipping 0 with a local id != 0 counts our own kills as the
     // lead and the margin reads N:N forever. Hidden once the match is over:
     // the winner hero owns the top centre then.
+    int hgm = game_mode();
     if (!g_match.over) {
-      int me = g_local_ent >= 0 ? g_match.kills[g_local_ent] : 0, lead = 0;
-      for (int i = 0; i < MAX_ENTS; i++)
-        if (i != g_local_ent && g_match.kills[i] > lead) lead = g_match.kills[i];
+      // GUN GAME and LAST MAN STANDING score on the mode's own number (rung,
+      // rounds), so that is what the me:rival line counts there.
+      // Rungs read 1-based.
+      const int *sca = hgm == GM_LMS ? g_match.mscore : g_match.kills;
+#define HUD_SC(e) (hgm == GM_GUN ? gg_level(e) + 1 : sca[e])
+      int me = g_local_ent >= 0 ? HUD_SC(g_local_ent) : 0, lead = hgm == GM_GUN;
+      ENT_FOREACH(i)
+        if (i != g_local_ent && HUD_SC(i) > lead) lead = HUD_SC(i);
+#undef HUD_SC
       char msc[8], lsc[8];
       snprintf(msc, sizeof msc, "%d", me);
       snprintf(lsc, sizeof lsc, "%d", lead);
@@ -28332,6 +32484,47 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  TXT_REG, 0.8f,
                  ahead ? C4(C_BLAZE, 0.8f)
                  : lead > me ? C4(C_HAZE, 0.85f) : C4(C_HAZE, 0.8f));
+      // ...and the one line of mode state a player needs under it.
+      char cap[40];
+      cap[0] = '\0';
+      if (hgm == GM_GUN && g_local_ent >= 0) {
+        int l = gg_level(g_local_ent);
+        if (l == GG_LEVELS - 1)
+          snprintf(cap, sizeof cap, "%s \x05 RUNG %d/%d \x05 KILL TO WIN",
+                   WPN_DEF[GG_LADDER[l]].name, l + 1, GG_LEVELS);
+        else
+          snprintf(cap, sizeof cap, "%s \x05 RUNG %d/%d \x05 %d/%d KILLS",
+                   WPN_DEF[GG_LADDER[l]].name, l + 1, GG_LEVELS,
+                   gg_progress(g_local_ent), GG_RUNG_KILLS);
+      } else if (hgm == GM_LMS) {
+        int al = 0;
+        ENT_FOREACH(e) if (ent_alive(e)) al++;
+        snprintf(cap, sizeof cap, "ROUND %d \x05 %d ALIVE \x05 FIRST TO %d",
+                 g_match.round_no, al, mode_round_goal());
+      } else if (hgm == GM_SNIPER || hgm == GM_BLADES) {
+        snprintf(cap, sizeof cap, "%s", GM_NAMES[hgm]);
+      }
+      if (cap[0])
+        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 22, 0.7f,
+                   TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
+      // LAST MAN STANDING intermission: who took the round, and when the next.
+      if (hgm == GM_LMS && g_match.round_t > 0) {
+        char rb[40], rs[24];
+        int rw = g_match.round_win;
+        if (rw < 0) snprintf(rb, sizeof rb, "ROUND DRAWN");
+        else if (rw == g_local_ent) snprintf(rb, sizeof rb, "ROUND WON");
+        else snprintf(rb, sizeof rb, "%s TAKES THE ROUND", ent_name(rw));
+        snprintf(rs, sizeof rs, "NEXT ROUND IN %d",
+                 (g_match.round_t + TICK_HZ - 1) / TICK_HZ);
+        float rbw = ui_text_width_tr(rb, 1.8f, 2.0f);
+        ui_vgrad(0, g_ui_vh * 0.24f, g_ui_vw, 50, C4(0, 0, 0, 0.45f), C4(0, 0, 0, 0));
+        ui_text_ex(rb, ccx - rbw * 0.5f + 1, g_ui_vh * 0.26f + 1, 1.8f, TXT_BLACK, 2.0f,
+                   C4(0.04f, 0.03f, 0.02f, 0.85f));
+        ui_text_ex(rb, ccx - rbw * 0.5f, g_ui_vh * 0.26f, 1.8f, TXT_BLACK, 2.0f,
+                   rw == g_local_ent ? C4(C_BLAZE, 1) : C4(C_BONE, 1));
+        ui_text_ex(rs, ccx - ui_text_width_tr(rs, 0.9f, 1.4f) * 0.5f,
+                   g_ui_vh * 0.26f + 22, 0.9f, TXT_REG, 1.4f, C4(C_HAZE, 0.9f));
+      }
     }
     // ...and the multi-kill banner, under the crosshair rather than over it,
     // with a soft glow and a small entrance pop.
@@ -28393,7 +32586,21 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // Death screen: the world stays visible; a scrim pulls the eye to the
     // lower third where the broadcast caption sits, and the respawn is a
     // progress capsule instead of a decimal readout.
-    if (!p->alive && !g_match.over) {
+    // SPECTATING (LAST MAN STANDING, out of the round): the fight being
+    // watched IS the picture, so the death frame's scrim and centre caption
+    // step aside for one quiet line along the bottom.
+    int spec_on = !p->alive && !g_match.over ? spec_target() : -1;
+    if (spec_on >= 0) {
+      ui_vgrad(0, g_ui_vh - 64, g_ui_vw, 64, C4(0, 0, 0, 0), C4(0, 0, 0, 0.55f));
+      char s1[40];
+      snprintf(s1, sizeof s1, "SPECTATING %s", ent_name(spec_on));
+      float sw = ui_text_width_tr(s1, 1.1f, 1.5f);
+      ui_text_ex(s1, ccx - sw * 0.5f, g_ui_vh - 44, 1.1f, TXT_REG, 1.5f,
+                 C4(C_BONE, 0.95f));
+      const char *s2 = "OUT \x05 BACK IN NEXT ROUND";
+      ui_text_ex(s2, ccx - ui_text_width_tr(s2, 0.7f, 1.2f) * 0.5f, g_ui_vh - 28, 0.7f,
+                 TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
+    } else if (!p->alive && !g_match.over) {
       // The death frame is STAGED: an INK scrim from both edges controls
       // whatever the corpse camera happens to face, so the caption never
       // stands on raw mud. World desaturation would need a post pass; the
@@ -28411,11 +32618,23 @@ static void render_frame(const player_t *p, float alpha, int fps,
       char d2[40];
       snprintf(d2, sizeof d2, "BY %s", ent_name(g_match.last_killer));
       ui_text(d2, ccx - ui_text_width(d2, 1) * 0.5f, dy0 + 30, 1, C_BONE, 0.92f);
-      float rp = 1.0f - f_clamp((float)p->respawn_t / PLAYER_RESPAWN_TICKS, 0.0f, 1.0f);
-      ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1, 3, C_BONE, 0.14f);
-      ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1 * rp, 3, C_BLAZE, 0.95f);
-      ui_text_ex("REDEPLOY", ccx - ui_text_width_tr("REDEPLOY", 0.8f, 1.5f) * 0.5f,
-                 dy0 + 53, 0.8f, TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
+      if (!mode_respawns()) {
+        // No redeploy in LAST MAN STANDING: the wait is for the round, not a
+        // timer (and once the camera starts following someone, the branch
+        // above takes over).
+        const char *d3 = "OUT FOR THIS ROUND";
+        ui_text_ex(d3, ccx - ui_text_width_tr(d3, 0.8f, 1.5f) * 0.5f, dy0 + 48, 0.8f,
+                   TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
+        const char *d4 = "BACK IN NEXT ROUND";
+        ui_text_ex(d4, ccx - ui_text_width_tr(d4, 0.7f, 1.2f) * 0.5f, dy0 + 60, 0.7f,
+                   TXT_REG, 1.2f, C4(C_HAZE, 0.7f));
+      } else {
+        float rp = 1.0f - f_clamp((float)p->respawn_t / PLAYER_RESPAWN_TICKS, 0.0f, 1.0f);
+        ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1, 3, C_BONE, 0.14f);
+        ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1 * rp, 3, C_BLAZE, 0.95f);
+        ui_text_ex("REDEPLOY", ccx - ui_text_width_tr("REDEPLOY", 0.8f, 1.5f) * 0.5f,
+                   dy0 + 53, 0.8f, TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
+      }
     }
 
     // Match over: winner hero over a top scrim, graticule ruler under it;
@@ -28593,6 +32812,7 @@ typedef struct {
 // corpse weapon placement — render-side). THE SIM MUST NOT READ ANY OF THESE;
 // a future sim reader of g_gun_low would silently get 0 on the server.
 static void app_start(player_t *p, int w, int h, uint32_t seed) {
+  map_pick_apply(0);
   g_map_seed = seed;
   map_generate(seed);
   if (!g_server) {
@@ -28604,11 +32824,7 @@ static void app_start(player_t *p, int w, int h, uint32_t seed) {
 }
 
 // THE WHEEL SCROLLS THROUGH THE WEAPONS, and it is wired to IN_SWAP rather
-// than to a pair of NEXT/PREV actions on purpose. Two reasons, and the first
-// is a hard wall: net_in_t.buttons is a uint16 and IN_COUNT is already 16, so
-// a new action means a wire change and a NET_PROTO bump — bought for a control
-// that, at WPN_COUNT == 2, cannot mean anything a swap does not already mean
-// (up and down both land on the other weapon). The second is that the whole
+// than to a pair of NEXT/PREV actions on purpose: the whole
 // switch — the raise timeline, the abandoned reload, the direct-slot no-op —
 // lives in weapon_tick behind that ONE press edge, and a second route into it
 // is the one-copy rule broken for a mouse.
@@ -29103,6 +33319,7 @@ static void leave_match(void) {
   // the local match. The teardown must not depend on how the link ended.
   memset(g_net_ping, 0, sizeof g_net_ping);
   g_net_fraglimit = 0;
+  g_net_rounds = 0;
   memset(g_spawn_seq, 0, sizeof g_spawn_seq);
   memset(g_cl_body, 0, sizeof g_cl_body);   // no body of the server's survives
   memset(g_cl_alive_prev, 0, sizeof g_cl_alive_prev);
@@ -30249,7 +34466,9 @@ static void usage(void) {
        "                     --lobbies N (independent arenas in this ONE\n"
        "                     process on this ONE port; a new one fills only\n"
        "                     once the previous is full)\n"
-       "                     --skill 0|1|2 --fraglimit N and\n"
+       "                     --skill 0|1|2 --fraglimit N\n"
+       "                     --mode dm|gun|sniper|blades|lms --rounds N\n"
+       "                     --map arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate and\n"
        "                     --ticks N (exit after N ticks; 0 = run forever)\n"
        "                     --net-debug (verbose: trims/skips, one line each)\n"
        "                     heartbeats and answers QUERY. --port N --ticks N\n"
@@ -30264,9 +34483,9 @@ static void usage(void) {
        "script commands (whitespace/;-separated):\n"
        "  wait N             advance N ticks (120 Hz)\n"
        "  +A / -A            press/release action: forward back left right jump crouch\n"
-       "                     lean_left lean_right fire ads reload swap slot1 slot2\n"
+       "                     lean_left lean_right fire ads reload swap slot1..slot5\n"
        "                     score view (view toggles 3rd person)\n"
-       "  weapon ar|sr       switch weapon instantly (no raise animation)\n"
+       "  weapon ar|sr|pt|kn|gr switch weapon (no raise animation)\n"
        "  tap A              press action for exactly one tick\n"
        "  look DX DY         inject mouse counts (scaled by sense)\n"
        "  aim X Y Z          snap yaw/pitch to look at a world point\n"
@@ -30295,6 +34514,9 @@ static void usage(void) {
        "  bots N             set bot count %d-%d (applies next tick)\n"
        "  skill easy|normal|hard   set bot difficulty\n"
        "  fraglimit N        set the frag limit %d-%d\n"
+       "  mode dm|gun|sniper|blades|lms  set the game mode (applies on restart)\n"
+       "  rounds N           LAST MAN STANDING rounds to win\n"
+       "  usemap arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate  set the map (applies on restart)\n"
        "  match              print match state + one score line per entity\n"
        "  restart            queue a match restart + fresh procedural map (next tick)\n"
        "  sfx DIR            dump all synthesized sounds as WAV + level stats\n"
@@ -30332,6 +34554,8 @@ static void usage(void) {
        "  parity             24 player-vs-bot gameplay rows, ok/MISMATCH each\n"
        "  bothear            authoritative shot/step hearing and investigation proof\n"
        "  botweapon          bot weapon-choice/swap/cooldown hysteresis proof\n"
+       "  meleecheck         knife: hit, thrust, block, parry, rear and flank\n"
+       "  blastcheck         grenade: damage falloff, blast edge and cover\n"
        "  botmemory          bot line-of-sight memory proof\n"
        "  botflank           bot flank anchor/commitment/abort proof\n"
        "  padbackend         normalized gamepad mapper proof (std/XInput/HID)\n"
@@ -31040,6 +35264,86 @@ static void bothear_proof(void) {
 
 // Deterministic weapon-policy proof. It exercises the production decision and
 // request helpers directly, then restores every staged simulation/event field.
+// THE KNIFE'S RULES, each on its own staged exchange: a swing through a stationary
+// bot 1.2 m ahead of the player. The arithmetic of melee_land is the claim, so it
+// is run through the real melee_tick and its rays, not called directly.
+static int melee_stage(int chain, float yaw_off, int guard_t, int *stag) {
+  player_t *p = local_player();
+  bot_t *b = &g_bots[0];
+  v3 f = {{sinf(p->yaw), 0, -cosf(p->yaw)}};
+  b->pos = v3_add(p->pos, v3_scale(f, 1.2f));
+  b->yaw = p->yaw + F_PI + yaw_off;
+  b->alive = b->active = 1;
+  b->hp = 100;
+  b->wp = (weapon_t){.cur = WPN_KN, .guard_t = guard_t};
+  b->wp.ads_s = b->wp.ads_lin = guard_t ? 1.0f : 0.0f;
+  weapon_t a = {.cur = WPN_KN, .melee_n = chain};
+  v3 eye = player_eye_pos(p);
+  for (int i = 0; i < 90; i++)
+    melee_tick(g_local_ent, &a, eye, p->yaw, p->pitch, NULL, i == 0);
+  *stag = a.stagger_t;
+  return b->hp;
+}
+
+// THE DAMAGE AREA, run through the real nade_blast: falloff in the open from a
+// staged bot, the edge of the radius, and a wall between the charge and the man.
+static int blast_stage(v3 at, v3 victim) {
+  bot_t *b = &g_bots[0];
+  b->pos = victim;
+  b->prev_pos = victim;
+  b->alive = b->active = 1;
+  b->hp = 100;
+  b->vel = (v3){{0, 0, 0}};
+  nade_blast(at, 2);          // credited to a bystander, never the victim
+  return b->alive ? b->hp : 0;
+}
+
+static void blastcheck_proof(void) {
+  v3 at = {{0, 0.05f, 18}};
+  int hp[6], i = 0;
+  static const float D[6] = {1.0f, 3.0f, 5.0f, 7.0f, 8.8f, 10.5f};
+  for (; i < 6; i++) hp[i] = blast_stage(at, (v3){{D[i], 0, 18}});
+  // Behind the tallest solid in the arena, 1 m from it, with the charge 1 m in
+  // front: 2 m + the solid's depth, and it must take nothing.
+  int bs = -1;
+  float bh = 0.0f;
+  for (int s = 0; s < g_num_solids; s++) {
+    const solid_t *q = &g_solids[s];
+    float w = q->max.x - q->min.x;
+    if (q->min.y < 0.1f && q->max.y > 2.2f && w > 0.3f && w < 4.5f &&
+        fabsf(q->max.z) < 40.0f && q->max.y > bh) { bh = q->max.y; bs = s; }
+  }
+  int covered = -1;
+  if (bs >= 0) {
+    const solid_t *q = &g_solids[bs];
+    float z = (q->min.z + q->max.z) * 0.5f;
+    covered = blast_stage((v3){{q->min.x - 1.0f, 0.05f, z}}, (v3){{q->max.x + 1.0f, 0, z}});
+  }
+  int mono = 1;
+  for (i = 1; i < 6; i++) if (hp[i] < hp[i - 1]) mono = 0;
+  int ok = mono && hp[0] <= 0 && hp[5] == 100 && (hp[4] > 90) && covered == 100;
+  printf("blastcheck hp@1m=%d @3m=%d @5m=%d @7m=%d @8.8m=%d @10.5m=%d behind_cover=%d %s\n",
+         hp[0], hp[1], hp[2], hp[3], hp[4], hp[5], covered, ok ? "ok" : "FAIL");
+  bot_spawn(0);
+}
+
+static void meleecheck_proof(void) {
+  int st0, st1, st2, st3, st4;
+  int open = melee_stage(0, 0.0f, 0, &st0);
+  int thrust = melee_stage(2, 0.0f, 0, &st0);
+  int block = melee_stage(0, 0.0f, MELEE_PARRY_TICKS + 40, &st1);
+  int parry = melee_stage(1, 0.0f, 5, &st2);
+  int rear = melee_stage(0, F_PI, 5, &st3);
+  int flank = melee_stage(0, 1.1f, MELEE_PARRY_TICKS + 40, &st4);
+  int ok = open == 100 - MELEE[0].dmg && thrust == 100 - MELEE[2].dmg &&
+           block == 100 - MELEE_CHIP && st1 == 0 && parry == 100 && st2 > 0 &&
+           rear == 100 - MELEE[0].dmg && st3 == 0 && flank == 100 - MELEE_CHIP;
+  printf("meleecheck open=%d thrust=%d block=%d parry=%d stagger=%d rear=%d "
+         "flank=%d %s\n", open, thrust, block, parry, st2, rear, flank,
+         ok ? "ok" : "FAIL");
+  bot_spawn(0);
+}
+
 static void botweapon_proof(void) {
   proof_world_t w;
   proof_world_save(&w);
@@ -32182,9 +36486,10 @@ static void figbury_proof(void) {
   // `butt` is the number the eye actually reads: the rearmost point of the
   // model, i.e. the butt pad. A stock resting against the ribs is a few mm
   // in; a stock that has vanished is 100+.
-  static const char *const BODYP[] = {"torso", "carrier", "pack", "packstrap",
-                                      "trap", "strap", "magpouch", "thigh",
-                                      "deltoid", "sho_ball", "dropleg", "neck"};
+  static const char *const BODYP[] = {"torso", "carrier", "placard", "pack",
+                                      "packstrap", "trap", "strap", "magpouch",
+                                      "thigh", "deltoid", "pauldron",
+                                      "sho_ball", "dropleg", "neck"};
   // ...and the SAME question about the HEAD, because it is the same defect
   // class and no other proof can see it either: crouching, the head tucks
   // onto the shoulders on purpose, and three separate drops (the crouch
@@ -32196,8 +36501,9 @@ static void figbury_proof(void) {
   // rearmost-along-bore that means nothing for a head.
   static const char *const HEADP[] = {"skull", "helm_shell", "helm_ear",
                                       "goggle", "ear", "chinstrap", "nvg"};
-  static const char *const HBODY[] = {"torso", "carrier", "pack", "packstrap",
-                                      "trap", "strap", "deltoid", "sho_ball"};
+  static const char *const HBODY[] = {"torso", "carrier", "placard", "pack",
+                                      "packstrap", "trap", "strap", "deltoid",
+                                      "pauldron", "sho_ball"};
   int hmode = 0;
   { char *sub = take_tok();
     if (sub && !strcmp(sub, "head")) hmode = 1;
@@ -32220,9 +36526,9 @@ static void figbury_proof(void) {
     // 84 mm right of the spine at chest height and read as 55 mm OUTSIDE the
     // body. A union is only a solid when its parts do not overlap, and a
     // plate carrier is worn ON a torso by definition.
-    int brng[64][2], nb = 0, srng[24][2], ns = 0;
-    v3 blo[64], bhi[64];
-    for (int i = 0; i < g_nprobe && nb < 64; i++) {
+    int brng[96][2], nb = 0, srng[24][2], ns = 0;
+    v3 blo[96], bhi[96];
+    for (int i = 0; i < g_nprobe && nb < 96; i++) {
       if (!g_probe[i].name) continue;
       if (hmode) {
         for (unsigned k = 0; k < sizeof HEADP / sizeof *HEADP && ns < 24; k++)
@@ -32947,7 +37253,7 @@ static void netfuzz_proof(void) {
     // crash nor hand back a row whose id could index out of bounds.
     net_score_t sc[MAX_ENTS]; net_name_t nmf[MAX_HUMANS];
     uint8_t ov, wi; uint16_t fr; int nnf = 0;
-    int nsc = net_scores_read(buf, (size_t)len, &ov, &wi, &fr, sc, MAX_ENTS,
+    int nsc = net_scores_read(buf, (size_t)len, &ov, &wi, &fr, NULL, sc, MAX_ENTS,
                               nmf, MAX_HUMANS, &nnf);
     for (int k = 0; k < nsc; k++)
       if (sc[k].id >= MAX_ENTS) accepted_ent = -1000000;
@@ -32959,7 +37265,7 @@ static void netfuzz_proof(void) {
     // g_bots) — both used to be outside this battery entirely.
     uint32_t fst, fli, fwh, fsd; uint8_t fqd; int ffull, fnev = 0;
     net_ent_t fents[MAX_ENTS]; net_ev_t fevs[NET_EV_SNAP_MAX];
-    int fcnt = net_snapshot_read(buf, (size_t)len, &fst, &fli, &fwh, &fsd,
+    int fcnt = net_snapshot_read(buf, (size_t)len, &fst, &fli, &fwh, &fsd, NULL,
                                  &fqd, fents, MAX_ENTS, &ffull,
                                  fevs, NET_EV_SNAP_MAX, &fnev);
     for (int k = 0; k < fcnt; k++)
@@ -32969,7 +37275,7 @@ static void netfuzz_proof(void) {
       event_t le;
       net_ev_to_live(&le, &fevs[k]);
       if (le.src >= MAX_ENTS || le.dst >= MAX_ENTS ||
-          le.wpn < 0 || le.wpn >= WPN_COUNT || le.type > EV_LAND)
+          le.wpn < 0 || le.wpn >= WPN_COUNT || le.type > EV_BLAST)
         accepted_ent = -1000000;
     }
     // Cookie validation must never index or trap on garbage inputs.
@@ -32991,6 +37297,10 @@ static void run_script(char *script, sim_ctx_t *s) {
       bothear_proof();
     } else if (!strcmp(t, "botweapon")) {
       botweapon_proof();
+    } else if (!strcmp(t, "meleecheck")) {
+      meleecheck_proof();
+    } else if (!strcmp(t, "blastcheck")) {
+      blastcheck_proof();
     } else if (!strcmp(t, "botflank")) {
       botflank_proof();
     } else if (!strcmp(t, "botmemory")) {
@@ -33266,6 +37576,7 @@ static void run_script(char *script, sim_ctx_t *s) {
         long tick;
         uint64_t rng, rng_gun[MAX_HUMANS], rng_bot;
         uint32_t map_seed;
+        int map_id;
         unsigned char on[MAX_HUMANS];
       } sv;
       memcpy(sv.players, g_players, sizeof g_players);
@@ -33275,6 +37586,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       sv.rng = g_rng; sv.rng_bot = g_rng_bot;
       memcpy(sv.rng_gun, g_rng_gun, sizeof g_rng_gun);
       sv.map_seed = g_map_seed;
+      sv.map_id = g_map_id;
       memcpy(sv.on, g_humans_on, sizeof g_humans_on);
       static uint32_t ha[4096], hb[4096];
       #define NL_HASH(dst) do {                                             \
@@ -33292,6 +37604,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       // restore — map first (a fraglimit restart advances the seed and
       // regenerates solids; map_generate also reseeds every RNG stream),
       // then the exact RNG/entity/match state over it.
+      g_map_id = sv.map_id;
       map_generate(sv.map_seed);
       g_map_seed = sv.map_seed;
       memcpy(g_players, sv.players, sizeof g_players);
@@ -33329,7 +37642,7 @@ static void run_script(char *script, sim_ctx_t *s) {
         float fx = (rng_next(&rs) / 4294967296.0f - 0.5f) * 640.0f;
         float fv = (rng_next(&rs) / 4294967296.0f - 0.5f) * 640.0f;
         net_input_t in = {.tick = (uint32_t)i, .view = rng_next(&rs),
-                          .buttons = (uint16_t)rng_next(&rs),
+                          .buttons = (uint32_t)rng_next(&rs),
                           .yaw = net_q_yaw(fy), .pitch = net_q_pitch(fp),
                           .wish_x = net_q_wish(fw), .wish_y = net_q_wish(-fw)};
         unsigned char buf[64];
@@ -33392,9 +37705,9 @@ static void run_script(char *script, sim_ctx_t *s) {
       net_ev_t ea[NET_EV_SNAP_MAX], eb[NET_EV_SNAP_MAX];
       uint32_t st, li, wh;
       int nea = 0, neb = 0;
-      int na = net_snapshot_read(snap, len, &st, &li, &wh, NULL, NULL, a, MAX_ENTS,
+      int na = net_snapshot_read(snap, len, &st, &li, &wh, NULL, NULL, NULL, a, MAX_ENTS,
                                  NULL, ea, NET_EV_SNAP_MAX, &nea);
-      int nb = net_snapshot_read(snap, len, NULL, NULL, NULL, NULL, NULL, b, MAX_ENTS,
+      int nb = net_snapshot_read(snap, len, NULL, NULL, NULL, NULL, NULL, NULL, b, MAX_ENTS,
                                  NULL, eb, NET_EV_SNAP_MAX, &neb);
       float worst_mm = 0.0f;
       int mism = na != nb, live = 0;
@@ -34618,6 +38931,28 @@ static void run_script(char *script, sim_ctx_t *s) {
     } else if (!strcmp(t, "fraglimit")) {
       long n = next_n();
       g_cfg.sp_frag = parse_int_def(n, &SP_FRAG_DEF);
+    } else if (!strcmp(t, "usemap")) {
+      // The MAP setting, like the menu's: lands on the next `restart`.
+      const char *n = next_tok();
+      int m = map_parse(n);
+      if (m < 0) {
+        fprintf(stderr, "script: unknown map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate)\n", n);
+        exit(1);
+      }
+      g_cfg.sp_map = m;
+    } else if (!strcmp(t, "rounds")) {
+      long n = next_n();
+      g_cfg.sp_rounds = parse_int_def(n, &SP_ROUNDS_DEF);
+    } else if (!strcmp(t, "mode")) {
+      // Sets the MATCH tab's choice; like the menu it lands on the next
+      // `restart`, which is what a script follows it with.
+      const char *n = next_tok();
+      int m = gm_parse(n);
+      if (m < 0) {
+        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms)\n", n);
+        exit(1);
+      }
+      g_cfg.sp_mode = m;
     } else if (!strcmp(t, "restart")) {
       g_match.restart_req = 1;
     } else if (!strcmp(t, "match")) {
@@ -34628,13 +38963,19 @@ static void run_script(char *script, sim_ctx_t *s) {
       for (int h = 0; h < MAX_HUMANS; h++)
         if (g_humans_on[h]) nh++;
       printf("match t=%ld over=%d winner=%s bots=%d humans=%d frag=%d diff=%d "
-             "php=%d palive=%d\n",
+             "php=%d palive=%d mode=%s map=%s round=%d round_t=%d\n",
              s->tick, g_match.over, g_match.over ? ent_name(g_match.winner) : "none",
-             g_match.nbots, nh, g_cfg.sp_frag, g_cfg.sp_diff, s->p->hp, s->p->alive);
-      ENT_FOREACH(e)
-        printf("score %s k=%d d=%d shots=%d hits=%d acc=%d%%\n", ent_name(e),
+             g_match.nbots, nh, g_cfg.sp_frag, g_cfg.sp_diff, s->p->hp, s->p->alive,
+             GM_KEYS[game_mode()], MAP_DEFS[map_id_valid(g_map_id)].key,
+             g_match.round_no, g_match.round_t);
+      ENT_FOREACH(e) {
+        const weapon_t *ew = ent_weapon(e);
+        printf("score %s k=%d d=%d shots=%d hits=%d acc=%d%% m=%d wpn=%s alive=%d\n",
+               ent_name(e),
                g_match.kills[e], g_match.deaths[e], g_match.shots[e], g_match.hits[e],
-               g_match.shots[e] ? g_match.hits[e] * 100 / g_match.shots[e] : 0);
+               g_match.shots[e] ? g_match.hits[e] * 100 / g_match.shots[e] : 0,
+               g_match.mscore[e], ew ? WPN_DEF[ew->cur].prefix : "-", ent_alive(e));
+      }
     } else if (!strcmp(t, "sfxlog")) {
       // Every audio decision the game makes, for N ticks, as text. Synthesis
       // can be judged from a WAV; ROUTING cannot — whether a shot 30 m away
@@ -34773,8 +39114,18 @@ static void run_script(char *script, sim_ctx_t *s) {
               // be seen, so two boxes standing on the ground always share that
               // plane and it means nothing. Everything else counts.
               int buried = (a == 1 && amn[a] < 0.001f && bmn[a] < 0.001f);
-              if (!buried && fabsf(amn[a] - bmn[a]) < 0.001f) hits++;
-              if (fabsf(amx[a] - bmx[a]) < 0.001f) hits++;
+              int h0 = !buried && fabsf(amn[a] - bmn[a]) < 0.001f;
+              int h1 = fabsf(amx[a] - bmx[a]) < 0.001f;
+              hits += h0 + h1;
+              // MAPCHECK_V=1 names the first pairs, for whoever is fixing them.
+              static int shown;
+              if ((h0 || h1) && getenv("MAPCHECK_V") && shown < 60) {
+                shown++;
+                printf("  pair %d %d axis=%c %s (%.2f %.2f %.2f)-(%.2f %.2f %.2f) | (%.2f %.2f %.2f)-(%.2f %.2f %.2f)\n",
+                       i, j, "xyz"[a], h0 ? "min" : "max",
+                       (double)amn[0], (double)amn[1], (double)amn[2], (double)amx[0], (double)amx[1], (double)amx[2],
+                       (double)bmn[0], (double)bmn[1], (double)bmn[2], (double)bmx[0], (double)bmx[1], (double)bmx[2]);
+              }
             }
           }
         total += hits;
@@ -36740,6 +41091,9 @@ static int server_main(uint32_t seed) {
   g_cfg.sp_bots = net_bot_target(0, g_srv.cap_public, g_srv.cap_bots);
   g_cfg.sp_diff = g_srv.skill < 0 ? 0 : g_srv.skill > 2 ? 2 : g_srv.skill;
   g_cfg.sp_frag = g_srv.fraglimit;
+  g_cfg.sp_mode = g_srv.mode;
+  g_cfg.sp_map = g_srv.map;
+  g_cfg.sp_rounds = parse_int_def(g_srv.rounds, &SP_ROUNDS_DEF);
   signal(SIGINT, srv_sig);
   signal(SIGTERM, srv_sig);
   // EVERY ARENA IS BROUGHT UP THE SAME WAY, through the one shared entry
@@ -36763,9 +41117,10 @@ static int server_main(uint32_t seed) {
     fprintf(stderr, "server: cannot bind UDP port %d (in use?)\n", g_srv.port);
     return 1;
   }
-  slog("server port=%d lobbies=%d cap=%d bots=%d skill=%d fraglimit=%d v=%s",
+  slog("server port=%d lobbies=%d cap=%d bots=%d skill=%d fraglimit=%d mode=%s map=%s v=%s",
        g_srv.port, g_srv.lobbies, g_srv.cap_public, g_srv.cap_bots,
-       g_cfg.sp_diff, g_cfg.sp_frag, BUILD_VERSION);
+       g_cfg.sp_diff, g_cfg.sp_frag, GM_KEYS[g_cfg.sp_mode], map_pick_key(g_cfg.sp_map),
+       BUILD_VERSION);
   // Fixed 120 Hz on the absolute clock: sleep-until beats sleep-for (no
   // drift), and the backlog is MEASURED (worst `behind` goes into the
   // digest) instead of silently eaten. ~13 µs of sim per tick, 0.16% of a
@@ -36864,6 +41219,17 @@ int main(int argc, char **argv) {
     else if (arg && !strcmp(a, "--lobbies"))    g_srv.lobbies = atoi(argv[++i]);
     else if (arg && !strcmp(a, "--skill"))      g_srv.skill = atoi(argv[++i]);
     else if (arg && !strcmp(a, "--fraglimit"))  g_srv.fraglimit = atoi(argv[++i]);
+    else if (arg && !strcmp(a, "--rounds"))     g_srv.rounds = atoi(argv[++i]);
+    else if (arg && !strcmp(a, "--map")) {
+      int m = map_parse(argv[++i]);
+      if (m < 0) { fprintf(stderr, "unknown --map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate)\n", argv[i]); return 1; }
+      g_srv.map = m;
+    }
+    else if (arg && !strcmp(a, "--mode")) {
+      int m = gm_parse(argv[++i]);
+      if (m < 0) { fprintf(stderr, "unknown --mode '%s' (dm|gun|sniper|blades|lms)\n", argv[i]); return 1; }
+      g_srv.mode = m;
+    }
     else if (arg && !strcmp(a, "--ticks"))      g_srv.ticks = atol(argv[++i]);
     else if (!strcmp(a, "--net-debug"))         g_net_debug = 1;  // game.log: one
                                                 // line per trim/skip, see decl

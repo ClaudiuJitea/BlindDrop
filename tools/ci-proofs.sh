@@ -104,7 +104,12 @@ done
 # +1 +1 +3 0 with the field kit (pack, plates, pouches, shoulder armour, night
 # vision): the boxes sit against the torso, helmet and arms by design. zfight is 0
 # at every tier, and the kit is skipped at the far tier.
-WANT_NEAR="41 41 49 36"
+# -1 -1 -3 0 when replacing the pelvis-framed scene_box field kit with properly
+# rigged fig_chain equipment (unified chest-framed pack + pouches, twisted front
+# placard, clavicle-framed shoulder pauldrons, head-framed NVG shroud): removing
+# the coplanar box faces puts near back to its pre-field-kit baseline; zfight is
+# 0 at all four tiers.
+WANT_NEAR="40 40 46 36"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -317,7 +322,10 @@ WANT_NEAR="41 41 49 36"
 # (40 40 46 36), `zfight` is 0 at all four, every hard invariant is 0, and
 # every non-sliding pose is byte-identical (4 A/B screenshots, md5-equal).
 # +18 +18 +11 0 with the field kit: same cause as the near change above.
-WANT_CROSS="94 94 84 47"
+# -2 -2 +4 +11 when replacing the pelvis-framed scene_box field kit with
+# fig_chain equipment: close tiers drop 2 pairs, and DIST 30 (k=6) now keeps the
+# scaled kit instead of popping it out behind g_fig_k >= 8.
+WANT_CROSS="92 92 88 58"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows
