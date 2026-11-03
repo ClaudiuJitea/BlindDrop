@@ -1934,8 +1934,51 @@ static int      g_map_pick_all[SRV_LOBBIES];
 
 static const v3 SPAWN_POS = {{0.0f, 0.0f, 18.0f}};
 
+// --- SURFACE MATERIALS ----------------------------------------------------
+// What a box is MADE of, for the world shader: brick courses, lime render,
+// form-cast concrete, corrugated sheet. It is purely cosmetic, so it lives in
+// a PARALLEL array rather than in solid_t: the solids are hashed byte for byte
+// into the network world check (net_world_hash), and a renderer-only property
+// has no business deciding whether a client may join.
+//
+// Builders do not pass it. A box's material is decided by its COLOUR, matched
+// against a small table each map registers next to its palette: every palette
+// colour reaches the solids either verbatim or through col_tint, which is a
+// uniform scale, so "same chromaticity, brightness within the tint range" is
+// an exact test for "built from that palette entry" with no builder threading
+// a parameter through. g_mat_force overrides it for the few builders whose
+// colour says nothing about the material (a container is any colour at all).
+enum { SMAT_PAINT = 0, SMAT_STUCCO, SMAT_BRICK, SMAT_CONCRETE, SMAT_CLAD,
+       SMAT_CONTAINER, SMAT_STONE, SMAT_WOOD, SMAT_COUNT };
+static uint8_t g_solid_mat_all[SRV_LOBBIES][MAX_SOLIDS];
+#define g_solid_mat (g_solid_mat_all[g_lobby])
+static int g_mat_force = -1;
+static struct { v3 c; uint8_t m; } g_mat_tab[48];
+static int g_mat_tab_n;
+static void smat_reset(void) { g_mat_tab_n = 0; g_mat_force = -1; }
+static void smat_reg(v3 c, int m) {
+  if (g_mat_tab_n < (int)(sizeof g_mat_tab / sizeof g_mat_tab[0]))
+    g_mat_tab[g_mat_tab_n++] = (typeof(g_mat_tab[0])){c, (uint8_t)m};
+}
+static int smat_classify(v3 c) {
+  int best = SMAT_PAINT;
+  float best_e = 1e9f;
+  for (int i = 0; i < g_mat_tab_n; i++) {
+    v3 k = g_mat_tab[i].c;
+    float kk = k.x * k.x + k.y * k.y + k.z * k.z;
+    if (kk < 1e-6f) continue;
+    float r = (c.x * k.x + c.y * k.y + c.z * k.z) / kk;
+    if (r < 0.55f || r > 1.12f) continue;      // the widest tint any builder uses
+    float ex = c.x - r * k.x, ey = c.y - r * k.y, ez = c.z - r * k.z;
+    float e = ex * ex + ey * ey + ez * ez;
+    if (e < 2.5e-4f && e < best_e) { best_e = e; best = g_mat_tab[i].m; }
+  }
+  return best;
+}
+
 static void map_add(v3 mn, v3 mx, v3 col) {
   if (g_num_solids >= MAX_SOLIDS) return;
+  g_solid_mat[g_num_solids] = (uint8_t)(g_mat_force >= 0 ? g_mat_force : smat_classify(col));
   g_solids[g_num_solids++] = (solid_t){mn, mx, col, 1};
 }
 
@@ -2792,6 +2835,18 @@ static void town_style(int which) {
     s->awning[2] = s->awning[0]; s->awning[3] = s->awning[1];
     s->wide_windows = 1;
   }
+  // The materials behind the palette (see smat_classify). Registered AFTER the
+  // theme's own entries, and the closest colour match wins either way.
+  static const uint8_t PM[3][4] = {
+    {SMAT_STUCCO,   SMAT_STUCCO, SMAT_STUCCO,   SMAT_STUCCO},   // limewashed render
+    {SMAT_BRICK,    SMAT_CONCRETE, SMAT_CLAD,   SMAT_BRICK},    // warehouses, sheds
+    {SMAT_CONCRETE, SMAT_CLAD,   SMAT_CONCRETE, SMAT_CLAD},     // precast, sheeting
+  };
+  for (int i = 0; i < 4; i++) smat_reg(s->plaster[i], PM[which][i]);
+  smat_reg(s->stone, which == 0 ? SMAT_STONE : SMAT_CONCRETE);
+  smat_reg(s->door, SMAT_WOOD);
+  if (which == 0) smat_reg(s->trim, SMAT_STUCCO);
+  if (which == 2) smat_reg(rgb(0.74f, 0.72f, 0.68f), SMAT_CONCRETE);  // cooling tower
 }
 
 // One facade: piers, and in each opening column the wall pieces, the window or
@@ -3124,8 +3179,10 @@ static void lamp(float x, float z, int ax, int dir) {
 // A shipping container, 6.1 x 2.44 x 2.6, along x (ax 0) or z; `y` stacks it.
 static void container(float x, float z, int ax, float y, v3 c) {
   float L = 3.05f, W = 1.22f, H = 2.6f;
+  g_mat_force = SMAT_CONTAINER;
   if (ax == 0) bx(x - L, y, z - W, x + L, y + H, z + W, c);
   else         bx(x - W, y, z - L, x + W, y + H, z + L, c);
+  g_mat_force = -1;
 }
 
 // Market stall (one copy; the open maps' stall() mirrors).
@@ -3569,6 +3626,14 @@ static void map_generate_layout(uint32_t seed) {
   const map_def_t *md = &MAP_DEFS[map_id_valid(g_map_id)];
   if (md->theme >= 0) g_theme = THEMES[md->theme];   // the draw above still
                                                      // happens: same streams
+  // What the theme's palette entries are made of. A town map registers its own
+  // palette on top of these in town_style; the closest match wins, so a
+  // plaster that happens to sit near a theme colour still reads as plaster.
+  smat_reset();
+  smat_reg(g_theme.wall, SMAT_CONCRETE);
+  smat_reg(g_theme.cover, g_theme.surf == SURF_WET ? SMAT_CLAD : SMAT_BRICK);
+  smat_reg(g_theme.crate_a, SMAT_WOOD);
+  smat_reg(g_theme.crate_b, SMAT_CONCRETE);
   g_arena_half_all[g_lobby] = md->half;              // before the shell below
   g_step_h_all[g_lobby] = md->step;
   {  // see wind_dir(): hashed off the seed, never drawn from the map stream
@@ -17499,6 +17564,186 @@ static const char *WORLD_FS =
   "                                    * uSmStep, p.z));\n"
   "  return s * 0.0625;\n"
   "}\n"
+  // --- BUILDING MATERIALS ----------------------------------------------------
+  // Every box in the world used to be one flat albedo with a little grain on it,
+  // and that, more than the lighting, is what read as a block-out: a warehouse
+  // and a crate were the same surface at different sizes. Each material is a
+  // HEIGHT field (relief, turned into a normal by finite differences) plus an
+  // APPEARANCE (albedo multiplier, roughness offset), both functions of a
+  // world-anchored planar coordinate, so a facade built from forty boxes still
+  // carries one continuous brick bond across all of them.
+  // THE FOOTPRINT RULE from the floor applies here unchanged: every term fades
+  // itself out on `fp` (metres per pixel) before its own wavelength reaches
+  // Nyquist and hands what it lost to the average, so a wall is detailed at arm's
+  // length and dead calm at forty metres instead of crawling.
+  "float mfade(float lam, float fp) { return 1.0 - smoothstep(lam * 0.16, lam * 0.45, fp); }\n"
+  // Distance to the nearest joint of a running-bond grid, in metres, and the cell
+  // id. `w`, `h`: unit size including the joint; odd rows shift by `sh` of a unit.
+  "vec3 bond(vec2 uv, float w, float h, float sh) {\n"
+  "  float row = floor(uv.y / h);\n"
+  "  float uu = uv.x / w + sh * mod(row, 2.0);\n"
+  "  float col = floor(uu);\n"
+  "  vec2 f = vec2(fract(uu) * w, fract(uv.y / h) * h);\n"
+  "  float dm = min(min(f.x, w - f.x), min(f.y, h - f.y));\n"
+  "  return vec3(dm, col, row);\n"
+  "}\n"
+  // Ashlar: courses of one height, blocks of a length that varies per course.
+  "vec3 ashlar(vec2 uv) {\n"
+  "  float h = 0.34;\n"
+  "  float row = floor(uv.y / h);\n"
+  "  float w = 0.62 + 0.30 * vhash2(vec2(row, 3.7));\n"
+  "  float uu = uv.x / w + vhash2(vec2(row, 9.1));\n"
+  "  float col = floor(uu);\n"
+  "  vec2 f = vec2(fract(uu) * w, fract(uv.y / h) * h);\n"
+  "  float dm = min(min(f.x, w - f.x), min(f.y, h - f.y));\n"
+  "  return vec3(dm, col, row);\n"
+  "}\n"
+  // HEIGHT, in metres, of material m at uv. Joints are recesses, panels are flat,
+  // sheet is corrugated. Only the relief that survives the footprint is returned.
+  "float mat_h(int m, vec2 uv, float fp) {\n"
+  "  if (m == 2) {                                       // brick, 225 x 75 mm\n"
+  "    vec3 b = bond(uv, 0.225, 0.075, 0.5);\n"
+  "    return 0.006 * smoothstep(0.003, 0.009, b.x) * mfade(0.075, fp)\n"
+  "         + 0.0012 * vnoise2(uv * 55.0) * mfade(0.018, fp);\n"
+  "  }\n"
+  "  if (m == 1) {                                       // lime render\n"
+  "    float sp = smoothstep(0.745, 0.752, vnoise2(uv * 0.55 + 17.0 + vnoise2(uv * 7.0) * 0.05))\n"
+  "             * (1.0 - smoothstep(0.4, 2.6, uv.y));\n"
+  "    float h = 0.0016 * (vnoise2(uv * 24.0) * 0.6 + vnoise2(uv * 61.0) * 0.4)\n"
+  "            * mfade(0.04, fp);\n"
+  "    if (sp > 0.0) {                                   // spalled: mud brick behind\n"
+  "      vec3 b = bond(uv, 0.31, 0.10, 0.5);\n"
+  "      h -= sp * (0.012 - 0.004 * smoothstep(0.004, 0.010, b.x) * mfade(0.10, fp));\n"
+  "    }\n"
+  "    return h;\n"
+  "  }\n"
+  "  if (m == 3) {                                       // form-cast concrete\n"
+  "    vec3 p = bond(uv, 2.4, 1.2, 0.0);\n"
+  "    vec2 t = abs(fract(uv / 0.6) - 0.5) * 0.6;        // form-tie holes\n"
+  "    float tie = 1.0 - smoothstep(0.008, 0.013, length(t));\n"
+  "    return -0.005 * (1.0 - smoothstep(0.004, 0.010, p.x)) * mfade(0.08, fp)\n"
+  "           - 0.006 * tie * mfade(0.05, fp)\n"
+  "           + 0.0010 * vnoise2(uv * 40.0) * mfade(0.025, fp);\n"
+  "  }\n"
+  "  if (m == 4) {                                       // corrugated sheet, 76 mm\n"
+  "    float s = sin(uv.x * 82.67) * 0.5 + 0.5;\n"
+  "    float lf = fract(uv.y / 2.8);\n"
+  "    float lap = 1.0 - smoothstep(0.006, 0.022, min(lf, 1.0 - lf) * 2.8);\n"
+  "    return 0.0045 * s * mfade(0.076, fp) + 0.004 * lap * mfade(0.06, fp);\n"
+  "  }\n"
+  "  if (m == 5) {                                       // container: trapezoid rib\n"
+  "    float t = fract(uv.x / 0.278);\n"
+  "    float r = smoothstep(0.16, 0.30, t) - smoothstep(0.66, 0.80, t);\n"
+  "    float yb = mod(uv.y, 2.6);\n"
+  "    float rail = 1.0 - smoothstep(0.10, 0.13, yb) * (1.0 - smoothstep(2.44, 2.47, yb));\n"
+  "    return 0.018 * r * (1.0 - rail) * mfade(0.278, fp);\n"
+  "  }\n"
+  "  if (m == 6) {                                       // dressed stone\n"
+  "    vec3 b = ashlar(uv);\n"
+  "    return 0.010 * smoothstep(0.004, 0.030, b.x) * mfade(0.30, fp)\n"
+  "         + 0.0035 * vnoise2(uv * 9.0 + b.yz) * mfade(0.10, fp);\n"
+  "  }\n"
+  "  if (m == 7) {                                       // planking\n"
+  "    vec3 b = bond(vec2(uv.x, uv.y), 1.2, 0.145, 0.37);\n"
+  "    return 0.003 * smoothstep(0.002, 0.006, b.x) * mfade(0.145, fp);\n"
+  "  }\n"
+  "  return 0.0;\n"
+  "}\n"
+  // APPEARANCE: albedo (linear, in and out), roughness, and the metal flag a
+  // painted sheet keeps at zero — paint is a dielectric whatever it is on.
+  "void mat_look(int m, vec2 uv, float fp, inout vec3 alb, inout float rough) {\n"
+  "  if (m == 2) {\n"
+  "    vec3 b = bond(uv, 0.225, 0.075, 0.5);\n"
+  "    vec3 r3 = vhash3(b.yz + vec2(0.37, 11.1));\n"
+  "    float fb = mfade(0.075, fp);\n"
+  // Per-brick value and a little hue: one in eight came out of the kiln dark.
+  "    vec3 bt = vec3(0.86 + 0.26 * r3.x) * mix(vec3(1.0), vec3(0.80, 0.86, 0.95), step(0.875, r3.y));\n"
+  "    bt *= 0.94 + 0.12 * vnoise2(uv * 18.0);\n"
+  "    vec3 mortar = vec3(0.30, 0.285, 0.26) * (0.9 + 0.2 * vnoise2(uv * 30.0));\n"
+  "    float mm = 1.0 - smoothstep(0.003, 0.006 + fp * 0.6, b.x);\n"
+  "    vec3 det = mix(alb * bt, mortar, mm);\n"
+  "    vec3 avg = mix(alb, mortar, 0.13);                 // what the bond averages to\n"
+  "    alb = mix(avg, det, fb);\n"
+  "    rough = clamp(mix(rough, 0.95, mm * fb) + 0.08, 0.045, 1.0);\n"
+  "  } else if (m == 1) {\n"
+  "    float bl = vnoise2(uv * 0.45) * 0.5 + vnoise2(uv * 2.3) * 0.3 + vnoise2(uv * 9.0) * 0.2;\n"
+  "    alb *= 0.94 + 0.11 * bl;\n"
+  "    float sp = smoothstep(0.745, 0.752, vnoise2(uv * 0.55 + 17.0 + vnoise2(uv * 7.0) * 0.05))\n"
+  "             * (1.0 - smoothstep(0.4, 2.6, uv.y));\n"
+  "    if (sp > 0.0) {\n"
+  "      vec3 b = bond(uv, 0.31, 0.10, 0.5);\n"
+  "      float mm = (1.0 - smoothstep(0.004, 0.008, b.x)) * mfade(0.10, fp);\n"
+  "      vec3 mud = alb * vec3(0.78, 0.70, 0.60) * (0.88 + 0.24 * vhash2(b.yz));\n"
+  "      alb = mix(alb, mix(mud, mud * 0.7, mm), sp);\n"
+  // The broken edge of the render, in its own shadow.
+  "      alb *= 1.0 - 0.45 * sp * (1.0 - sp) * 4.0 * mfade(0.03, fp);\n"
+  "    }\n"
+  // Hairline cracks in the render: the zero set of a warped noise.
+  "    float cw = mfade(0.05, fp);\n"
+  "    if (cw > 0.01) {\n"
+  "      float cn = vnoise2(uv * 1.7 + vnoise2(uv * 6.0) * 0.6);\n"
+  "      float cr = 1.0 - smoothstep(0.002, 0.007, abs(cn - 0.5));\n"
+  "      alb *= 1.0 - 0.16 * cr * cw * smoothstep(0.62, 0.85, vnoise2(uv * 0.4 + 5.0));\n"
+  "    }\n"
+  "    rough = clamp(rough + 0.10, 0.045, 1.0);\n"
+  "  } else if (m == 3) {\n"
+  "    vec3 p = bond(uv, 2.4, 1.2, 0.0);\n"
+  "    float pv = vhash2(p.yz + vec2(4.1, 1.3));\n"
+  "    alb *= 0.95 + 0.10 * pv;\n"
+  "    alb *= 0.92 + 0.16 * (vnoise2(uv * 1.3) * 0.6 + vnoise2(uv * 5.0) * 0.4);\n"
+  // Pour lines: the lifts of a wall cast in stages leave faint horizontal bands.
+  "    alb *= 1.0 - 0.05 * smoothstep(0.3, 0.9, vnoise2(vec2(uv.x * 0.3, uv.y * 4.0)));\n"
+  "    float jm = (1.0 - smoothstep(0.004, 0.010 + fp * 0.6, p.x)) * mfade(0.08, fp);\n"
+  "    vec2 t = abs(fract(uv / 0.6) - 0.5) * 0.6;\n"
+  "    float tie = (1.0 - smoothstep(0.008, 0.013, length(t))) * mfade(0.05, fp);\n"
+  "    alb *= 1.0 - 0.32 * jm - 0.45 * tie;\n"
+  "    rough = clamp(rough + 0.05, 0.045, 1.0);\n"
+  "  } else if (m == 4) {\n"
+  "    vec3 sh = bond(uv, 0.84, 2.8, 0.0);               // one sheet per cell\n"
+  "    alb *= 0.93 + 0.12 * vhash2(sh.yz + vec2(2.2, 8.8));\n"
+  // Rust bleeds down from every lap and up from the foot.
+  "    float lapd = fract(uv.y / 2.8);\n"
+  "    float run = vnoise2(vec2(uv.x * 9.0, uv.y * 0.7));\n"
+  "    float rs = smoothstep(0.62, 0.90, run) * (1.0 - smoothstep(0.0, 0.55, lapd) * 0.7)\n"
+  "             + smoothstep(0.55, 0.0, uv.y) * 0.6 * vnoise2(uv * 4.0);\n"
+  "    rs = clamp(rs, 0.0, 1.0) * smoothstep(0.35, 0.65, vnoise2(uv * 0.35 + 3.0));\n"
+  "    alb = mix(alb, vec3(0.16, 0.075, 0.035), rs * 0.55);\n"
+  "    float s = sin(uv.x * 82.67) * 0.5 + 0.5;\n"
+  "    alb *= 1.0 - 0.10 * (1.0 - s) * mfade(0.076, fp);  // the troughs hold dirt\n"
+  "    rough = clamp(rough - 0.20 + 0.30 * rs, 0.30, 1.0);\n"
+  "  } else if (m == 5) {\n"
+  "    float yb = mod(uv.y, 2.6);\n"
+  "    float rail = 1.0 - smoothstep(0.10, 0.13, yb) * (1.0 - smoothstep(2.44, 2.47, yb));\n"
+  // Sun-faded paint, scuffs to primer, rust at the rails and the corners.
+  "    alb *= 0.90 + 0.16 * vnoise2(uv * 0.7);\n"
+  "    float sc = smoothstep(0.72, 0.86, vnoise2(uv * vec2(3.0, 9.0))) * mfade(0.06, fp);\n"
+  "    alb = mix(alb, alb * 0.62 + vec3(0.03), sc * 0.6);\n"
+  "    float rs = smoothstep(0.55, 0.85, vnoise2(uv * 2.2 + 7.0))\n"
+  "             * (rail * 0.9 + 0.35 * (1.0 - smoothstep(0.0, 0.9, yb)));\n"
+  "    alb = mix(alb, vec3(0.15, 0.07, 0.035), clamp(rs, 0.0, 1.0) * 0.7);\n"
+  "    alb *= 1.0 - 0.18 * rail;\n"
+  "    rough = clamp(rough - 0.22 + 0.25 * rs, 0.30, 1.0);\n"
+  "  } else if (m == 6) {\n"
+  "    vec3 b = ashlar(uv);\n"
+  "    vec3 r3 = vhash3(b.yz + vec2(5.5, 2.5));\n"
+  "    float fb = mfade(0.30, fp);\n"
+  "    vec3 det = alb * (0.86 + 0.24 * r3.x) * (0.94 + 0.12 * vnoise2(uv * 7.0 + b.yz));\n"
+  "    float mm = 1.0 - smoothstep(0.004, 0.009 + fp * 0.6, b.x);\n"
+  "    det = mix(det, alb * 0.62, mm);\n"
+  "    alb = mix(alb * 0.97, det, fb);\n"
+  "    rough = clamp(rough + 0.08, 0.045, 1.0);\n"
+  "  } else if (m == 7) {\n"
+  "    vec3 b = bond(uv, 1.2, 0.145, 0.37);\n"
+  "    vec3 r3 = vhash3(b.yz + vec2(1.9, 6.4));\n"
+  "    float fb = mfade(0.145, fp);\n"
+  "    float grain = vnoise2(vec2(uv.x * 2.5, uv.y * 70.0) + r3.xy * 40.0) * mfade(0.02, fp);\n"
+  "    vec3 det = alb * (0.84 + 0.28 * r3.x) * (0.92 + 0.14 * grain);\n"
+  "    float gap = 1.0 - smoothstep(0.002, 0.005 + fp * 0.6, b.x);\n"
+  "    det = mix(det, alb * 0.35, gap);\n"
+  "    alb = mix(alb * 0.97, det, fb);\n"
+  "    rough = clamp(rough + 0.04, 0.045, 1.0);\n"
+  "  }\n"
+  "}\n"
   "void main(){\n"
   "  if (uEmis > 0.5) { oCol = vec4(vCol, 1.0); return; }\n"
   "  vec3 n = normalize(vNrm);\n"
@@ -17537,6 +17782,33 @@ static const char *WORLD_FS =
   "  rough = clamp(vMat.x + (h2 - 0.5) * 0.16 * uDetail, 0.045, 1.0);\n"
   "  } else rough = clamp(vMat.x, 0.045, 1.0);\n"
   "  float metal = vMat.y, ao = vMat.z;\n"
+  // THE STATIC WORLD'S MATERIAL, out of the AO channel's integer part (see
+  // mesh_push). Decoded only under uDetail: nothing else carries one.
+  "  int smat = 0;\n"
+  "  if (uDetail > 0.0 && ao > 1.5) {\n"
+  "    float mq = floor(ao * 0.25 + 1e-3);\n"
+  "    smat = int(mq); ao -= mq * 4.0;\n"
+  "  }\n"
+  // Walls and tops only: the underside of a slab is in shadow and edge-on to
+  // every view a player has, so relief there is cost with nothing to show.
+  "  if (smat > 0 && n.y > -0.5) {\n"
+  "    bool top = n.y > 0.5;\n"
+  "    vec3 T = top ? vec3(1.0, 0.0, 0.0) : (abs(n.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0));\n"
+  "    vec3 B = top ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);\n"
+  "    vec2 uv = vec2(dot(vWorld, T), dot(vWorld, B));\n"
+  // A brick or a rendered wall is capped, not bricked, on top.
+  "    int m = (top && (smat == 2 || smat == 1)) ? 3 : smat;\n"
+  "    vec3 dwx = dFdx(vWorld), dwy = dFdy(vWorld);\n"
+  "    float fpw = sqrt(max(dot(dwx, dwx), dot(dwy, dwy)));\n"
+  "    mat_look(m, uv, fpw, alb, rough);\n"
+  // Relief by forward differences at about a pixel: a smaller step resolves
+  // detail the footprint fade has already removed, a larger one blurs the joint.
+  "    float e = max(fpw * 0.75, 0.0015);\n"
+  "    float h0 = mat_h(m, uv, fpw);\n"
+  "    float hu = (mat_h(m, uv + vec2(e, 0.0), fpw) - h0) / e;\n"
+  "    float hv = (mat_h(m, uv + vec2(0.0, e), fpw) - h0) / e;\n"
+  "    n = normalize(n - T * hu - B * hv);\n"
+  "  }\n"
   // Negative metalness flags the viewmodel sleeves. The pattern is anchored to
   // the weapon's frame, so it rides with the arms instead of crawling over them.
   "  if (metal < -0.5) {\n"
@@ -17682,14 +17954,18 @@ static const char *WORLD_FS =
   "  if (uDetail > 0.0 && abs(n.y) < 0.5) {\n"  // vertical faces: panel seams
   "    float sc = abs(n.x) > 0.5 ? vWorld.z : vWorld.x;\n"
   "    float sf = abs(fract(sc / 3.0) - 0.5) * 3.0;\n"
-  "    float sm = 1.0 - smoothstep(0.02, 0.05, sf);\n"
+  "    float sm = smat > 0 ? 0.0 : 1.0 - smoothstep(0.02, 0.05, sf);\n"
   "    alb *= 1.0 - 0.22 * det * sm;\n"
   // Weathering. Streaks run down each panel from its top, sand banks up against
   // its foot, and broad patches break up the flat paint. All of it is anchored to
   // the world and costs a few noise taps on structure pixels only.
-  "    float streak = vnoise2(vec2(sc * 2.7, vWorld.y * 0.22 + floor(sc / 3.0)));\n"
+  // A MATERIAL wall gets rain streaks, not drapes: at 2.7/m and 26% the streak
+  // field laid 37 cm vertical bands over every wall, which against real brick
+  // and render reads as a curtain hanging in front of it. Narrow, sparse, faint.
+  "    float sk = smat > 0 ? 7.5 : 2.7;\n"
+  "    float streak = vnoise2(vec2(sc * sk, vWorld.y * 0.22 + floor(sc / 3.0)));\n"
   "    float patchy = vnoise2(vec2(sc, vWorld.y) * 0.62);\n"
-  "    alb *= 1.0 - 0.26 * smoothstep(0.54, 0.86, streak);\n"
+  "    alb *= 1.0 - (smat > 0 ? 0.15 : 0.26) * smoothstep(0.58, 0.90, streak);\n"
   "    alb *= 0.90 + 0.20 * patchy;\n"
   "    float dust = 1.0 - smoothstep(0.0, 0.42 + 0.40 * patchy, vWorld.y);\n"
   "    alb = mix(alb, vec3(0.47, 0.39, 0.29), dust * 0.36);\n"
@@ -17827,6 +18103,20 @@ static const char *WORLD_FS =
   // all — a pebble 8 mm across is sub-pixel past four metres and modelling it as
   // a normal buys nothing but sparkle. It is albedo and roughness only, which is
   // what loose grit on a hard floor actually changes.
+  // --- SLABS --------------------------------------------------------------
+  // A hard floor is POURED, and a poured floor is cut into bays: without the
+  // joints the yard of a warehouse district was one seamless sheet of grey
+  // with nothing to tell you its scale. 3 m sawcut bays, a value step per bay
+  // from separate pours, and dirt packed into the cuts. Sand gets none of it.
+  "    if (uSurf.x == 0.0) {\n"
+  "      vec2 fb = fract(P / 3.0) * 3.0;\n"
+  "      float dj = min(min(fb.x, 3.0 - fb.x), min(fb.y, 3.0 - fb.y));\n"
+  "      float jv = mfade(0.07, fp);\n"
+  "      float jm = (1.0 - smoothstep(0.005, 0.011 + fp * 0.6, dj)) * jv;\n"
+  "      float bay = vhash2(floor(P / 3.0) + vec2(13.0, 29.0));\n"
+  "      alb *= (0.95 + 0.10 * bay) * (1.0 - 0.38 * jm);\n"
+  "      rough = clamp(rough + 0.10 * jm, 0.045, 1.0);\n"
+  "    }\n"
   "    float gvis = 1.0 - smoothstep(0.02, 0.09, fp);\n"
   "    if (gvis > 0.004) {\n"
   "      float gz = vnoise2(P * 23.0);\n"
@@ -18011,7 +18301,16 @@ static const char *WORLD_FS =
   // wall base. The 0.45 m falloff is short on purpose: this is the bounce a
   // small object standing ON the floor gets, not a wash over the whole arena.
   "  float bncs = (1.0 - abs(n.y)) * exp(-max(vWorld.y, 0.0) * 2.2);\n"
-  "  vec3 bounce = diff * (bnc + bncs * 0.55) * SKY_GND * 1.35;\n"
+  // ...AND AT BUILDING SCALE. A street is a light box: the sunlit half of it
+  // throws light into the shaded facade across the way, which is most of the
+  // light a shaded wall in a real town ever gets, and without it every wall out
+  // of the sun went to a flat near-black slab with its brick, render and joints
+  // invisible. Static world only (uDetail): figures keep exactly the contrast
+  // against these walls they were tuned for, and a wall lifting behind a man
+  // only separates him further from it.
+  "  float bncw = uDetail > 0.0\n"
+  "             ? (1.0 - abs(n.y)) * exp(-max(vWorld.y, 0.0) * 0.09) * mix(0.6, 1.0, ao) : 0.0;\n"
+  "  vec3 bounce = diff * (bnc + bncs * 0.55 + bncw * 0.50) * SKY_GND * 1.35;\n"
   "  vec3 col = lit(n, V, SUN_DIR, diff, F0, rough, SUN_COL * sh)\n"
   "           + diff * irr\n"
   "           + env * Fe * (1.0 - 0.62 * rough)\n"
@@ -18901,8 +19200,14 @@ static void mesh_vert(v3 p, v3 n, v3 c, float rough, float metal, float ao) {
   g_mesh_floats += VERT_FLOATS;
 }
 
+// The surface material rides in the AO channel's INTEGER part: AO is in [0, 1],
+// so ao + 4 * material decodes exactly with one floor() in WORLD_FS, and the
+// vertex format, the shadow pass and every other draw stay as they are. Only
+// the static world writes it; the scene stream (figures, VFX, the viewmodel)
+// always carries material 0, and the shader decodes it only under uDetail.
+static int g_mesh_mat;
 static void mesh_push(v3 p, v3 n, v3 c) {
-  mesh_vert(p, n, c, g_mat_rough, g_mat_metal, ao_at(p.y));
+  mesh_vert(p, n, c, g_mat_rough, g_mat_metal, ao_at(p.y) + 4.0f * (float)g_mesh_mat);
 }
 
 static void mesh_quad(v3 a, v3 b, v3 c, v3 d, v3 n, v3 col) {
@@ -18990,6 +19295,7 @@ static void mesh_build(void) {
   for (int i = 0; i < g_num_solids; i++) {
     const solid_t *s = &g_solids[i];
     v3 mn = s->min, mx = s->max, c = s->color;
+    g_mesh_mat = g_solid_mat[i] < SMAT_COUNT ? g_solid_mat[i] : SMAT_PAINT;
     // +x -x +y -y +z -z faces, wound counter-clockwise from outside.
     mesh_quad((v3){{mx.x,mn.y,mn.z}},(v3){{mx.x,mx.y,mn.z}},(v3){{mx.x,mx.y,mx.z}},(v3){{mx.x,mn.y,mx.z}},(v3){{1,0,0}},c);
     mesh_quad((v3){{mn.x,mn.y,mx.z}},(v3){{mn.x,mx.y,mx.z}},(v3){{mn.x,mx.y,mn.z}},(v3){{mn.x,mn.y,mn.z}},(v3){{-1,0,0}},c);
@@ -18998,6 +19304,7 @@ static void mesh_build(void) {
     mesh_quad((v3){{mn.x,mn.y,mx.z}},(v3){{mx.x,mn.y,mx.z}},(v3){{mx.x,mx.y,mx.z}},(v3){{mn.x,mx.y,mx.z}},(v3){{0,0,1}},c);
     mesh_quad((v3){{mx.x,mn.y,mn.z}},(v3){{mn.x,mn.y,mn.z}},(v3){{mn.x,mx.y,mn.z}},(v3){{mx.x,mx.y,mn.z}},(v3){{0,0,-1}},c);
   }
+  g_mesh_mat = SMAT_PAINT;
   ao_off();
   // EVERYTHING THAT CASTS IS NOW BEHIND US. The floor cannot: it is the lowest
   // surface in the world and there is nothing under it to shadow, so its 4608
@@ -21884,6 +22191,51 @@ static_assert(PARTS_SKID_LO < MAX_PARTICLES, "skid region must be inside the poo
 // this; the hit has already been decided on the same line.
 #define TRACER_V      3.4f
 #define FLASH_TICKS   3
+// THE ROUND HAS A CHARACTER PER WEAPON. One streak for all three guns meant a
+// pistol round, a 5.56 burst and a .338 crossing the map all drew the same
+// orange line at the same speed, so the only way to tell what was shooting at
+// you was the sound. What differs here is what differs in the world: the
+// rifle round is quick and thin, the magnum is faster, hotter, wider and
+// leaves a HEAT WAKE hanging on its line for half a second (the shimmer a
+// heavy round leaves in the air, and the read that tells a man where the
+// sniper is), and the pistol's slow, fat, short and warm. All of it is the
+// EYE's: the hit is still decided on the same line, on the tick it was fired.
+// `v` is display m/tick (TRACER_V, still the AR's: faster and the tail lets go
+// of the barrel before a frame has shown it there — the first two metres are
+// most of the streak's length ON SCREEN. The magnum is quicker and pays for it
+// with a span that holds the tail on the barrel the whole flight), `len`
+// and `span` are TRACER_LEN / TRACER_SPAN per weapon, `w` and `k` scale width
+// and brightness, the colours run bore -> 14 m downrange, `wake` is ticks.
+typedef struct {
+  float v, len, span, w, k;
+  v3 hot, cool, hhot, hcool;
+  int wake;
+} tracer_look_t;
+static const tracer_look_t TRACER_LOOK[3] = {
+  [WPN_AR] = {3.4f, 9.0f, 0.85f, 1.00f, 1.00f,
+              {{1.65f, 1.36f, 0.92f}}, {{1.10f, 0.50f, 0.14f}},
+              {{0.46f, 0.28f, 0.11f}}, {{0.22f, 0.09f, 0.03f}}, 0},
+  [WPN_SR] = {5.2f, 14.0f, 1.00f, 1.35f, 1.30f,
+              {{1.90f, 1.78f, 1.48f}}, {{1.45f, 0.86f, 0.36f}},
+              {{0.52f, 0.40f, 0.24f}}, {{0.30f, 0.15f, 0.06f}}, 66},
+  [WPN_PT] = {2.8f, 6.0f, 0.80f, 0.90f, 0.90f,
+              {{1.60f, 1.12f, 0.58f}}, {{1.00f, 0.36f, 0.08f}},
+              {{0.44f, 0.22f, 0.07f}}, {{0.20f, 0.06f, 0.02f}}, 0},
+};
+static const tracer_look_t *tracer_look(int wpn) {
+  return &TRACER_LOOK[wpn == WPN_SR ? WPN_SR : wpn == WPN_PT ? WPN_PT : WPN_AR];
+}
+// How long each gun's muzzle star burns. The brake on the magnum throws a
+// blast that is visibly longer than the rifle's flash hider lets out.
+static int flash_ticks(int wpn) { return wpn == WPN_SR ? 5 : FLASH_TICKS; }
+// RICOCHETS. A round meeting a hard face at a glancing angle does not stop in
+// it, it skips — and a tracer that visibly skips off the wall beside a man is
+// the clearest read in the genre that a round went THERE and was not a hit.
+// Purely visual (the sim already stopped the round), delayed to the moment the
+// bolt arrives, and hashed rather than drawn from g_rng_vfx so the scatter of
+// every other effect is unchanged.
+#define RICO_COS      0.42f   // |cos| to the face below which a round may skip
+#define RICO_LEN      9.0f    // the furthest a skip is drawn, metres
 // 14 and 26, not 10 and 20 (117 ms / 217 ms). The marker is decremented on the
 // tick it is armed, so 10 rendered as 9 ticks = 75 ms — three frames at 60 fps
 // and one and a half at the fps_cap of 30 the menu offers. It also now spends
@@ -22108,6 +22460,10 @@ typedef struct {
   int life, life0, src, wpn;
   int anchor;       // still to be placed on the muzzle by the next rendered frame
   float v;          // metres per tick
+  int wake;         // ticks of heat wake after the bolt lands (TRACER_LOOK)
+  int delay;        // ticks before the bolt starts (a ricochet waits for its parent)
+  int rico;         // 1 = a skip off a face: starts at `a`, no 3 m lead, thinner
+  int smoke;        // muzzle smoke still to be released at the anchored muzzle
 } tracer_t;
 // `fresh` is a render latch, not a lifetime: it marks a flash no frame has
 // shown yet and is cleared by the first draw. Tick counting alone cannot
@@ -22533,6 +22889,22 @@ static int      g_scorch_at;
 typedef struct { v3 pos, prev, vel, axis; float a; int life; } spoon_t;
 static spoon_t g_spoons[MAX_SPOONS];
 
+// IMPACT DUST. Its own small pool and its own pass, because neither existing one
+// can draw it: the puff pass MULTIPLIES (it can only darken, so a light plume of
+// sand off a light wall came out as a black dot of soot), and the particle pool's
+// reserve is sized and proved for sparks (budget / part_res_peak). This is an
+// ADDITIVE, soft, sunlit haze tinted by what was struck — faint by design: it is
+// the body of the hit, the sparks are its edge. Oldest-first eviction, so a long
+// burst simply recycles its own earliest clouds.
+#define MAX_DUST 96
+typedef struct { v3 pos, vel, col; float r0, r1; int life, life0; } dust_t;
+static dust_t g_dust[MAX_DUST];
+static int    g_dust_at;
+static void dust_add(v3 pos, v3 vel, v3 col, float r0, float r1, int life) {
+  g_dust[g_dust_at] = (dust_t){pos, vel, col, r0, r1, life, life};
+  g_dust_at = (g_dust_at + 1) % MAX_DUST;
+}
+
 static void puff_add(v3 pos, v3 vel, float r0, float r1, float dens, float grav,
                      float drag, int life, float soot) {
   for (int i = 0; i < MAX_PUFFS; i++)
@@ -22540,6 +22912,46 @@ static void puff_add(v3 pos, v3 vel, float r0, float r1, float dens, float grav,
       g_puffs[i] = (puff_t){pos, vel, r0, r1, dens, grav, drag, life, life, soot};
       return;
     }
+}
+
+// MUZZLE SMOKE. The burnt powder a shot leaves hanging at the barrel, which
+// the flash (three ticks) cannot say and which is how a sustained burst reads
+// as a gun that has been WORKING: a thin grey breath per rifle round that
+// rises and drifts, a puff for the pistol, and for the magnum the brake's
+// signature — the ports throw it sideways as a pair of clouds either side of
+// the muzzle, the tell that gives a sniper's position away. Drawn in the
+// multiply pass like every other smoke (puffs_build), hashed off the tick and
+// the muzzle rather than drawn from g_rng_vfx, so nothing else's scatter moves.
+// `own` is the player's own first-person shot: thinner and pushed a little
+// down the bore, because a cloud on the lens is not a sight picture.
+static void vfx_muzzle_smoke(v3 at, v3 dir, int wpn, int own) {
+  v3 fw = v3_norm(dir);
+  v3 side = v3_cross(fw, (v3){{0, 1, 0}});
+  float sl = v3_len(side);
+  side = sl > 1e-3f ? v3_scale(side, 1.0f / sl) : (v3){{1, 0, 0}};
+  uint32_t h = fx_hash((uint32_t)g_tick * 2654435761u ^
+                       (uint32_t)(int)(at.x * 97.0f + at.z * 131.0f) ^ 0x534D4B45u);
+  float dk = own ? 0.55f : 1.0f;
+  if (own) at = v3_add(at, v3_scale(fw, 0.30f));
+  v3 up = {{0, 0.30f, 0}};
+  if (wpn == WPN_SR) {
+    puff_add(v3_add(at, v3_scale(fw, 0.15f)), v3_add(v3_scale(fw, 2.4f), up),
+             0.05f, 0.34f, 0.11f * dk, -0.30f, 0.93f, 130, 0.9f);
+    for (int sd = -1; sd <= 1; sd += 2) {
+      float j = skid_r(&h, 0.8f, 1.2f);
+      puff_add(v3_add(at, v3_scale(side, 0.06f * (float)sd)),
+               v3_add(v3_add(v3_scale(side, 2.8f * j * (float)sd), v3_scale(fw, 0.6f)), up),
+               0.04f, 0.30f, 0.10f * dk, -0.25f, 0.92f, 120 + (int)(20.0f * j), 0.9f);
+    }
+    puff_add(at, v3_add(v3_scale(fw, 0.5f), up), 0.08f, 0.48f, 0.07f * dk,
+             -0.20f, 0.97f, 200, 0.9f);
+  } else if (wpn == WPN_PT) {
+    puff_add(v3_add(at, v3_scale(fw, 0.06f)), v3_add(v3_scale(fw, 0.9f * skid_r(&h, 0.7f, 1.2f)), up),
+             0.02f, 0.13f, 0.09f * dk, -0.22f, 0.93f, 48, 0.9f);
+  } else {
+    puff_add(v3_add(at, v3_scale(fw, 0.10f)), v3_add(v3_scale(fw, 1.3f * skid_r(&h, 0.7f, 1.2f)), up),
+             0.025f, 0.17f, 0.10f * dk, -0.25f, 0.94f, 60, 0.9f);
+  }
 }
 
 static void vfx_blast(v3 at, int open) {
@@ -22718,18 +23130,21 @@ static void vfx_on_event(const event_t *e) {
       if (slot < 0 && e->src == g_local_ent) slot = oldest;
       if (slot >= 0)
       {
-        float mv = TRACER_V * (e->wpn == WPN_PT ? 0.8f : 1.0f);
+        const tracer_look_t *tl = tracer_look(e->wpn);
+        float mv = tl->v;
         float sl = v3_len(v3_sub(e->a, muz));
-        float fly = (sl + fmaxf(TRACER_LEN, TRACER_SPAN * sl)) / mv;
+        float fly = (sl + fmaxf(tl->len, tl->span * sl)) / mv;
         int life = (int)fly + 2;
         life = life < 3 ? 3 : life > TRACER_TICKS ? TRACER_TICKS : life;
-        g_tracers[slot] = (tracer_t){.a = muz, .b = e->a, .d = e->b, .life = life,
-                                     .life0 = life, .src = e->src, .wpn = e->wpn,
-                                     .anchor = 1, .v = mv};
+        // A miss into the open sky has no line worth leaving a wake on.
+        int wake = e->k != 0 || sl < GUN_RANGE * 0.5f ? tl->wake : 0;
+        g_tracers[slot] = (tracer_t){.a = muz, .b = e->a, .d = e->b, .life = life + wake,
+                                     .life0 = life + wake, .src = e->src, .wpn = e->wpn,
+                                     .anchor = 1, .v = mv, .wake = wake, .smoke = 1};
       }
     }
     if (e->src == g_local_ent) {
-      g_muzzle_t = 3;
+      g_muzzle_t = flash_ticks(e->wpn);
       g_muzzle_fresh = 1;             // one guaranteed bright frame, any fps
       g_muzzle_fire_tick = g_tick;
     }
@@ -22739,7 +23154,7 @@ static void vfx_on_event(const event_t *e) {
     // CONFIG here left a free-cam film of the player firing with no flash.
     for (int i = 0; i < MAX_FLASHES; i++)
       if (g_flashes[i].life <= 0) {
-        g_flashes[i] = (flash_t){muz, e->b, FLASH_TICKS, e->src, g_tick,
+        g_flashes[i] = (flash_t){muz, e->b, flash_ticks(e->wpn), e->src, g_tick,
                                  (uint32_t)(e->i * 61 + e->src * 7), 1, e->wpn};
         break;
       }
@@ -22751,8 +23166,20 @@ static void vfx_on_event(const event_t *e) {
     // carried rather than re-derived — the same idiom the kill burst uses for
     // g_kill_wound.dist.
     float rk = fx_range_k(e->f > 0.0f ? e->f : KILLBURST_REF);
+    // WHAT THE ROUND HIT decides what comes off it — the same surface material
+    // the world shader draws (g_solid_mat), so a wall that LOOKS like brick
+    // also answers like brick. Steel sheet throws the full shower of hot
+    // sparks; masonry throws fewer, cooler chips and a cloud of its own dust;
+    // timber barely sparks at all and puffs; the floor kicks up whatever the
+    // theme's ground is. The spark COUNT only ever goes down from
+    // IMPACT_SPARKS, so the reserve impact_free_slot keeps is unchanged.
+    int sm = e->i >= 0 && e->i < g_num_solids ? g_solid_mat[e->i] : -1;
+    int metal = sm == SMAT_CLAD || sm == SMAT_CONTAINER;
+    int nsp = metal ? IMPACT_SPARKS : sm == SMAT_WOOD ? IMPACT_SPARKS / 3
+            : sm < 0 ? IMPACT_SPARKS / 2 : (IMPACT_SPARKS * 2) / 3;
+    float heat = metal ? 1.15f : sm == SMAT_WOOD ? 0.55f : sm < 0 ? 0.70f : 0.80f;
     impact_free_slot(IMPACT_SPARKS + 1);
-    for (int n = 0, i = 0; i < MAX_PARTICLES && n < IMPACT_SPARKS; i++)
+    for (int n = 0, i = 0; i < MAX_PARTICLES && n < nsp; i++)
       if (g_parts[i].life <= 0) {  // sparks: fast, short, mostly along the normal
         v3 v = {{rng_rangef(&g_rng_vfx, -3.4f, 3.4f),
                  rng_rangef(&g_rng_vfx, -0.8f, 4.2f),
@@ -22760,10 +23187,35 @@ static void vfx_on_event(const event_t *e) {
         g_parts[i] = (particle_t){
             .pos  = v3_add(e->a, v3_scale(e->b, 0.02f)),
             .vel  = v3_add(v, v3_scale(e->b, rng_rangef(&g_rng_vfx, 1.5f, 4.5f))),
-            .y0 = rk, .sz = 1.0f,
+            .y0 = rk, .sz = heat,
             .life = PARTICLE_TICKS, .life0 = PARTICLE_TICKS, .kind = 0};
         n++;
       }
+    // THE DUST. Hashed, not drawn from g_rng_vfx: the spark scatter above stays
+    // exactly what it was for every other effect sharing the stream.
+    if (!metal) {
+      uint32_t dh = fx_hash((uint32_t)(int)(e->a.x * 173.0f) * 2654435761u ^
+                            (uint32_t)(int)(e->a.z * 211.0f + e->a.y * 97.0f) ^ (uint32_t)g_tick);
+      int sand = sm < 0 && g_theme.surf == SURF_SAND;
+      int np = sand ? 3 : 2;
+      float big = sand ? 1.5f : sm < 0 ? 1.1f : 1.0f;
+      // Brick is fired clay, render is lime, timber is sawdust — each its own
+      // colour; concrete, stone and paint are a cold grey; the floor follows its
+      // theme. Linear, additive, and deliberately dim (see g_dust).
+      v3 dc = sm == SMAT_BRICK ? (v3){{0.20f, 0.10f, 0.06f}}
+            : sm == SMAT_STUCCO ? (v3){{0.20f, 0.17f, 0.13f}}
+            : sm == SMAT_WOOD ? (v3){{0.19f, 0.14f, 0.08f}}
+            : sand ? (v3){{0.22f, 0.17f, 0.10f}}
+            : (v3){{0.15f, 0.15f, 0.14f}};
+      for (int k = 0; k < np; k++) {
+        v3 t1, t2;
+        axis_frame(e->b, &t1, &t2);
+        v3 v = v3_add(v3_scale(e->b, skid_r(&dh, 0.9f, 2.4f) * big),
+               v3_add(v3_scale(t1, skid_r(&dh, -0.5f, 0.5f)), v3_scale(t2, skid_r(&dh, -0.5f, 0.5f))));
+        dust_add(v3_add(e->a, v3_scale(e->b, 0.06f)), v, v3_scale(dc, 1.8f * skid_r(&dh, 0.8f, 1.2f)),
+                 0.06f * big, skid_r(&dh, 0.28f, 0.42f) * big, (int)skid_r(&dh, 60.0f, 100.0f));
+      }
+    }
     // THE CONTACT FLARE, which impacts never had. vfx_skid's own comment states
     // the reason it exists, verbatim: "a fragment is gone from the contact
     // within two ticks and nothing marks where it came from" — and measured on a
@@ -22777,6 +23229,49 @@ static void vfx_on_event(const event_t *e) {
     // which is exactly the read a strike wants. Sized angularly like the rest.
     fx_flare(v3_add(e->a, v3_scale(e->b, 0.02f)), 0.115f * rk, 9);
     mark_stamp(e->a, e->b, e->i);
+    // THE SKIP (see RICO_COS). Only a round that STOPPED here (k = 0: a
+    // through-hole is not a glance) and only off a shooter's own bolt, which
+    // gun_shoot pushed one event earlier and which carries the line it flew.
+    if (e->k == 0 && e->src >= 0) {
+      tracer_t *pt = NULL;
+      for (int i = 0; i < MAX_TRACERS; i++) {
+        tracer_t *t = &g_tracers[i];
+        if (t->life > 0 && !t->rico && t->src == e->src) {
+          v3 dd = v3_sub(t->b, e->a);
+          if (v3_dot(dd, dd) < 1e-6f) { pt = t; break; }
+        }
+      }
+      if (pt) {
+        v3 d = v3_norm(pt->d), n = e->b;
+        float ci = -v3_dot(d, n);
+        uint32_t h = fx_hash((uint32_t)g_tick * 2246822519u + (uint32_t)(e->src + 1) * 40503u
+                             + (uint32_t)(int)(e->a.y * 1000.0f));
+        if (ci > 0.0f && ci < RICO_COS && skid_r(&h, 0.0f, 1.0f) < 0.80f) {
+          v3 r = v3_sub(d, v3_scale(n, 2.0f * v3_dot(d, n)));
+          v3 t1, t2;
+          axis_frame(r, &t1, &t2);
+          r = v3_norm(v3_add(r, v3_add(v3_scale(t1, skid_r(&h, -0.14f, 0.14f)),
+                                       v3_scale(t2, skid_r(&h, -0.14f, 0.14f)))));
+          // ...and never back INTO the face it left.
+          if (v3_dot(r, n) < 0.03f) r = v3_norm(v3_add(r, v3_scale(n, 0.06f - v3_dot(r, n))));
+          v3 o = v3_add(e->a, v3_scale(n, 0.02f)), wn;
+          int ws;
+          float L = fminf(RICO_LEN * skid_r(&h, 0.45f, 1.0f), trace_world(o, r, &wn, &ws));
+          int slot = -1;
+          for (int i = 0; i < MAX_TRACERS; i++)
+            if (g_tracers[i].life <= 0) { slot = i; break; }
+          if (slot >= 0 && L > 0.5f) {
+            float pl = v3_len(v3_sub(pt->b, pt->a));
+            int delay = (int)fmaxf(0.0f, (pl - 3.0f) / pt->v);
+            float v = pt->v * 0.75f;
+            int life = delay + (int)((L + 2.2f) / v) + 2;
+            g_tracers[slot] = (tracer_t){.a = o, .b = v3_add(o, v3_scale(r, L)), .d = r,
+                                         .life = life, .life0 = life, .src = e->src,
+                                         .wpn = pt->wpn, .v = v, .delay = delay, .rico = 1};
+          }
+        }
+      }
+    }
     break;
   }
   case EV_HIT:
@@ -23371,6 +23866,15 @@ static void vfx_tick(void) {
     if (g_tracers[i].life > 0) g_tracers[i].life--;
   for (int i = 0; i < MAX_FLASHES; i++)
     if (g_flashes[i].life > 0) g_flashes[i].life--;
+  for (int i = 0; i < MAX_DUST; i++)
+    if (g_dust[i].life > 0) {        // thrown off the face, braked hard, settling
+      dust_t *q = &g_dust[i];
+      q->life--;
+      q->vel = v3_scale(q->vel, 0.88f);
+      q->vel.y -= 0.25f * TICK_DT;
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      if (q->pos.y < q->r0) q->pos.y = q->r0;
+    }
   if (g_online) nade_tick(0);
   for (int i = 0; i < MAX_SPOONS; i++)
     if (g_spoons[i].life > 0) {
@@ -23594,6 +24098,7 @@ static void vfx_match_reset(void) {
   memset(g_nades, 0, sizeof g_nades);
   g_shake = g_blast_light = 0.0f;
   memset(g_flashes, 0, sizeof g_flashes);
+  memset(g_dust, 0, sizeof g_dust);
   g_muzzle_fresh = 0;
   memset(g_parts, 0, sizeof g_parts);
   memset(g_skid_t, 0xFF, sizeof g_skid_t);   // 0xFFFF = -1 = nobody is scraping
@@ -29498,34 +30003,94 @@ static uint32_t fx_hash(uint32_t x) {
   return x;
 }
 
-// One muzzle-flash star: irregular tapered petals around the bore, a hot core
-// and a forward tongue along it. t1/t2 span the petal plane (perpendicular to
-// the bore), s scales the whole star in metres and f is the 1->0 life fade.
-// Shared by the world pass (every visible shooter's rifle) and the viewmodel
-// pass (the player's own barrel), so the two flashes are one design.
+// One muzzle flash, designed per MUZZLE DEVICE, because that is what shapes
+// the gas leaving a barrel and the three guns carry three different ones:
+//   AR — a birdcage flash hider. It exists to kill the side flash, so what is
+//        left is a narrow forward cone of three tongues out of the slots and
+//        a small, tight star round the crown.
+//   SR — a ported brake. It throws the blast SIDEWAYS through its ports to
+//        tame the recoil, so the magnum's signature is two big lateral jets
+//        (and a pair of smaller second-port jets behind them) with only a
+//        modest forward plume. It is the biggest flash in the game.
+//   PT — a bare muzzle. A short barrel burns powder outside it: a round,
+//        warm fireball with irregular petals and a short tongue.
+// t1/t2 span the plane across the bore (the star's petals), s scales it in
+// metres and f is the 1->0 life fade. The SIDE axis for the brake is world
+// right across the bore, not t1: the ports are on the flanks of a level gun.
+// Shared by the world pass (every visible shooter) and the viewmodel pass
+// (the player's own barrel), so a gun flashes the same in both.
 static void fx_flash(v3 pos, v3 fw, v3 t1, v3 t2, v3 eye, float s, float f,
-                     uint32_t seed) {
+                     uint32_t seed, int wpn) {
   uint32_t h = fx_hash(seed);
   float a0 = (float)(h & 255) * (F_TAU / 256.0f);
+  #define FH01(k) ((float)((fx_hash(seed * 5u + (uint32_t)(k)) >> 4) & 255) / 255.0f)
   v3 hot = v3_scale((v3){{2.10f, 1.55f, 0.85f}}, f);
   v3 mid = v3_scale((v3){{1.10f, 0.46f, 0.12f}}, f);
   v3 tip = v3_scale((v3){{0.45f, 0.13f, 0.03f}}, f);
-  for (int k = 0; k < 6; k++) {
-    float ang = a0 + (float)k * (F_TAU / 6.0f);
-    float lk = s * (0.35f + 0.65f *
-               (float)((fx_hash(seed * 5u + (uint32_t)k) >> 4) & 255) / 255.0f);
-    v3 rd = v3_add(v3_scale(t1, cosf(ang)), v3_scale(t2, sinf(ang)));
-    fx_seg(v3_add(pos, v3_scale(rd, 0.04f * s)), v3_add(pos, v3_scale(rd, lk)),
-           eye, s * 0.11f, s * 0.010f, hot, tip);
+  v3 K = {{0, 0, 0}};
+  if (wpn == WPN_SR) {
+    s *= 1.45f;
+    v3 side = v3_cross(fw, (v3){{0, 1, 0}});
+    float sl = v3_len(side);
+    side = sl > 1e-3f ? v3_scale(side, 1.0f / sl) : t1;
+    v3 upx = v3_cross(side, fw);
+    for (int sd = -1; sd <= 1; sd += 2)
+      for (int port = 0; port < 2; port++) {
+        // Port 0 is the big front one, angled a little forward; port 1 sits
+        // 4 cm back on the brake and throws a smaller jet straight out.
+        float ln = s * (port ? 0.42f : 0.78f) * (0.80f + 0.35f * FH01(sd + 3 * port + 4));
+        v3 o = v3_add(pos, v3_scale(fw, port ? -0.045f * s / 0.30f : 0.0f));
+        v3 jd = v3_norm(v3_add(v3_scale(side, (float)sd),
+                        v3_add(v3_scale(fw, port ? 0.10f : 0.32f),
+                               v3_scale(upx, 0.10f * (FH01(sd + 9) - 0.5f)))));
+        fx_seg(o, v3_add(o, v3_scale(jd, ln)), eye, s * (port ? 0.09f : 0.15f),
+               s * 0.05f, hot, tip);
+        // The jet's cooler body, wider and longer than its core.
+        fx_seg(o, v3_add(o, v3_scale(jd, ln * 1.25f)), eye, s * 0.10f,
+               s * (port ? 0.12f : 0.22f), v3_scale(mid, 0.55f), K);
+      }
+    fx_seg(pos, v3_add(pos, v3_scale(fw, s * 0.85f)), eye, s * 0.16f, s * 0.03f, hot, mid);
+    fx_seg(v3_add(pos, v3_scale(t1, -0.05f * s)), v3_add(pos, v3_scale(t1, 0.05f * s)),
+           eye, s * 0.11f, s * 0.11f, v3_scale(hot, 1.10f), v3_scale(hot, 1.10f));
+    // The glow the blast throws into the air round it.
+    fx_disc(pos, eye, s * 1.05f, v3_scale(mid, 0.42f), K, 14);
+  } else if (wpn == WPN_PT) {
+    v3 warm = v3_scale((v3){{2.05f, 1.20f, 0.48f}}, f);
+    for (int k = 0; k < 8; k++) {
+      float ang = a0 + (float)k * (F_TAU / 8.0f) + 0.3f * (FH01(k + 20) - 0.5f);
+      float lk = s * (0.22f + 0.30f * FH01(k));
+      v3 rd = v3_add(v3_scale(t1, cosf(ang)), v3_scale(t2, sinf(ang)));
+      rd = v3_norm(v3_add(rd, v3_scale(fw, 0.35f)));
+      fx_seg(v3_add(pos, v3_scale(rd, 0.03f * s)), v3_add(pos, v3_scale(rd, lk)),
+             eye, s * 0.16f, s * 0.03f, warm, tip);
+    }
+    fx_seg(pos, v3_add(pos, v3_scale(fw, s * 0.70f)), eye, s * 0.22f, s * 0.05f, warm, mid);
+    fx_seg(v3_add(pos, v3_scale(t1, -0.10f * s)), v3_add(pos, v3_scale(t1, 0.10f * s)),
+           eye, s * 0.22f, s * 0.22f, v3_scale(warm, 1.30f), v3_scale(warm, 1.30f));
+    fx_disc(v3_add(pos, v3_scale(fw, s * 0.12f)), eye, s * 0.75f, v3_scale(mid, 0.40f), K, 12);
+  } else {
+    // Birdcage: three tongues out of the slots, fanned a few degrees off the
+    // bore, rotating shot to shot with the petal clock.
+    for (int k = 0; k < 3; k++) {
+      float ang = a0 + (float)k * (F_TAU / 3.0f);
+      v3 rd = v3_add(v3_scale(t1, cosf(ang)), v3_scale(t2, sinf(ang)));
+      v3 td = v3_norm(v3_add(fw, v3_scale(rd, 0.22f + 0.10f * FH01(k + 30))));
+      float ln = s * (0.95f + 0.55f * FH01(k + 40));
+      fx_seg(pos, v3_add(pos, v3_scale(td, ln)), eye, s * 0.10f, s * 0.012f, hot, tip);
+    }
+    for (int k = 0; k < 4; k++) {   // what escapes the cage: a short, tight star
+      float ang = a0 + 0.785f + (float)k * (F_TAU / 4.0f);
+      float lk = s * (0.30f + 0.32f * FH01(k));
+      v3 rd = v3_add(v3_scale(t1, cosf(ang)), v3_scale(t2, sinf(ang)));
+      fx_seg(v3_add(pos, v3_scale(rd, 0.03f * s)), v3_add(pos, v3_scale(rd, lk)),
+             eye, s * 0.09f, s * 0.010f, hot, tip);
+    }
+    fx_seg(pos, v3_add(pos, v3_scale(fw, s * 1.30f)), eye, s * 0.14f, s * 0.02f, hot, mid);
+    fx_seg(v3_add(pos, v3_scale(t1, -0.07f * s)), v3_add(pos, v3_scale(t1, 0.07f * s)),
+           eye, s * 0.14f, s * 0.14f, v3_scale(hot, 1.35f), v3_scale(hot, 1.35f));
+    fx_disc(v3_add(pos, v3_scale(fw, s * 0.25f)), eye, s * 0.70f, v3_scale(mid, 0.30f), K, 12);
   }
-  // Forward tongue: the blast leaving the bore, foreshortened to almost
-  // nothing in first person where the star carries the read. It cools less
-  // than the petals — the hottest gas goes forward.
-  fx_seg(pos, v3_add(pos, v3_scale(fw, s * 1.25f)),
-         eye, s * 0.15f, s * 0.02f, hot, mid);
-  // Hot core blob over the crown.
-  fx_seg(v3_add(pos, v3_scale(t1, -0.07f * s)), v3_add(pos, v3_scale(t1, 0.07f * s)),
-         eye, s * 0.14f, s * 0.14f, v3_scale(hot, 1.35f), v3_scale(hot, 1.35f));
+  #undef FH01
 }
 
 static void scene_build(const player_t *p, float alpha, int show_player) {
@@ -29637,6 +30202,7 @@ static void fx_build(v3 eye) {
   for (int i = 0; i < MAX_TRACERS; i++)
     if (g_tracers[i].life > 0) {
       tracer_t *tr = &g_tracers[i];
+      const tracer_look_t *tl = tracer_look(tr->wpn);
       // ANCHORED ONCE, ON THE FIRST FRAME THAT DRAWS IT, and then left alone. The
       // event fires before the shooter's pose for this tick is solved, so the
       // spawn point is one pose stale and, for a rifle coming up from the low
@@ -29651,21 +30217,63 @@ static void fx_build(v3 eye) {
           tr->a = pose_muzzle(mh >= 0 ? &g_player_anim[mh].pose
                                       : &g_bots[tr->src - 1].anim.pose, tr->wpn);
         }
+        if (tr->smoke) { tr->smoke = 0; vfx_muzzle_smoke(tr->a, tr->d, tr->wpn,
+                                                         tr->src == g_local_ent && g_fx_muz_live); }
         // A muzzle already past the wall the round hit: a contact shot. There is
         // no line to draw, and drawing it would send the bolt backward.
         if (v3_dot(v3_sub(tr->b, tr->a), tr->d) < 0.6f) { tr->life = 0; continue; }
       }
       v3 d = v3_sub(tr->b, tr->a);
       float len = v3_len(d);
-      if (len < 0.6f) continue;
+      if (len < 0.6f && !tr->rico) continue;
+      if (len < 0.05f) continue;
       // Where the bolt is along the line. It starts 3 m out so the very first
-      // frame shows which way it went, then the tail lets go of the barrel.
-      float age = (float)(tr->life0 - tr->life) + g_fx_alpha;
-      float nose = 3.0f + tr->v * age;
+      // frame shows which way it went, then the tail lets go of the barrel. A
+      // skip starts AT the face it skipped off, after its parent arrives.
+      float age = (float)(tr->life0 - tr->life) + g_fx_alpha - (float)tr->delay;
+      if (age < 0.0f) continue;
+      float lead = tr->rico ? 0.0f : 3.0f;
+      float nose = lead + tr->v * age;
+      float slen = tr->rico ? fminf(3.0f, len) : fmaxf(tl->len, tl->span * len);
+      float wk = tr->rico ? 1.10f : tl->w;
+      float bk = tr->rico ? 1.15f : tl->k;
+      // THE HEAT WAKE: the line the round burned through the air, left hanging
+      // after the bolt has gone — thin and hot first, then wider and fainter
+      // as it diffuses, from the muzzle to wherever the nose has got to.
+      if (tr->wake > 0) {
+        float wl = (float)tr->life / (float)tr->wake;     // 1 -> 0 over the wake
+        float wt1 = f_clamp(nose / len, 0.0f, 1.0f);
+        float bloom = 1.0f - f_clamp(wl, 0.0f, 1.0f);
+        float wi = f_clamp(wl, 0.0f, 1.0f);
+        wi = wi * wi * 0.55f;
+        if (wi > 0.004f && wt1 > 0.02f) {
+          const int WN = 8;
+          for (int sgi = 0; sgi < WN; sgi++) {
+            float ua = wt1 * (float)sgi / WN, ub = wt1 * (float)(sgi + 1) / WN;
+            v3 pa = v3_add(tr->a, v3_scale(d, ua)), pb = v3_add(tr->a, v3_scale(d, ub));
+            // Starts 1.5 m off the barrel: the shooter's own wake is not a bar
+            // across his sight picture.
+            float ra = f_clamp((ua * len - 1.5f) * 0.4f, 0.0f, 1.0f);
+            float rb = f_clamp((ub * len - 1.5f) * 0.4f, 0.0f, 1.0f);
+            // A slow shimmer along it, so it reads as moving air and not a wire.
+            float sa = 0.75f + 0.25f * sinf(ua * len * 1.7f + (float)tr->life * 0.21f);
+            float sb = 0.75f + 0.25f * sinf(ub * len * 1.7f + (float)tr->life * 0.21f);
+            v3 wc = {{0.30f, 0.27f, 0.22f}};
+            float w0 = 0.022f + 0.090f * bloom;
+            fx_seg(pa, pb, eye, w0 * ra, w0 * rb, v3_scale(wc, wi * ra * sa),
+                   v3_scale(wc, wi * rb * sb));
+          }
+        }
+      }
+      // The bolt itself is gone once it has run into the hit; the wake (if
+      // any) is what the rest of the life is for.
       float t1 = f_clamp(nose / len, 0.0f, 1.0f);
-      float t0 = f_clamp((nose - fmaxf(TRACER_LEN, TRACER_SPAN * len)) / len, 0.0f, 1.0f);
+      float t0 = f_clamp((nose - slen) / len, 0.0f, 1.0f);
       if (t1 - t0 < 1e-3f) continue;
-      float f = f_clamp((float)tr->life / 2.0f, 0.0f, 1.0f);   // arrival dies quick
+      int flight = tr->life - tr->wake;                    // ticks of bolt left
+      float f = f_clamp((float)flight / 2.0f, 0.0f, 1.0f);  // arrival dies quick
+      if (tr->rico) f *= 1.0f - f_clamp(nose / len, 0.0f, 1.0f) * 0.7f;
+      if (f <= 0.0f) continue;
       const int N = 6;
       for (int sgi = 0; sgi < N; sgi++) {
         float ua = t0 + (t1 - t0) * (float)sgi / N;
@@ -29675,20 +30283,19 @@ static void fx_build(v3 eye) {
         // comet: brightest at the nose, gone at the tail.
         float ka = f_clamp(ua * len * (1.0f / 14.0f), 0.0f, 1.0f);
         float kb = f_clamp(ub * len * (1.0f / 14.0f), 0.0f, 1.0f);
-        float fa = f * (0.35f + 0.65f * (float)sgi / N);
-        float fb = f * (0.35f + 0.65f * (float)(sgi + 1) / N);
-        v3 ca = v3_lerp((v3){{1.65f, 1.36f, 0.92f}}, (v3){{1.10f, 0.50f, 0.14f}}, ka);
-        v3 cb = v3_lerp((v3){{1.65f, 1.36f, 0.92f}}, (v3){{1.10f, 0.50f, 0.14f}}, kb);
-        v3 ha = v3_lerp((v3){{0.46f, 0.28f, 0.11f}}, (v3){{0.22f, 0.09f, 0.03f}}, ka);
-        v3 hb = v3_lerp((v3){{0.46f, 0.28f, 0.11f}}, (v3){{0.22f, 0.09f, 0.03f}}, kb);
+        if (tr->rico) ka = kb = 0.45f;                     // a skip has shed some heat
+        float fa = f * bk * (0.35f + 0.65f * (float)sgi / N);
+        float fb = f * bk * (0.35f + 0.65f * (float)(sgi + 1) / N);
+        v3 ca = v3_lerp(tl->hot, tl->cool, ka), cb = v3_lerp(tl->hot, tl->cool, kb);
+        v3 ha = v3_lerp(tl->hhot, tl->hcool, ka), hb = v3_lerp(tl->hhot, tl->hcool, kb);
         // Thin at the bore, full width by 2.5 m: at 0.3 m from the eye a wide halo
         // is a wedge across exactly the pixels the player aims with.
-        float ra = f_clamp(ua * len * (1.0f / 2.5f), 0.0f, 1.0f);
-        float rb = f_clamp(ub * len * (1.0f / 2.5f), 0.0f, 1.0f);
-        float wha = (0.010f + 0.045f * ra) * (1.0f - 0.5f * ka);
-        float whb = (0.010f + 0.045f * rb) * (1.0f - 0.5f * kb);
-        float wca = (0.0040f + 0.0050f * ra) * (1.0f - 0.45f * ka);
-        float wcb = (0.0040f + 0.0050f * rb) * (1.0f - 0.45f * kb);
+        float ra = tr->rico ? 1.0f : f_clamp(ua * len * (1.0f / 2.5f), 0.0f, 1.0f);
+        float rb = tr->rico ? 1.0f : f_clamp(ub * len * (1.0f / 2.5f), 0.0f, 1.0f);
+        float wha = (0.010f + 0.045f * ra) * (1.0f - 0.5f * ka) * wk;
+        float whb = (0.010f + 0.045f * rb) * (1.0f - 0.5f * kb) * wk;
+        float wca = (0.0040f + 0.0050f * ra) * (1.0f - 0.45f * ka) * wk;
+        float wcb = (0.0040f + 0.0050f * rb) * (1.0f - 0.45f * kb) * wk;
         fx_seg(pa, pb, eye, wha, whb, v3_scale(ha, fa * fa), v3_scale(hb, fb * fb));
         fx_seg(pa, pb, eye, wca, wcb, v3_scale(ca, fa), v3_scale(cb, fb));
       }
@@ -29791,6 +30398,17 @@ static void fx_build(v3 eye) {
   if (g_blast_light > 0.01f)
     fx_disc(g_blast_p, eye, 15.0f, v3_scale((v3){{0.75f, 0.52f, 0.30f}}, g_blast_light),
             (v3){{0, 0, 0}}, 24);
+  for (int i = 0; i < MAX_DUST; i++)
+    if (g_dust[i].life > 0) {
+      const dust_t *q = &g_dust[i];
+      float a1 = 1.0f - (float)q->life / (float)q->life0;
+      float r = q->r0 + (q->r1 - q->r0) * sqrtf(a1);
+      // In fast, out slow; and eased out near the lens like every burst.
+      float k = f_clamp(a1 * 10.0f, 0.0f, 1.0f) * (1.0f - a1) * (1.0f - a1);
+      float nf;
+      if (!fx_near_ease(q->pos, eye, &nf)) continue;
+      fx_disc(q->pos, eye, r, v3_scale(q->col, k * nf), (v3){{0, 0, 0}}, 10);
+    }
   for (int i = 0; i < MAX_FLASHES; i++) {
     flash_t *fl = &g_flashes[i];
     if (fl->src == g_local_ent && g_fx_vm_flash) continue;  // the vm star owns it
@@ -29801,14 +30419,14 @@ static void fx_build(v3 eye) {
       fl->pos = pose_muzzle(mh >= 0 ? &g_player_anim[mh].pose
                                     : &g_bots[fl->src - 1].anim.pose, fl->wpn);
     }
-    float f = fresh ? 1.0f : (float)fl->life / FLASH_TICKS;
+    float f = fresh ? 1.0f : (float)fl->life / (float)flash_ticks(fl->wpn);
     fl->fresh = 0;
     v3 t1, t2;
     axis_frame(fl->dir, &t1, &t2);
     uint32_t h = fx_hash(fl->seed ^ 0x9E37u);
     float s = (0.22f + 0.08f * (float)((h >> 8) & 255) / 255.0f) *
               (0.45f + 0.55f * f);
-    fx_flash(fl->pos, fl->dir, t1, t2, eye, s, f, fl->seed);
+    fx_flash(fl->pos, fl->dir, t1, t2, eye, s, f, fl->seed, fl->wpn);
   }
   for (int i = 0; i < MAX_PARTICLES; i++)
     if (g_parts[i].life > 0) {
@@ -30010,7 +30628,9 @@ static void fx_build(v3 eye) {
       float a1 = 1.0f - f;
       v3 col = fx_cool(a1, 0.18f, (v3){{2.60f, 1.90f, 0.90f}},
                        (v3){{1.85f, 0.62f, 0.10f}}, (v3){{0.70f, 0.07f, 0.01f}});
-      col = v3_scale(col, f_clamp(f * 3.0f, 0.0f, 1.0f) * nf);
+      // `sz` is the struck material's HEAT (see EV_IMPACT): steel 1.15, stone
+      // 0.80, timber 0.55. Zero only on a spawn that predates it.
+      col = v3_scale(col, f_clamp(f * 3.0f, 0.0f, 1.0f) * nf * (q->sz > 0.0f ? q->sz : 1.0f));
       // `y0` is the ANGULAR range scale — see the spawn. Kind 5 has had it from
       // the start and measures a 1.53 extent ratio across a 2.54 range ratio,
       // while kinds 0 and 4 tracked 1/d exactly, i.e. fixed world size.
@@ -32036,7 +32656,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
     int mfresh = g_muzzle_fresh && g_tick - g_muzzle_fire_tick <= 12 &&
                  !g_vmorb.on;
     if ((g_muzzle_t > 0 || mfresh) && !g_vmorb.on) {
-      float k = (mfresh ? 3.4f : 1.3f) * (1.0f - 0.45f * ads);
+      // The magnum's blast lights the hands harder than the rifle's; a pistol
+      // round throws less fire than either.
+      float wk = p->wp.cur == WPN_SR ? 1.35f : p->wp.cur == WPN_PT ? 0.80f : 1.0f;
+      float k = (mfresh ? 3.4f : 1.3f) * (1.0f - 0.45f * ads) * wk;
       v3 ml = v3_norm(v3_add(fwd, v3_scale(upv, 0.16f)));
       glUniform3f(R.u_muzl, ml.x, ml.y, ml.z);
       glUniform3f(R.u_muzc, 1.00f * k, 0.72f * k, 0.38f * k);
@@ -32160,12 +32783,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
       // edge-on slivers over the wrist in exactly the frames the tool exists
       // to produce.
       scene_reset();
-      float mf01 = mfresh ? 1.0f : (float)g_muzzle_t / 3.0f;
+      float mf01 = mfresh ? 1.0f : (float)g_muzzle_t / (float)flash_ticks(p->wp.cur);
       g_muzzle_fresh = 0;
       float fs = 1.0f - 0.55f * ads;
       fx_flash(g_vm_muzzle, fwd, rgt, upv, eye,
                0.11f * fs * (0.55f + 0.45f * mf01), mf01,
-               (uint32_t)p->wp.idx * 61u + 17u);
+               (uint32_t)p->wp.idx * 61u + 17u, p->wp.cur);
       fx_pass_begin();
       scene_draw();
       fx_pass_end();

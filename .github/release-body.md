@@ -1,12 +1,14 @@
 BlindDrop is an arena FPS in one C file. No engine, no asset files: maps, weapons and sounds are all generated in code.
 
-## What's new in 0.3
+## What's new in 0.4
 
-- **Five modes:** Deathmatch, Gun Game, Snipers Only, Knives + Nades and Last Man Standing (with spectating and round play).
-- **Seven maps:** the procedural Arena, three handmade arenas (Foundry, Bazaar, Outpost), and three large tactical maps with A and B bomb sites — **Citadel** (desert old town with a climbable minaret), **Harbor** (warehouses, containers, a crane walkway and a lighthouse) and **Refinery** (tanks, pipe racks and a distillation column lookout). Rotate cycles through them all.
-- **Smarter bots:** they throw grenades, rush with knives, climb stairs and find their way around the big maps.
-- **Sniper:** hip-fire spread cut from 3.0 to 0.6 degrees.
-- **Multiplayer:** servers take `--mode` and `--map`. The network protocol changed, so 0.3 clients and servers do not mix with older versions.
+- **Each gun fires its own round:** the AR keeps its quick, thin tracer, the sniper's is faster and white-hot and leaves a heat trail hanging in the air for half a second, and the pistol's is slower, shorter and warmer.
+- **Ricochets:** rounds that hit a wall or the floor at a shallow angle can skip off it.
+- **Muzzle flashes per weapon:** a narrow forward flash on the AR, a big sideways blast from the sniper's muzzle brake, a round fireball on the pistol. Each gun also leaves its own muzzle smoke.
+- **Impacts match the surface:** metal throws hot sparks, stone and brick throw cooler chips, wood barely sparks, and every non-metal hit kicks up dust in the colour of what it hit.
+- **Building materials:** walls now render as brick, plaster, poured concrete, corrugated sheet, shipping containers, stone and timber instead of flat colour, and hard floors are cut into slabs.
+
+0.4 uses the same network protocol as 0.3, so 0.3 and 0.4 players can play together.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 
