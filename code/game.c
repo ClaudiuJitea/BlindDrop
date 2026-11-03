@@ -6291,11 +6291,12 @@ static void audio_on_event(const event_t *e) {
   }
   case EV_NADE: {
     float dist, pan = audio_place(e->a, &dist);
-    float near = f_clamp(1.0f / (1.0f + dist * dist * 0.02f), 0.03f, 0.9f);
-    if (e->k == 1) audio_play(SFX_NADE_BOUNCE, near * f_clamp(e->f / 7.0f, 0.15f, 1.0f),
+    // `gain`, not `near`: windef.h defines near/far as macros (see far above).
+    float gain = f_clamp(1.0f / (1.0f + dist * dist * 0.02f), 0.03f, 0.9f);
+    if (e->k == 1) audio_play(SFX_NADE_BOUNCE, gain * f_clamp(e->f / 7.0f, 0.15f, 1.0f),
                               rng_rangef(&g_rng_audio, 0.92f, 1.10f), pan, 0.0f);
-    if (e->k == 2) audio_play(SFX_NADE_SPOON, near, rng_rangef(&g_rng_audio, 0.96f, 1.05f), pan, 0.0f);
-    if (e->k == 3) audio_play(SFX_NADE_EQUIP, near, 1.0f, pan, 0.0f);
+    if (e->k == 2) audio_play(SFX_NADE_SPOON, gain, rng_rangef(&g_rng_audio, 0.96f, 1.05f), pan, 0.0f);
+    if (e->k == 3) audio_play(SFX_NADE_EQUIP, gain, 1.0f, pan, 0.0f);
     break;
   }
   case EV_BLAST: {
@@ -16122,7 +16123,7 @@ static void net_srv_packet(const unsigned char *b, int n, uint32_t ip, uint16_t 
     for (int i = 0; i < MV_COUNT; i++) np_wf(&w, g_cfg.mv[i]);
     for (int wp = 0; wp < WPN_COUNT; wp++)
       for (int i = 0; i < WP_COUNT; i++) np_wf(&w, g_cfg.wp[wp][i]);
-    if (w.bad) slog("ACCEPT overflow at %zu of %zu bytes", w.at, sizeof out);
+    if (w.bad) slog("ACCEPT overflow at %d of %d bytes", (int)w.at, (int)sizeof out);
     net_udp_send(g_srv_fd, ip, port, out, (int)w.at);
   } else if (type == NP_LEAVE) {
     int conn = net_conn_find(ip, port);     // token-gated: a bare LEAVE
