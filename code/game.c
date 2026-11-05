@@ -167,6 +167,29 @@ typedef struct __GLsync *GLsync;
 #define GL_COMPARE_REF_TO_TEXTURE 0x884E
 #define GL_SYNC_GPU_COMMANDS_COMPLETE 0x9117
 #define GL_SYNC_FLUSH_COMMANDS_BIT    0x00000001
+// The HDR pipeline (scene_update / post_pass). Guarded: Mesa's glext.h already
+// defines these on Linux, MinGW's 1.1 gl.h does not.
+#ifndef GL_RGBA16F
+#define GL_RGBA16F              0x881A
+#endif
+#ifndef GL_HALF_FLOAT
+#define GL_HALF_FLOAT           0x140B
+#endif
+#ifndef GL_TEXTURE0
+#define GL_TEXTURE0             0x84C0
+#endif
+#ifndef GL_TEXTURE_MAX_LEVEL
+#define GL_TEXTURE_MAX_LEVEL    0x813D
+#endif
+#ifndef GL_RG16F
+#define GL_RG16F                0x822F
+#endif
+#ifndef GL_RG
+#define GL_RG                   0x8227
+#endif
+#ifndef GL_R16F
+#define GL_R16F                 0x822D
+#endif
 
 #define GL_FUNC_LIST(X) \
   X(GLuint, glCreateShader, (GLenum)) \
@@ -210,7 +233,13 @@ typedef struct __GLsync *GLsync;
   X(void,   glBlitFramebuffer, (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
   X(GLsync, glFenceSync, (GLenum, GLbitfield)) \
   X(GLenum, glClientWaitSync, (GLsync, GLbitfield, GLuint64)) \
-  X(void,   glDeleteSync, (GLsync))
+  X(void,   glDeleteSync, (GLsync)) \
+  X(void,   glGenerateMipmap, (GLenum)) \
+  X(void,   glGenSamplers, (GLsizei, GLuint *)) \
+  X(void,   glBindSampler, (GLuint, GLuint)) \
+  X(void,   glSamplerParameteri, (GLuint, GLenum, GLint)) \
+  X(void,   glUniformMatrix3fv, (GLint, GLsizei, GLboolean, const GLfloat *)) \
+  X(void,   glUniform4fv, (GLint, GLsizei, const GLfloat *))
 
 #define X(ret, name, args) typedef ret (APIENTRY *pfn_##name) args; static pfn_##name name;
 GL_FUNC_LIST(X)
@@ -218,11 +247,25 @@ GL_FUNC_LIST(X)
 
 typedef void *(*gl_loader_fn)(const char *);
 
+// glActiveTexture is GL 1.3, so Mesa's gl.h already PROTOTYPES it and a static
+// pointer of the same name would collide. It is loaded under its own name. The
+// HDR post pipeline is the only multi-texture consumer; everything else still
+// lives on unit 0, and every multi-unit call site hands unit 0 back.
+typedef void (APIENTRY *pfn_active_texture)(GLenum);
+static pfn_active_texture gl_active_texture;
 static void gl_load_functions(gl_loader_fn load) {
 #define X(ret, name, args) name = (pfn_##name)load(#name); \
   if (!name) fatal("GL 3.3 function missing: " #name);
   GL_FUNC_LIST(X)
 #undef X
+  gl_active_texture = (pfn_active_texture)load("glActiveTexture");
+  if (!gl_active_texture) fatal("GL 3.3 function missing: glActiveTexture");
+}
+// Bind `tex` on texture unit `unit`, then return to unit 0.
+static void tex_on(int unit, GLuint tex) {
+  gl_active_texture(GL_TEXTURE0 + (GLenum)unit);
+  glBindTexture(GL_TEXTURE_2D, tex);
+  gl_active_texture(GL_TEXTURE0);
 }
 
 // ---------------------------------------------------------------------------
@@ -673,6 +716,11 @@ enum {
   SFX_FIRE_SR2, SFX_FIRE_SR3,
   SFX_FIRE_PT2, SFX_FIRE_PT3, SFX_FIRE_PT4,
   SFX_FAR_PT, SFX_SLAP,
+  SFX_BRASS,                         // one case landing — played per bounce
+  SFX_CLINK,                         // a round ringing off body armour
+  SFX_ALARM,                         // HOSTAGE RESCUE: the compound siren
+  SFX_SNIP,                          // a hostage's restraints cut
+  SFX_CHIME,                         // an objective completed
   SFX_COUNT
 };
 
@@ -942,10 +990,11 @@ static const param_def_t SP_ROUNDS_DEF = {"sp_rounds",  "ROUNDS TO WIN", 3, 1, 2
 // changes is asked through the mode_* helpers next to match_t, never by
 // comparing g_match.mode at a call site — that is how the weapon gate, the
 // respawn gate and the win condition stay in one place.
-typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_COUNT } game_mode_t;
+typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE, GM_COUNT } game_mode_t;
 static const char *const GM_NAMES[GM_COUNT] = {
-  "DEATHMATCH", "GUN GAME", "SNIPERS ONLY", "KNIVES + NADES", "LAST MAN STANDING"};
-static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms"};
+  "DEATHMATCH", "GUN GAME", "SNIPERS ONLY", "KNIVES + NADES", "LAST MAN STANDING",
+  "HOSTAGE RESCUE"};
+static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms", "rescue"};
 // GUN GAME's ladder: GG_RUNG_KILLS kills with each weapon promote you to the
 // next, and one kill with the last (the knife) wins — nine kills, about a
 // deathmatch's ten. At one kill a rung a six-bot match was over in fifteen
@@ -1361,6 +1410,7 @@ typedef struct {
   int   show_fps;
   int   msaa;                // MSAA samples: 0 (off), 2, 4 or 8
   int   post_fx;             // bloom, colour grade and vignette
+  int   ballistics;          // offline rounds fly (drag, drop, ricochet)
   // Read by audio_mix on the audio thread while the GAME tab's slider writes it
   // on the main thread — the one object crossing that boundary that was not yet
   // atomic (g_trig_w/g_trig_r and g_audio_run are). Making the member itself
@@ -1518,6 +1568,7 @@ static void config_emit(FILE *f, const config_t *c) {
           SP_ROUNDS_DEF.key, c->sp_rounds);
   fprintf(f, "sp_map %s\n", map_pick_key(c->sp_map));
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
+  fprintf(f, "ballistics %d\n", c->ballistics);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
   for (int w = 0; w < WPN_COUNT; w++)
@@ -1723,6 +1774,9 @@ static void config_load_or_create(const char *path, config_t *c) {
     }
     else if (!strcmp(key, "post_fx")) {
       c->post_fx = parse_long(val, c->post_fx) ? 1 : 0;
+    }
+    else if (!strcmp(key, "ballistics")) {
+      c->ballistics = parse_long(val, c->ballistics) ? 1 : 0;
     }
     else if (!strcmp(key, "mp_host")) {
       snprintf(c->mp_host, sizeof c->mp_host, "%s", val);   // 64 == val width
@@ -1949,7 +2003,20 @@ static const v3 SPAWN_POS = {{0.0f, 0.0f, 18.0f}};
 // a parameter through. g_mat_force overrides it for the few builders whose
 // colour says nothing about the material (a container is any colour at all).
 enum { SMAT_PAINT = 0, SMAT_STUCCO, SMAT_BRICK, SMAT_CONCRETE, SMAT_CLAD,
-       SMAT_CONTAINER, SMAT_STONE, SMAT_WOOD, SMAT_COUNT };
+       SMAT_CONTAINER, SMAT_STONE, SMAT_WOOD,
+       SMAT_COPPER,    // oxidised copper sheet: the mosque dome's verdigris
+       SMAT_STEEL,     // welded steel plate and pipe: ring seams, brushed
+       SMAT_HAZARD,    // safety-yellow paint over steel, chipped and striped
+       SMAT_GLASS,     // a building's window: reflective glass, a room behind it
+       SMAT_VGLASS,    // a vehicle's glass: tinted, a dark cabin behind it
+       SMAT_LAMP,      // a lantern: lit at dusk and dawn
+       SMAT_LED,       // a dot-matrix sign: always lit
+       SMAT_COUNT };
+// Steel answers a round with sparks, whatever its finish.
+static int smat_metal(int m) {
+  return m == SMAT_CLAD || m == SMAT_CONTAINER || m == SMAT_COPPER ||
+         m == SMAT_STEEL || m == SMAT_HAZARD;
+}
 static uint8_t g_solid_mat_all[SRV_LOBBIES][MAX_SOLIDS];
 #define g_solid_mat (g_solid_mat_all[g_lobby])
 static int g_mat_force = -1;
@@ -1976,8 +2043,30 @@ static int smat_classify(v3 c) {
   return best;
 }
 
+// RENDER PROPS. A vehicle's solids are its COLLISION — a block-out of boxes
+// that the sim, the bots and the netcode all agree on and that must not move.
+// What the player SEES is a detailed model built in the same footprint
+// (mesh_props): the boxes are flagged hidden for the colour mesh, and the
+// prop registry tells the renderer what to build where. Nothing here draws
+// from g_rng, so registering a prop changes no map.
+static uint8_t g_solid_hide_all[SRV_LOBBIES][MAX_SOLIDS];
+#define g_solid_hide (g_solid_hide_all[g_lobby])
+enum { PROP_TRUCK = 1, PROP_CAR, PROP_LAMP, PROP_HELI, PROP_PALM, PROP_BARREL };
+typedef struct { int kind, ax, dir; float x, z; v3 col, col2; } prop_t;
+#define MAX_PROPS 192
+static prop_t g_props_all[SRV_LOBBIES][MAX_PROPS];
+static int g_nprops_all[SRV_LOBBIES];
+#define g_props (g_props_all[g_lobby])
+#define g_nprops (g_nprops_all[g_lobby])
+static void prop_add(int kind, float x, float z, int ax, int dir, v3 c, v3 c2) {
+  if (g_nprops < MAX_PROPS) g_props[g_nprops++] = (prop_t){kind, ax, dir, x, z, c, c2};
+}
+static void solids_hide(int from) {
+  for (int i = from; i < g_num_solids; i++) g_solid_hide[i] = 1;
+}
 static void map_add(v3 mn, v3 mx, v3 col) {
   if (g_num_solids >= MAX_SOLIDS) return;
+  g_solid_hide[g_num_solids] = 0;
   g_solid_mat[g_num_solids] = (uint8_t)(g_mat_force >= 0 ? g_mat_force : smat_classify(col));
   g_solids[g_num_solids++] = (solid_t){mn, mx, col, 1};
 }
@@ -2740,6 +2829,68 @@ static const char *const MAP_REFINERY[MAPGRID_N] = {
   "####################################################",
 };
 
+// COMPOUND — the HOSTAGE RESCUE map: a walled desert stronghold at blue hour.
+// Insertion is the wadi to the south, the helicopter landing zone (the 'A'
+// paint) is outside the north gate, and the three hostages are held in the
+// pen (north-west), the motor pool (east) and on the roof of the HQ. Four
+// corner watchtowers overlook the walls; a breach in the west wall and the
+// roofed east gatehouse are the quiet ways in. The HQ ('X') and every tower
+// are built by hand in compound_extras.
+static const char *const MAP_COMPOUND[MAPGRID_N] = {
+  "%%%%%...............................................",
+  "%%%%%...............................................",
+  "%%%%%...............................................",
+  "%%%%%...............................................",
+  "%%%%%...............................................",
+  "....................................................",
+  "....................................................",
+  "....................................................",
+  "......wwwwwwwwwwwwwwwwwwwwwwwwww...wwwwwwwwwww......",
+  "......w......................................w......",
+  "......w....................c...=.............w......",
+  "......w...wwwww................=..c....CC....w......",
+  "......w...wrrrw..............................w......",
+  "......w...wrrrr......XXXXXXXXX...............w......",
+  "......w...wrrrr...c..XXXXXXXXX...............w......",
+  "......w...wwwww......XXXXXXXXX...............w......",
+  "......w..............XXXXXXXXX...............w..==..",
+  "......w..............XXXXXXXXX...............w......",
+  "......w..............XXXXXXXXX...............w......",
+  "......w.%%%%........................wwwwwwwwww......",
+  "......w.%%%%........................rrrrrrrrww......",
+  "......w.%%%%..........====..........rrrrrrrrww......",
+  "......w.%%%%........................rrrrrrrrww......",
+  "................................c...rrrrrrrrww......",
+  ".......................CC...........rrrrrrrrww......",
+  "......w....c........................rrrrrrrrww......",
+  "......w.............................rrrrrrrrww......",
+  "......w.......................C.....rrrrrrrrww......",
+  "......w..%%%%%%%%..c..........C..............w......",
+  ".==...w..%%%%%%%%..................OOOO......w......",
+  "......w..%%%%%%%%..................OOOO.OOO..w......",
+  "......w..%%%%%%%%...CC.............OOOO.OOO..w......",
+  "......w..%%%%%%%%..................OOOO.OOO..w......",
+  "......w....................CC................r......",
+  "......w......................................r......",
+  "......w...........................%%%%%%%....w......",
+  "......w......c..CC................%%%%%%%....w......",
+  "......w.................c........c%%%%%%%....w......",
+  "......w...........................%%%%%%%c...w......",
+  "......w................==..==................w......",
+  "......w......................................w......",
+  "......wwwwwwwwwwwwwwwwww....wwwwwwwwwwwwwwwwww......",
+  "....................................................",
+  "....................................................",
+  "........==.........====.......====.............==...",
+  "....................................%%%%%%%.........",
+  "....%%%%...%%%%%%...................%%%%%%%.........",
+  "....%%%%...%%%%%%...................%%%%%%%.........",
+  "....%%%%...%%%%%%...................%%%%%%%.........",
+  ".TTTTT.....%%%%%%...................................",
+  ".TTTTT..............................................",
+  ".TTTTT..............................................",
+};
+
 // ---------------------------------------------------------------------------
 // PREFABS — the architecture the tactical maps are dressed with. Everything is
 // still boxes (the collision set IS the render mesh), so a building is
@@ -2845,8 +2996,23 @@ static void town_style(int which) {
   for (int i = 0; i < 4; i++) smat_reg(s->plaster[i], PM[which][i]);
   smat_reg(s->stone, which == 0 ? SMAT_STONE : SMAT_CONCRETE);
   smat_reg(s->door, SMAT_WOOD);
+  smat_reg(s->glass, SMAT_GLASS);                                 // every window
   if (which == 0) smat_reg(s->trim, SMAT_STUCCO);
-  if (which == 2) smat_reg(rgb(0.74f, 0.72f, 0.68f), SMAT_CONCRETE);  // cooling tower
+  if (which == 0) smat_reg(rgb(0.24f, 0.46f, 0.52f), SMAT_COPPER);   // the dome
+  if (which == 1) {                                               // the gantry
+    smat_reg(rgb(0.86f, 0.64f, 0.14f), SMAT_HAZARD);
+    smat_reg(rgb(0.28f, 0.30f, 0.32f), SMAT_STEEL);
+  }
+  if (which == 2) {
+    smat_reg(rgb(0.74f, 0.72f, 0.68f), SMAT_CONCRETE);             // cooling tower
+    smat_reg(s->trim, SMAT_HAZARD);                                // safety yellow
+    smat_reg(rgb(0.30f, 0.31f, 0.32f), SMAT_STEEL);                // rack posts
+    smat_reg(rgb(0.62f, 0.64f, 0.66f), SMAT_STEEL);                // the pipes
+    smat_reg(rgb(0.52f, 0.26f, 0.18f), SMAT_STEEL);
+    smat_reg(rgb(0.26f, 0.46f, 0.30f), SMAT_STEEL);
+    smat_reg(rgb(0.78f, 0.78f, 0.76f), SMAT_STEEL);                // the column
+    smat_reg(rgb(0.62f, 0.62f, 0.60f), SMAT_STEEL);
+  }
 }
 
 // One facade: piers, and in each opening column the wall pieces, the window or
@@ -3125,6 +3291,7 @@ static void dome(float cx, float cz, float R, float y0, v3 c) {
 static void palm(float x, float z, float h) {
   v3 tr = rgb(0.42f, 0.32f, 0.22f), lf = rgb(0.26f, 0.42f, 0.18f);
   float seg = h / 3.0f, lean = rng_range(-0.25f, 0.25f);
+  int first = g_num_solids;   // the boxes stay the collision; prop_palm is the tree
   for (int i = 0; i < 3; i++) {
     float o = lean * (float)i;
     bx(x - 0.18f + o, seg * (float)i, z - 0.18f, x + 0.18f + o, seg * (float)(i + 1),
@@ -3139,6 +3306,8 @@ static void palm(float x, float z, float h) {
   bx(tx - 0.2f, t - 0.5f, z + 2.4f, tx + 0.2f, t + 0.05f, z + 2.9f, lf);
   bx(tx + 2.4f, t - 0.55f, z - 0.2f, tx + 2.9f, t, z + 0.2f, lf);
   bx(tx - 2.9f, t - 0.45f, z - 0.2f, tx - 2.4f, t + 0.1f, z + 0.2f, lf);
+  solids_hide(first);
+  prop_add(PROP_PALM, x, z, 0, 0, lf, (v3){{h, lean, 0.0f}});
 }
 
 // A car (ax 0 = facing along x). Body, cabin, four wheels proud of the body.
@@ -3148,6 +3317,7 @@ static void car(float x, float z, int ax) {
                               {{0.72f, 0.58f, 0.24f}}};
   v3 p = PAINT[rng_u32() % 5], w = rgb(0.08f, 0.08f, 0.09f);
   float L = 2.1f, W = 0.95f;
+  int first = g_num_solids;
 #define CB(a0, b0, a1, b1, y0, y1, c) \
   (ax ? bx(x + (b0), y0, z + (a0), x + (b1), y1, z + (a1), c) \
       : bx(x + (a0), y0, z + (b0), x + (a1), y1, z + (b1), c))
@@ -3159,11 +3329,16 @@ static void car(float x, float z, int ax) {
   CB(-1.55f, W - 0.25f, -0.85f, W + 0.05f, 0.0f, 0.62f, w);
   CB(0.85f, W - 0.25f, 1.55f, W + 0.05f, 0.0f, 0.62f, w);
 #undef CB
+  solids_hide(first);
+  prop_add(PROP_CAR, x, z, ax, 0, p, w);
 }
 
 static void barrel(float x, float z, v3 c) {
+  int first = g_num_solids;
   bx(x - 0.3f, 0.0f, z - 0.3f, x + 0.3f, 0.92f, z + 0.3f, c);
   bx(x - 0.32f, 0.42f, z - 0.32f, x + 0.32f, 0.5f, z + 0.32f, tint(c, 0.6f, 0.7f));
+  solids_hide(first);
+  prop_add(PROP_BARREL, x, z, 0, 0, c, c);
 }
 
 static void lamp(float x, float z, int ax, int dir) {
@@ -3173,7 +3348,10 @@ static void lamp(float x, float z, int ax, int dir) {
   if (ax == 0) bx(fminf(x, x + d), 3.98f, z - 0.05f, fmaxf(x, x + d), 4.08f, z + 0.05f, m);
   else         bx(x - 0.05f, 3.98f, fminf(z, z + d), x + 0.05f, 4.08f, fmaxf(z, z + d), m);
   float lx = ax == 0 ? x + d : x, lz = ax == 0 ? z : z + d;
+  int head = g_num_solids;
   bx(lx - 0.18f, 3.72f, lz - 0.18f, lx + 0.18f, 3.98f, lz + 0.18f, rgb(0.95f, 0.86f, 0.62f));
+  solids_hide(head);                        // the lantern is a prop (it glows)
+  prop_add(PROP_LAMP, lx, lz, ax, dir, rgb(0.95f, 0.86f, 0.62f), m);
 }
 
 // A shipping container, 6.1 x 2.44 x 2.6, along x (ax 0) or z; `y` stacks it.
@@ -3227,6 +3405,7 @@ static void tank(float cx, float cz, float r, float h, v3 c) {
 
 static void truck(float x, float z, int ax, v3 c) {
   v3 cab = rgb(0.72f, 0.16f, 0.12f), blk = rgb(0.08f, 0.08f, 0.09f);
+  int first = g_num_solids;
 #define TK(a0, b0, a1, b1, y0, y1, cc) \
   (ax ? bx(x + (b0), y0, z + (a0), x + (b1), y1, z + (a1), cc) \
       : bx(x + (a0), y0, z + (b0), x + (a1), y1, z + (b1), cc))
@@ -3238,6 +3417,8 @@ static void truck(float x, float z, int ax, v3 c) {
   TK(3.8f, -1.2f, 5.0f, -0.95f, 0.0f, 0.95f, blk);
   TK(3.8f, 0.95f, 5.0f, 1.2f, 0.0f, 0.95f, blk);
 #undef TK
+  solids_hide(first);                       // drawn by mesh_props instead
+  prop_add(PROP_TRUCK, x, z, ax, 0, cab, c);
   container(ax ? x : x - 0.1f, ax ? z - 0.1f : z, ax, 1.2f, c);
 }
 
@@ -3389,7 +3570,7 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
       const mapgrid_tile_t *tl = NULL;
       for (size_t k = 0; k < sizeof MAPGRID_TILES / sizeof MAPGRID_TILES[0]; k++)
         if (MAPGRID_TILES[k].ch == ch) tl = &MAPGRID_TILES[k];
-      int special = strchr("#%HhOWX", ch) != NULL || (ch == 'C' && g_town_kind == 1);
+      int special = strchr("#%HhOWX", ch) != NULL || (ch == 'C' && (g_town_kind == 1 || g_town_kind == 3));
       if ((!tl && !special) || used[r][c]) continue;
       // Widest run along the row, then as many rows down as stay full.
       int w = 1, h = 1;
@@ -3553,6 +3734,81 @@ static void refinery_extras(void) {
   car(20.0f, -46.0f, 0); car(-14.0f, 47.0f, 0);
 }
 
+// The compound's landmarks. The HQ keeps the grid's 'X' cells; the towers,
+// the helicopter, the lamps and the vehicles stand on open floor.
+#define MAP_COMPOUND_ID 7
+static void compound_extras(void) {
+  const town_style_t *s = &g_town;
+  // HQ: two storeys, the stair up its south wall to the roof (hostage three).
+  int bal = g_town.balconies;
+  g_town.balconies = 0;
+  house_climb(-10.0f, -26.0f, 8.0f, -14.0f, 2, SIDE_N | SIDE_E | SIDE_S | SIDE_W,
+              SIDE_N | SIDE_E, SIDE_S, +1, -9.4f);
+  g_town.balconies = bal;
+  v3 stl = rgb(0.28f, 0.30f, 0.32f);
+  bx(-4.2f, 6.4f, -25.4f, -4.02f, 13.6f, -25.22f, stl);            // radio mast
+  bx(-4.8f, 11.8f, -25.36f, -3.42f, 11.9f, -25.26f, stl);
+  bx(-4.8f, 12.8f, -25.36f, -3.42f, 12.9f, -25.26f, stl);
+  bx(0.0f, 6.4f, -25.5f, 2.4f, 6.9f, -24.9f, rgb(0.36f, 0.34f, 0.28f));     // roof bags
+  // The corner watchtowers: a stair round a timber core, a lookout with a
+  // roof on four posts. A sniper stands in each.
+  v3 core = rgb(0.46f, 0.36f, 0.25f), step = s->stone;
+  static const float TW[4][2] = {{-35.5f, -31.5f}, {35.5f, -31.5f}, {-35.5f, 27.5f}, {35.5f, 27.5f}};
+  for (int i = 0; i < 4; i++) tower(TW[i][0], TW[i][1], 1.2f, 6.0f, core, step, 1, -1);
+  // The old lookout in the wadi, outside the walls: the player's own perch.
+  tower(-48.0f, 40.0f, 1.2f, 8.4f, s->plaster[2], s->stone, 0, -1);
+  // The helicopter on the LZ, nose east. The rotor is drawn live (scene_build).
+  v3 od = rgb(0.30f, 0.33f, 0.25f), dk = rgb(0.12f, 0.13f, 0.12f);
+  float hx = 22.0f, hz = -45.0f;
+  int heli0 = g_num_solids;   // the collision block-out; prop_heli is what shows
+  bx(hx - 3.2f, 0.62f, hz - 1.2f, hx + 3.0f, 2.62f, hz + 1.2f, od);           // cabin
+  bx(hx + 3.0f, 0.86f, hz - 0.95f, hx + 4.3f, 2.30f, hz + 0.95f, od);          // nose
+  bx(hx + 2.4f, 1.70f, hz - 1.05f, hx + 4.1f, 2.48f, hz + 1.05f, s->glass);    // canopy
+  bx(hx - 2.6f, 2.62f, hz - 0.8f, hx + 1.6f, 3.0f, hz + 0.8f, tint(od, 0.86f, 0.9f));  // engine
+  bx(hx - 10.4f, 1.85f, hz - 0.28f, hx - 3.2f, 2.40f, hz + 0.28f, od);         // tail boom
+  bx(hx - 10.9f, 2.40f, hz - 0.10f, hx - 9.7f, 4.40f, hz + 0.10f, od);         // fin
+  bx(hx - 1.1f, 1.0f, hz - 1.22f, hx + 1.3f, 2.3f, hz - 1.2f, dk);             // open doors
+  bx(hx - 1.1f, 1.0f, hz + 1.2f, hx + 1.3f, 2.3f, hz + 1.22f, dk);
+  bx(hx - 0.22f, 3.0f, hz - 0.22f, hx + 0.22f, 3.45f, hz + 0.22f, stl);        // mast
+  bx(hx - 3.4f, 0.0f, hz - 1.62f, hx + 3.6f, 0.10f, hz - 1.42f, stl);          // skids
+  bx(hx - 3.4f, 0.0f, hz + 1.42f, hx + 3.6f, 0.10f, hz + 1.62f, stl);
+  for (int k = 0; k < 2; k++) {
+    float sx = k ? hx + 1.9f : hx - 2.1f;
+    bx(sx, 0.10f, hz - 1.56f, sx + 0.14f, 0.62f, hz - 1.48f, stl);
+    bx(sx, 0.10f, hz + 1.48f, sx + 0.14f, 0.62f, hz + 1.56f, stl);
+  }
+  solids_hide(heli0);
+  prop_add(PROP_HELI, hx, hz, 0, 0, od, dk);
+  // The pad: a concrete apron with an H painted on it.
+  bx(14.0f, 0.0f, -50.0f, 30.0f, 0.02f, -40.0f, rgb(0.36f, 0.35f, 0.33f));
+  v3 wh = rgb(0.86f, 0.86f, 0.82f);
+  bx(hx - 6.0f, 0.02f, hz + 2.4f, hx - 5.4f, 0.03f, hz + 4.4f, wh);
+  bx(hx - 4.0f, 0.02f, hz + 2.4f, hx - 3.4f, 0.03f, hz + 4.4f, wh);
+  bx(hx - 5.4f, 0.02f, hz + 3.15f, hx - 4.0f, 0.03f, hz + 3.65f, wh);
+  // Lamps: the gates, the courtyard, the pen door, the motor pool, the LZ.
+  lamp(-7.0f, 25.0f, 0, +1); lamp(7.0f, 25.0f, 0, -1);
+  lamp(-14.0f, -11.0f, 0, +1); lamp(12.0f, -11.0f, 0, -1);
+  lamp(-19.0f, -19.0f, 1, -1); lamp(18.0f, -6.0f, 1, +1);
+  lamp(11.0f, -26.0f, 0, +1); lamp(42.0f, 12.0f, 1, +1);
+  lamp(12.0f, -42.0f, 0, +1); lamp(-17.0f, 16.0f, 0, -1);
+  // Vehicles: two jeeps in the motor pool, a supply truck by each outer gate.
+  car(26.0f, -9.0f, 0); car(26.0f, -1.5f, 0);
+  truck(-22.0f, -41.0f, 0, rgb(0.34f, 0.36f, 0.26f));
+  truck(46.0f, -6.0f, 1, rgb(0.46f, 0.40f, 0.28f));
+  // Fuel drums by the tanks and the generator, palms in the wadi and outside.
+  v3 red = rgb(0.62f, 0.18f, 0.12f), blu = rgb(0.20f, 0.30f, 0.50f);
+  barrel(17.0f, 16.0f, red); barrel(16.2f, 16.6f, red); barrel(17.4f, 16.9f, blu);
+  barrel(-12.0f, -30.0f, blu); barrel(-11.2f, -30.4f, red);
+  bx(-15.6f, 0.0f, -31.4f, -13.4f, 1.4f, -29.6f, rgb(0.38f, 0.42f, 0.30f));   // generator
+  palm(-46.0f, -20.0f, 5.0f); palm(46.0f, 28.0f, 5.4f); palm(-44.0f, 16.0f, 5.6f);
+  palm(30.0f, 49.0f, 5.0f); palm(-10.0f, 47.0f, 5.2f); palm(10.0f, 49.0f, 4.8f);
+  palm(-48.0f, 30.0f, 5.0f); palm(47.0f, -30.0f, 5.2f);
+}
+
+static void map_compound(void) {
+  g_town_kind = 3; town_style(0); map_grid(MAP_COMPOUND); compound_extras(); g_mg_rows = NULL;
+}
+
 static void map_citadel(void) {
   g_town_kind = 0; town_style(0); map_grid(MAP_CITADEL); citadel_extras(); g_mg_rows = NULL;
 }
@@ -3584,11 +3840,12 @@ static const map_def_t MAP_DEFS[] = {
   {"CITADEL",  "citadel",   2,  2, 52.0f, 0.45f, 1, map_citadel},   // SAND, EMBER DUSK
   {"HARBOR",   "harbor",    1,  3, 52.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN
   {"REFINERY", "refinery",  0,  1, 52.0f, 0.45f, 1, map_refinery},  // QUARTZ, GOLDEN HOUR
+  {"COMPOUND", "compound",  2,  5, 52.0f, 0.45f, 1, map_compound},  // SAND, BLUE HOUR
 };
 #define MAP_COUNT ((int)(sizeof MAP_DEFS / sizeof MAP_DEFS[0]))
 #define MAP_ROTATE MAP_COUNT          // the MAP setting's extra value
 static const char *const MAP_PICK_NAMES[MAP_COUNT + 1] = {
-  "ARENA", "FOUNDRY", "BAZAAR", "OUTPOST", "CITADEL", "HARBOR", "REFINERY", "ROTATE"};
+  "ARENA", "FOUNDRY", "BAZAAR", "OUTPOST", "CITADEL", "HARBOR", "REFINERY", "COMPOUND", "ROTATE"};
 static int map_parse(const char *s) {
   for (int i = 0; i < MAP_COUNT; i++) if (!strcmp(s, MAP_DEFS[i].key)) return i;
   return !strcmp(s, "rotate") ? MAP_ROTATE : -1;
@@ -3606,6 +3863,8 @@ static void map_pick_apply(int advance) {
   int pick = g_cfg.sp_map;
   if (pick < 0 || pick > MAP_ROTATE) pick = 0;
   g_map_pick = pick;
+  // HOSTAGE RESCUE is a mission, and its mission is on one map.
+  if (g_cfg.sp_mode == GM_RESCUE && !g_home) { g_map_id = MAP_COMPOUND_ID; return; }
   if (pick < MAP_COUNT) g_map_id = pick;
   else g_map_id = advance ? (map_id_valid(g_map_id) + 1) % MAP_COUNT : 0;
 }
@@ -3622,6 +3881,7 @@ static void map_generate_layout(uint32_t seed) {
     g_rng_gun[h] = rng_gun_seed(seed, h);
   g_rng_bot = (uint64_t)(seed ^ 0xB07u) * 2654435761u + 1;
   g_num_solids = 0;
+  g_nprops = 0;
   g_theme = THEMES[rng_u32() % (sizeof THEMES / sizeof THEMES[0])];
   const map_def_t *md = &MAP_DEFS[map_id_valid(g_map_id)];
   if (md->theme >= 0) g_theme = THEMES[md->theme];   // the draw above still
@@ -3841,6 +4101,7 @@ static void bot_flank_release(bot_t *b);
 typedef struct {
   ev_type_t type; v3 a, b; float f, g, pen; int i, k, wpn, src, dst;
 } event_t;
+static int hit_on_plate(const event_t *e);   // presentation: a chest-band hit
 
 // 128 against a measured ev_peak of ~10 at 21 entities (20 bots hard); the
 // MAX_ENTS growth to 28 entities moves that peak proportionally at most —
@@ -4148,7 +4409,8 @@ static float pen_span(v3 o, v3 d) {
   "fire_pt", "reload_pt", "knife_swing", "knife_wall", "knife_block",
   "nade_pin", "nade_bounce", "blast", "blast_far", "nade_spoon", "nade_equip",
   "fire_ar2", "fire_ar3", "fire_ar4", "fire_ar5", "fire_sr2", "fire_sr3",
-  "fire_pt2", "fire_pt3", "fire_pt4", "far_pt", "slap",
+  "fire_pt2", "fire_pt3", "fire_pt4", "far_pt", "slap", "brass", "clink",
+  "alarm", "snip", "chime",
 };
 
 #define SFX_HZ 48000
@@ -5102,7 +5364,7 @@ static void sfx_build_all(void) {
     sfx_strike(fid, 0.073f * vj, 2300.0f, 0.0065f, 0.17f, 0.06f);   // home
     n = sfx_modal(0.16f, 2150.0f * vj, 0.040f, 0.075f);
     sfx_lay(fid, n, (int)(0.020f * SFX_HZ), 0.08f, 2);   // the spring
-    if (fv % 2) sfx_brass(fid, 0.30f + 0.04f * (float)fv, 0.055f);
+    (void)sfx_brass;   // the case is a real particle now: see SFX_BRASS
     sfx_drive(fid, (int)(0.11f * SFX_HZ), 2.6f);
     {   // nearby cover: 1.9 / 3.6 / 5.8 m, there and back
       static const float D[3] = {0.011f, 0.021f, 0.034f};
@@ -5619,7 +5881,6 @@ static void sfx_build_all(void) {
     sfx_strike(fid, 0.016f * vj, 2500.0f, 0.0045f, 0.14f, 0.05f);   // slide back
     sfx_strike(fid, 0.030f / vj, 1450.0f, 0.0065f, 0.15f, 0.05f);   // on the frame
     sfx_strike(fid, 0.062f * vj, 3100.0f, 0.0045f, 0.15f, 0.05f);   // back in battery
-    if (fv != 2) sfx_brass(fid, 0.24f + 0.03f * (float)fv, 0.06f);
     sfx_drive(fid, (int)(0.09f * SFX_HZ), 2.4f);
     {  // the same arena every other gun is fired in
       static const float D[3] = {0.012f, 0.023f, 0.037f};
@@ -5647,6 +5908,76 @@ static void sfx_build_all(void) {
 
   // What a wall throws back: no top, no bottom, and short. A hard surface returns
   // the middle of a shot, and the air on the way eats the rest.
+  // A CASE ON THE GROUND, as its own buffer now: the casing is a physical
+  // particle that bounces, and each bounce plays this — so the tinkle lands
+  // when the brass does, not at a fixed offset baked into the shot.
+  sfx_alloc(SFX_BRASS, 0.08f);
+  n = sfx_modal(0.05f, 4900.0f, 0.0062f, 0.30f);
+  sfx_lay(SFX_BRASS, n, 0, 0.0f, 1);
+  n = sfx_modal(0.04f, 7300.0f, 0.0038f, 0.14f);
+  sfx_lay(SFX_BRASS, n, 1, 0.0f, 1);
+  n = sfx_click(0.002f, 0.00030f, 2600.0f, 0.20f);
+  sfx_lay(SFX_BRASS, n, 0, 0.0f, 0);
+  sfx_finish(SFX_BRASS, 0.42f, 0.030f, 0.0f);
+  // ARMOUR: a hard, bright ping with a short ring — the confirmation that the
+  // round hit, and that the plate took it.
+  sfx_alloc(SFX_CLINK, 0.22f);
+  n = sfx_modal(0.20f, 3150.0f, 0.045f, 0.34f);
+  sfx_lay(SFX_CLINK, n, 0, 0.0f, 1);
+  n = sfx_modal(0.14f, 5420.0f, 0.022f, 0.18f);
+  sfx_lay(SFX_CLINK, n, 0, 0.0f, 1);
+  n = sfx_click(0.003f, 0.00040f, 3800.0f, 0.36f);
+  sfx_lay(SFX_CLINK, n, 0, 0.0f, 0);
+  sfx_finish(SFX_CLINK, 0.60f, 0.060f, 0.0f);
+
+  // HOSTAGE RESCUE. THE SIREN: one rise and fall of a motor siren across the
+  // compound — a saturated tone gliding 420..900 Hz, heard from a distance
+  // (soft top, a long decorrelated tail per ear).
+  sfx_alloc(SFX_ALARM, 2.3f);
+  {
+    int len = (int)(2.0f * SFX_HZ);
+    float ph = 0.0f, ph2 = 0.0f;
+    op_t lp = {0};
+    for (int i = 0; i < len && i < SFX_SCRATCH; i++) {
+      float t = (float)i / SFX_HZ;
+      float f = 660.0f - 240.0f * cosf(F_PI * t);        // up and back down in 2 s
+      ph += F_TAU * f / SFX_HZ;
+      ph2 += F_TAU * f * 2.003f / SFX_HZ;
+      float x = tanhf(2.4f * sinf(ph)) + 0.25f * sinf(ph2);
+      float env = f_clamp(t / 0.12f, 0.0f, 1.0f) * f_clamp((2.0f - t) / 0.35f, 0.0f, 1.0f);
+      g_scr[i] = op_lp(&lp, x, 2600.0f) * env * 0.5f;
+    }
+    sfx_lay(SFX_ALARM, len, 0, -0.15f, 0);
+    sfx_lay(SFX_ALARM, len, (int)(0.045f * SFX_HZ), 0.15f, 24);
+  }
+  sfx_tail(SFX_ALARM, (int)(0.05f * SFX_HZ), 0.50f, 900.0f, 0.8f, 0.040f, 0.400f, 0.35f);
+  sfx_finish(SFX_ALARM, 0.70f, 0.080f, 0.0f);
+  // THE CUT: two clips of a blade through a cable tie.
+  sfx_alloc(SFX_SNIP, 0.30f);
+  n = sfx_click(0.003f, 0.00035f, 3400.0f, 0.55f);
+  sfx_lay(SFX_SNIP, n, 0, 0.0f, 0);
+  n = sfx_modal(0.06f, 6100.0f, 0.008f, 0.22f);
+  sfx_lay(SFX_SNIP, n, 0, 0.0f, 1);
+  n = sfx_click(0.004f, 0.00045f, 2700.0f, 0.70f);
+  sfx_lay(SFX_SNIP, n, (int)(0.11f * SFX_HZ), 0.0f, 0);
+  n = sfx_modal(0.08f, 5200.0f, 0.010f, 0.25f);
+  sfx_lay(SFX_SNIP, n, (int)(0.11f * SFX_HZ), 0.0f, 1);
+  sfx_finish(SFX_SNIP, 0.70f, 0.060f, 0.0f);
+  // AN OBJECTIVE: two soft bell partials, a fifth apart.
+  sfx_alloc(SFX_CHIME, 1.1f);
+  {
+    int len = (int)(1.0f * SFX_HZ);
+    for (int i = 0; i < len && i < SFX_SCRATCH; i++) {
+      float t = (float)i / SFX_HZ, t2 = t - 0.14f;
+      float a = sinf(F_TAU * 880.0f * t) * expf(-t / 0.30f) + 0.3f * sinf(F_TAU * 2640.0f * t) * expf(-t / 0.08f);
+      float b2 = t2 > 0.0f ? sinf(F_TAU * 1318.5f * t2) * expf(-t2 / 0.38f) +
+                             0.25f * sinf(F_TAU * 3955.0f * t2) * expf(-t2 / 0.09f) : 0.0f;
+      g_scr[i] = (a + b2) * 0.4f * f_clamp(t / 0.004f, 0.0f, 1.0f);
+    }
+    sfx_lay(SFX_CHIME, len, 0, 0.0f, 12);
+  }
+  sfx_finish(SFX_CHIME, 0.55f, 0.050f, 0.0f);
+
   sfx_alloc(SFX_SLAP, 0.26f);
   n = sfx_burst(0.09f, 1500.0f, 0.8f, 0.0004f, 0.016f, 1.2f, 0.80f);
   sfx_lay(SFX_SLAP, n, 0, 0.0f, 2);
@@ -6268,6 +6599,9 @@ static void audio_on_event(const event_t *e) {
     // limiter to pull the bus 2 dB, so the most rewarding moment in the game
     // was also its quietest per source. `k` is the victim's remaining hp.
     if (e->src == g_local_ent && e->k <= 0) break;
+    if (e->src == g_local_ent && hit_on_plate(e))
+      audio_play(SFX_CLINK, 0.40f, rng_rangef(&g_rng_audio, 0.95f, 1.06f), 0.0f,
+                 WPN_DEF[e->wpn < WPN_COUNT ? e->wpn : 0].sfx_hit_t);
     if (e->src == g_local_ent) {
       // DELAYED, and that is the whole trick. The confirmation is
       // simultaneous with the shot that caused it, and the shot now has a real
@@ -7116,6 +7450,16 @@ typedef struct {
                                                    // bolted to the helmet
   float last_yaw, last_pitch;
   v3    last_vel;
+  // SECOND-ORDER STATE. Every channel above used to be a first-order filter:
+  // it can lag, but it cannot overshoot, and a weapon on two arms does — it
+  // swings past and settles. Each now carries a velocity and is integrated as
+  // x'' = w^2 (target - x) - 2 zeta w x' (see vm_spring).
+  float sway_pv, sway_yv, lag_xv, lag_yv, lag_zv, roll_v, lean_v;
+  float twist, twist_v, prev_twist;   // rad: per-shot torque about the bore
+  float wall, prev_wall, wall_v;      // 0..1: pulled back off a wall in front
+  float breath;                       // phase of the idle figure-8
+  float cam_roll, cam_roll_v, prev_cam_roll;  // rad: slide bank of the CAMERA
+  int   was_grounded;
 } vm_t;
 
 typedef struct {
@@ -10788,7 +11132,10 @@ static int home_calm(void);  // ...and the boot screen's per-shot one
 // `sp_frag` is his MATCH setting and the tile still shows it.
 static int sp_frag_limit(void) { return g_home ? 100000 : g_cfg.sp_frag; }
 
+static int rescue_bot_count(void);   // HOSTAGE RESCUE fields its own guards
 static int sp_bot_count(void) {
+  int rc = rescue_bot_count();
+  if (rc >= 0) return rc;
   int n = g_home ? HOME_BOTS : g_cfg.sp_bots;
   return n < MAX_BOTS ? n : MAX_BOTS;
 }
@@ -10875,6 +11222,8 @@ static int mode_allowed(int ent, int wpn) {
     case GM_GUN:    return wpn == GG_LADDER[gg_level(ent)];
     case GM_SNIPER: return wpn == WPN_SR;
     case GM_BLADES: return wpn == WPN_KN || wpn == WPN_GR;
+    // The operator carries the suppressed sniper, a sidearm and the knife.
+    case GM_RESCUE: return human_of_ent(ent) < 0 || wpn == WPN_SR || wpn == WPN_PT || wpn == WPN_KN;
     default:        return 1;
   }
 }
@@ -10885,6 +11234,7 @@ static int mode_primary(int ent) {
     case GM_GUN:    return GG_LADDER[gg_level(ent)];
     case GM_SNIPER: return WPN_SR;
     case GM_BLADES: return WPN_KN;
+    case GM_RESCUE: return human_of_ent(ent) >= 0 ? WPN_SR : WPN_AR;
     default:        return WPN_AR;
   }
 }
@@ -10894,7 +11244,7 @@ static int g_net_rounds;
 static int mode_round_goal(void) { return g_online && g_net_rounds ? g_net_rounds : g_cfg.sp_rounds; }
 
 // LAST MAN STANDING: the dead stay down until the round resets everyone.
-static int mode_respawns(void) { return game_mode() != GM_LMS; }
+static int mode_respawns(void) { return game_mode() != GM_LMS && game_mode() != GM_RESCUE; }
 
 // Grenade stock that is not the spawn's fixed two. The GUN GAME grenade rung is
 // bottomless (one kill to climb, and running dry would strand you on a weapon
@@ -10917,6 +11267,150 @@ static void mode_nade_refill(int ent, weapon_t *w) {
 static void mode_loadout(int ent, weapon_t *w) {
   if (!mode_allowed(ent, w->cur)) w->cur = mode_primary(ent);
   mode_nade_refill(ent, w);
+}
+
+
+// ===========================================================================
+// HOSTAGE RESCUE — "OPERATION NIGHTFALL". A single-player mission on COMPOUND:
+// three hostages are held inside a guarded stronghold; free them (hold the
+// RELOAD key beside one) and walk them out to the helicopter on the LZ north
+// of the walls. The guards are the ordinary bots with four changes, all gated
+// on rescue_on(): they never fight each other, they keep POSTS and walk
+// ROUTES instead of wandering, a guard only fights you once its DETECTION
+// meter has filled (distance, stance, movement, lamp light and the edge of its
+// view all set the rate), and one who has you in sight long enough — or who
+// finds a body — radios the ALARM. The alarm starts the hostages' execution
+// clock and sends every hunter to your last known position. Offline only: the
+// whole layer is off on a server and on a client, so the netcode contract and
+// every multiplayer mode are untouched.
+// ===========================================================================
+#define RESC_HOSTAGES 3
+enum { HS_CAPTIVE, HS_FOLLOW, HS_EXTRACTED, HS_DEAD };
+enum { GK_SENTRY, GK_PATROL, GK_SNIPER, GK_WARDEN };
+enum { RW_NONE, RW_SPOTTED, RW_BODY, RW_SHOT };
+enum { RR_RUNNING, RR_SUCCESS, RR_FAIL };
+enum { RF_NONE, RF_KILLED, RF_EXECUTED };
+typedef struct { float x, z, y, yaw; int kind, route; } guard_post_t;
+typedef struct { int n; float p[6][2]; } guard_route_t;
+typedef struct {
+  v3 pos, prev, vel;
+  float yaw, prev_yaw;
+  int state, grounded, stuck;
+  float free_t;            // 0..1 restraints cut
+  float gait, prev_gait;   // walk cycle phase (rad)
+  float move, prev_move;   // 0 standing .. 1 running, smoothed
+  float pose, prev_pose;   // 0 kneeling .. 1 standing (eased)
+  v3 wp;
+  int wp_t;
+} hostage_t;
+typedef struct {
+  int on;
+  hostage_t h[RESC_HOSTAGES];
+  int alarm, alarm_tick, alarm_why, exec_t, exec_max;
+  int clock, result, why, end_tick;
+  int freed, extracted;
+  int kills, takedowns, heads, spotted_n, bodies;
+  int reach_i, cutting;    // the captive within reach / being freed (-1)
+  int use_held;            // the local player's RELOAD, latched by player_tick
+  int msg_t, msg_kind;
+  char msg[48], msg2[48];
+  int ever_seen;           // any guard ever reached full detection
+  int lit;                 // the player stands in lamp light this tick
+  v3 lkp;                  // last position any guard saw the player at
+  long lkp_tick;
+  float detect[MAX_BOTS], prev_detect[MAX_BOTS];
+  v3 glimpse[MAX_BOTS];
+  int radio_t[MAX_BOTS], radio_why[MAX_BOTS];
+  int wp_i[MAX_BOTS], wait_t[MAX_BOTS], body_cd[MAX_BOTS];
+  float look_yaw[MAX_BOTS];
+  long heard_tick[MAX_BOTS];
+  uint8_t body_found[MAX_BOTS];
+  int siren_t, sfx_pending;
+  float rotor, prev_rotor, rotor_w;
+} rescue_t;
+static rescue_t g_resc;
+
+// The hostages: where each is held (x, z, floor y) and which way they kneel.
+static const float RESC_HOLD[RESC_HOSTAGES][4] = {
+  {-27.0f, -25.0f, 0.0f, -1.5708f},   // the pen, facing its back wall
+  {33.0f, -6.0f, 0.0f, 1.5708f},      // the motor pool, between the jeeps
+  {3.0f, -21.5f, 6.4f, 0.0f},         // the HQ roof
+};
+static const char *const RESC_HOLD_NAME[RESC_HOSTAGES] = {"THE PEN", "MOTOR POOL", "HQ ROOF"};
+// The LZ (the pad north of the walls) and where the freed sit to wait.
+#define RESC_LZ_X0 13.0f
+#define RESC_LZ_X1 31.0f
+#define RESC_LZ_Z0 -51.0f
+#define RESC_LZ_Z1 -39.0f
+static const float RESC_SEAT[RESC_HOSTAGES][2] = {{19.6f, -42.4f}, {21.4f, -42.3f}, {23.2f, -42.4f}};
+#define RESC_INSERT_X -45.0f
+#define RESC_INSERT_Z 50.0f
+
+static const guard_route_t GUARD_ROUTES[] = {
+  {4, {{-30.0f, 24.5f}, {12.0f, 24.5f}, {12.0f, 17.5f}, {-12.0f, 17.5f}}},       // 0 south yard
+  {4, {{-37.0f, -27.0f}, {-37.0f, -3.0f}, {-24.0f, -4.0f}, {-24.0f, -16.0f}}},   // 1 west lane
+  {4, {{16.0f, 3.0f}, {36.5f, 5.0f}, {36.5f, 24.0f}, {14.0f, 28.0f}}},           // 2 east lane
+  {3, {{-18.0f, -32.0f}, {30.0f, -32.8f}, {14.0f, -26.0f}}},                     // 3 north lane
+  {4, {{-14.0f, -12.0f}, {12.0f, -12.0f}, {12.0f, -28.0f}, {-14.0f, -28.0f}}},   // 4 round the HQ
+  {2, {{-20.0f, 35.0f}, {30.0f, 35.0f}}},                                         // 5 outside south
+};
+// In the order the difficulty adds them: EASY fields the first 10, NORMAL 14,
+// HARD all 18.
+static const guard_post_t GUARD_POSTS[] = {
+  {-20.5f, -24.0f, 0.0f, 1.5708f, GK_WARDEN, 0},     // the pen's door
+  {23.0f, -4.0f, 0.0f, -1.5708f, GK_WARDEN, 0},      // the motor pool
+  {-2.0f, -17.0f, 6.4f, 3.1416f, GK_WARDEN, 0},      // the HQ roof
+  {35.5f, -31.5f, 6.0f, 0.7854f, GK_SNIPER, 0},      // NE tower, over the LZ road
+  {-30.0f, 24.5f, 0.0f, 1.5708f, GK_PATROL, 0},      // south yard
+  {-6.5f, 33.6f, 0.0f, 3.1416f, GK_SENTRY, 0},       // south gate, outside
+  {-37.0f, -27.0f, 0.0f, 3.1416f, GK_PATROL, 1},     // west lane
+  {-35.5f, 27.5f, 6.0f, -2.3562f, GK_SNIPER, 0},     // SW tower, over the wadi
+  {16.0f, 3.0f, 0.0f, 1.5708f, GK_PATROL, 2},        // east lane
+  {15.0f, -32.6f, 0.0f, 0.0f, GK_SENTRY, 0},         // north gate
+  {-14.0f, -12.0f, 0.0f, 1.5708f, GK_PATROL, 4},     // round the HQ
+  {6.5f, 33.6f, 0.0f, 3.1416f, GK_SENTRY, 0},        // south gate, outside
+  {-35.5f, -31.5f, 6.0f, -0.7854f, GK_SNIPER, 0},    // NW tower
+  {-20.0f, 35.0f, 0.0f, 1.5708f, GK_PATROL, 5},      // outside the south wall
+  {27.0f, 16.8f, 0.0f, -1.5708f, GK_SENTRY, 0},      // the fuel depot
+  {35.5f, 27.5f, 6.0f, 2.3562f, GK_SNIPER, 0},       // SE tower
+  {-18.0f, -32.0f, 0.0f, 1.5708f, GK_PATROL, 3},     // north lane
+  {-35.0f, -4.0f, 0.0f, -1.5708f, GK_SENTRY, 0},     // the west breach
+};
+#define RESC_POSTS ((int)(sizeof GUARD_POSTS / sizeof GUARD_POSTS[0]))
+
+// What the difficulty changes: how many guards, how far and how fast they
+// see, how long a spotter needs on the radio, and the execution clock.
+typedef struct { int guards; float range, snipe, rate, radio_s, exec_s; } resc_diff_t;
+static const resc_diff_t RESC_DIFF[3] = {
+  {10, 30.0f, 52.0f, 0.75f, 1.7f, 100.0f},
+  {14, 36.0f, 60.0f, 1.00f, 1.25f, 75.0f},
+  {18, 42.0f, 68.0f, 1.30f, 0.85f, 55.0f},
+};
+static const resc_diff_t *resc_diff(void) {
+  int d = g_cfg.sp_diff;
+  return &RESC_DIFF[d < 0 ? 0 : d > 2 ? 2 : d];
+}
+static int rescue_on(void) { return g_resc.on && !g_home && !g_online && !g_server; }
+static int rescue_guards(void);
+static int rescue_bot_count(void) { return rescue_on() ? rescue_guards() : -1; }
+static int rescue_guards(void) {
+  int n = resc_diff()->guards;
+  return n < RESC_POSTS ? (n < MAX_BOTS ? n : MAX_BOTS) : RESC_POSTS;
+}
+static const guard_post_t *rescue_post(int bi) {
+  return &GUARD_POSTS[bi >= 0 && bi < RESC_POSTS ? bi : 0];
+}
+static void rescue_msg(int kind, const char *a, const char *b) {
+  snprintf(g_resc.msg, sizeof g_resc.msg, "%s", a);
+  snprintf(g_resc.msg2, sizeof g_resc.msg2, "%s", b ? b : "");
+  g_resc.msg_kind = kind;
+  g_resc.msg_t = 4 * TICK_HZ;
+}
+// May guard `bi` choose entity `e` as a target? Never another guard; the
+// player only once it has detected him (or he shot it, or it already has him).
+static int rescue_may_target(const bot_t *b, int bi, int e) {
+  if (human_of_ent(e) < 0) return 0;
+  return g_resc.detect[bi] >= 1.0f || b->tgt == e || b->threat_src == e;
 }
 
 // Bounded, simulation-owned writer. tick==0 remains the empty-store marker.
@@ -10948,6 +11442,7 @@ static void bot_hear_update(bot_t *b, int bi) {
     for (int src = 0; src < MAX_ENTS; src++) {
       const bot_noise_t *n = &g_match.noise[kind][src];
       if (n->tick == 0 || n->tick >= g_tick || n->src == bi + 1) continue;
+      if (rescue_on() && n->src >= 1 && n->src <= MAX_BOTS) continue;   // a comrade
       if (g_tick - n->tick > bot_hear_life((bot_noise_kind_t)kind)) continue;
       float dist = v3_len(v3_sub(n->pos, b->pos));
       // RELATIVE loudness — how much of its own reach the sound has left, not
@@ -11082,6 +11577,14 @@ static void slog(const char *fmt, ...) {
 static v3 ent_pos(int e) {
   int h = human_of_ent(e);
   return h >= 0 ? g_players[h].pos : g_bots[e - 1].pos;
+}
+
+// A body hit in the chest band of the victim's frame — the plate carrier. A
+// presentation call only (the round does the same damage either way).
+static int hit_on_plate(const event_t *e) {
+  if (e->type != EV_HIT || e->dst < 0 || e->dst >= MAX_ENTS) return 0;
+  float h = e->a.y - ent_pos(e->dst).y;
+  return h > 1.02f && h < 1.48f;
 }
 
 // Fill / cap decisions. THREE numbers, each readable on its own:
@@ -11437,6 +11940,8 @@ static int net_scores_read(const unsigned char *buf, size_t len,
 // other seven — a deterministic double spawn-kill on a shared tick.
 static v3 spawn_spot(int self) {
   int sh = human_of_ent(self);
+  if (rescue_on() && sh >= 0)
+    return (v3){{RESC_INSERT_X + 1.5f * (float)sh, 0.0f, RESC_INSERT_Z}};
   // Fallback point PER HUMAN: one literal for all eight is a deterministic
   // stack of bodies on a full-arena tick. Human 0 keeps the historical 18.
   v3 best = {{0, 0, sh >= 0 ? 18.0f - 2.0f * (float)sh : -12.0f}};
@@ -11462,6 +11967,7 @@ static v3 spawn_spot(int self) {
   return best;
 }
 
+static void rescue_spawn_guard(bot_t *b, int bi);
 static void bot_spawn(int bi) {
   bot_t *b = &g_bots[bi];
   v3 spot = spawn_spot(bi + 1);   // entity id, not bot index
@@ -11505,6 +12011,7 @@ static void bot_spawn(int bi) {
   b->strafe_dir = (rng_next(&g_rng_bot) & 1) ? 1 : -1;
   g_spawn_seq[bi + 1]++;       // snapshot readers see a teleport, not motion
   anim_reset(&b->anim, b->pos, b->yaw);
+  if (rescue_on()) rescue_spawn_guard(b, bi);   // a guard starts on its post
 }
 
 static int bot_investigating(const bot_t *b) {
@@ -11989,6 +12496,7 @@ static void match_end(int winner) {
   ev_push((event_t){.type = EV_END, .k = winner});
 }
 
+static void rescue_on_kill(int src, int dst, int hs);
 static void match_on_kill(int src, int dst, int hs) {
   // Blowing yourself up is a death, not a frag.
   if (src != dst) g_match.kills[src]++;
@@ -12022,6 +12530,9 @@ static void match_on_kill(int src, int dst, int hs) {
     }
     case GM_LMS:
       break;                              // rounds decide it (lms_tick)
+    case GM_RESCUE:
+      rescue_on_kill(src, dst, hs);       // the mission decides it (rescue_tick)
+      break;
     default:
       if (g_match.kills[src] >= sp_frag_limit()) match_end(src);
   }
@@ -12223,6 +12734,11 @@ static void ent_damage(int ent, int dmg, int part, int src, v3 from, v3 at) {
   // limit is lifted to match (sp_frag_limit) so the match cannot end under the
   // menu, and the HUD is off, so no killfeed reports any of it.
   if (g_home && human_of_ent(ent) >= 0) return;
+  if (rescue_on() && human_of_ent(ent) < 0) {
+    if (human_of_ent(src) < 0) return;            // guards never hurt guards
+    g_resc.detect[ent - 1] = 1.0f;                // ...and a hit guard knows
+    g_resc.glimpse[ent - 1] = ent_pos(src);
+  }
   int hs = part == 3;
   g_match.hits[src]++;
   // The HUMAN branch (three-range rule). Without it a human id above MAX_BOTS
@@ -12348,6 +12864,89 @@ static float weapon_spread(const player_t *p) {
 // the player and all 20 bots by the same amount, in the same tick. `rng` is the
 // caller's stream (gun for the player, bot for bots) so their spray patterns
 // stay independently reproducible.
+// ===========================================================================
+// PHYSICAL BALLISTICS (the `ballistics` option, OFF by default). With it on,
+// a rifle or pistol round is a body in flight rather than a ray: it leaves at
+// its muzzle velocity, loses speed to quadratic drag, falls under gravity, and
+// is swept one tick at a time against the same world trace and the same
+// entity boxes the hitscan path uses. A round that meets steel at a grazing
+// angle ricochets once, losing most of its energy. Deterministic (no rng) and
+// authoritative only: an online client keeps the hitscan path, so the option
+// changes nothing about the netcode contract when it is off, and nothing about
+// a server's when the server has not enabled it (`--ballistics`).
+// ===========================================================================
+static int g_ballistics;
+static int g_ballistics_srv;   // --ballistics: a server's own switch
+typedef struct { v3 pos, vel, o; int ent, wpn, life, rico, live; } proj_t;
+#define MAX_PROJ 96
+static proj_t g_proj_all[SRV_LOBBIES][MAX_PROJ];
+#define g_proj (g_proj_all[g_lobby])
+// Muzzle velocity (m/s) and drag (1/m, in dv/dt = -k|v|v) per weapon.
+static float proj_v0(int wpn) { return wpn == WPN_SR ? 850.0f : wpn == WPN_PT ? 360.0f : 910.0f; }
+static float proj_k(int wpn)  { return wpn == WPN_SR ? 0.00028f : wpn == WPN_PT ? 0.0016f : 0.00062f; }
+static void proj_spawn(int ent, int wpn, v3 o, v3 dir) {
+  for (int i = 0; i < MAX_PROJ; i++)
+    if (!g_proj[i].live) {
+      g_proj[i] = (proj_t){.pos = o, .vel = v3_scale(dir, proj_v0(wpn)), .o = o,
+                           .ent = ent, .wpn = wpn, .life = TICK_HZ * 2, .live = 1};
+      return;
+    }
+}
+static void proj_clear(void) { memset(g_proj, 0, sizeof g_proj); }
+static void proj_tick(void) {
+  for (int i = 0; i < MAX_PROJ; i++) {
+    proj_t *q = &g_proj[i];
+    if (!q->live) continue;
+    if (--q->life <= 0) { q->live = 0; continue; }
+    float sp = v3_len(q->vel);
+    // Semi-implicit: drag and gravity first, then the sweep over the new
+    // velocity — the segment drawn is the segment flown.
+    q->vel = v3_scale(q->vel, 1.0f / (1.0f + proj_k(q->wpn) * sp * TICK_DT));
+    q->vel.y -= 9.81f * TICK_DT;
+    sp = v3_len(q->vel);
+    float seg = sp * TICK_DT;
+    v3 d = v3_scale(q->vel, 1.0f / sp);
+    v3 wn = {{0, 1, 0}};
+    int ws = -1;
+    float wall = trace_world(q->pos, d, &wn, &ws);
+    float hd = fminf(wall, seg);
+    int part = 0;
+    int hit = ent_trace(q->ent, q->pos, d, &hd, &part);
+    if (hit >= 0) {
+      v3 at = v3_add(q->pos, v3_scale(d, hd));
+      const wpn_def_t *def = &WPN_DEF[q->wpn];
+      // Energy on arrival, not at the muzzle: a pistol round at 60 m has shed
+      // a third of its speed and lands as the lighter hit it is.
+      float ek = sp / proj_v0(q->wpn);
+      int dmg = (int)((float)(def->dmg * (part == 3 ? def->head_x : 1)) * fminf(1.0f, 0.35f + 0.65f * ek * ek) + 0.5f);
+      ent_damage(hit, dmg, part, q->ent, q->o, at);
+      q->live = 0;
+      continue;
+    }
+    if (wall <= seg) {
+      v3 at = v3_add(q->pos, v3_scale(d, wall));
+      int metal = ws >= 0 && ws < g_num_solids && smat_metal(g_solid_mat[ws]);
+      float cosi = -v3_dot(d, wn);
+      if (metal && cosi < 0.26f && q->rico == 0) {
+        // RICOCHET: the round skips off the plate, keeping ~45% of its speed.
+        ev_push((event_t){.type = EV_IMPACT, .a = at, .b = wn, .i = ws, .k = 1,
+                          .f = v3_len(v3_sub(at, q->o)), .src = q->ent});
+        v3 r = v3_sub(d, v3_scale(wn, 2.0f * v3_dot(d, wn)));
+        q->vel = v3_scale(r, sp * 0.45f);
+        q->pos = v3_add(at, v3_scale(wn, 0.002f));
+        q->rico = 1;
+        continue;
+      }
+      ev_push((event_t){.type = EV_IMPACT, .a = at, .b = wn, .i = ws,
+                        .f = v3_len(v3_sub(at, q->o)), .src = q->ent});
+      q->live = 0;
+      continue;
+    }
+    q->pos = v3_add(q->pos, v3_scale(d, seg));
+    if (q->pos.y < -1.0f) q->live = 0;
+  }
+}
+
 static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
                       float pitch, v3 vel, int grounded, uint64_t *rng,
                       anim_t *anim) {
@@ -12355,7 +12954,9 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   const float *wp = g_sim_wp[w->cur];
   w->ammo[w->cur]--;
   g_match.shots[ent]++;
-  bot_noise_emit(ent, BOT_NOISE_SHOT, o, 34.0f);
+  // HOSTAGE RESCUE: the operator's rifle and pistol are suppressed.
+  bot_noise_emit(ent, BOT_NOISE_SHOT, o,
+                 rescue_on() && human_of_ent(ent) >= 0 ? (w->cur == WPN_SR ? 15.0f : 11.0f) : 34.0f);
   w->cool[w->cur] = (int)((float)TICK_HZ * 60.0f / wp[WP_RPM] + 0.5f);
   if (w->cool[w->cur] < 1) w->cool[w->cur] = 1;
 
@@ -12402,8 +13003,15 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   // human 0's viewmodel.
   int sh = human_of_ent(ent);
   if (sh >= 0) g_players[sh].shots++;
-  if (ent == g_local_ent && sh >= 0)
+  if (ent == g_local_ent && sh >= 0) {
     g_players[sh].vm.kick_v += 0.8f + 0.5f * wp[WP_PUNCH];  // gun slams back
+    // ...and TWISTS: the bore is above the grip, so the recoil impulse is a
+    // torque as well as a push. Its sign and size come from the shot index
+    // (a hash, no rng draw: the gun stream stays exactly what it was).
+    uint32_t th = (uint32_t)w->idx * 2654435761u ^ 0x9E37u;
+    float tw = ((float)(th >> 8 & 0xFFFF) / 65535.0f - 0.35f);
+    g_players[sh].vm.twist_v += tw * (1.6f + 1.2f * wp[WP_PUNCH]) * (1.0f - 0.6f * w->ads_s);
+  }
   if (anim) {
     anim->fire_k = 1.0f;                          // third-person body: gun kick
     // ...and the weapon is ON the line when the round leaves. A figure caught at
@@ -12418,6 +13026,17 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   // shot that actually hits a wall AND has budget left, which is the whole cost
   // argument — a penetrating shot is a handful more AABB scans, and shots are
   // rare next to the LOS traces the AI already runs every tick.
+  if (g_ballistics && !g_online && !g_predicting &&
+      (w->cur == WPN_AR || w->cur == WPN_SR || w->cur == WPN_PT)) {
+    // A body in flight (see proj_tick). The tracer still leaves now, down the
+    // line the round started on; what it hits arrives as an EV_IMPACT later.
+    proj_spawn(ent, w->cur, o, dir);
+    ev_push((event_t){.type = EV_FIRE, .a = v3_add(o, v3_scale(dir, GUN_RANGE)), .b = dir,
+                      .f = GUN_RANGE, .g = w->ads_s, .i = w->idx, .k = 0,
+                      .wpn = w->cur, .src = ent, .dst = -1});
+    w->idx++;
+    return;
+  }
   v3 nrm = {{0, 1, 0}};                 // the face the round finally stopped on
   v3 so = o;                            // this segment's origin
   float base = 0.0f, used = 0.0f;       // travelled so far / spent in material
@@ -12759,6 +13378,15 @@ static void melee_land(int ent, weapon_t *w, int vic, int part, const melee_def_
   w->melee_done = 1;
   if (g_predicting) return;                 // damage is authoritative: server only
   int dmg = m->dmg * (part == 3 ? WPN_DEF[WPN_KN].head_x : 1);
+  // THE TAKEDOWN: a blade from a guard who is not fighting you is the end of
+  // him, and a quiet one.
+  if (rescue_on() && human_of_ent(ent) >= 0 && vic >= 1 && vic <= MAX_BOTS) {
+    const bot_t *vb = &g_bots[vic - 1];
+    if (!(vb->tgt == ent && vb->belief == BOT_BELIEF_VISIBLE) && vb->alive) {
+      dmg = vb->hp > dmg ? vb->hp : dmg;   // exactly lethal: he drops where he stood
+      g_resc.takedowns++;
+    }
+  }
   weapon_t *vw = ent_weapon(vic);
   if (vw && vw->cur == WPN_KN && vw->ads_s > 0.5f && vw->melee_t == 0) {
     float vy = ent_yaw(vic);
@@ -12850,7 +13478,7 @@ static void melee_tick(int ent, weapon_t *w, v3 o, float yaw, float pitch,
     g_match.shots[ent]++;
     int sh = human_of_ent(ent);
     if (sh >= 0) g_players[sh].shots++;
-    bot_noise_emit(ent, BOT_NOISE_SHOT, o, 9.0f);
+    bot_noise_emit(ent, BOT_NOISE_SHOT, o, rescue_on() && sh >= 0 ? 2.5f : 9.0f);
     if (anim) anim->fire_k = 1.0f;
     ev_push((event_t){.type = EV_MELEE, .a = o, .src = ent, .wpn = WPN_KN});
   }
@@ -12872,6 +13500,27 @@ typedef struct {
   float cyc;    // bolt / charging-handle cycle, one lobe late in the reload
   float punch;  // the two beat impulses (magazine SEATS, bolt goes home), summed
   float mag;    // magazine travel out of the well
+  // THE MAGAZINE IS EXCHANGED, NOT DIPPED. `pouch` is the support hand's trip
+  // to the belt and back (0 at the well, 1 at the pouch, off-frame below):
+  // the magazine in the hand rides it, and what comes back up is a FRESH one.
+  // `drop_t` is seconds since an EMPTY magazine was released and fell free
+  // (< 0: none falling); on a tactical reload the spent one is stripped and
+  // pocketed instead, so nothing falls. `maghide` is the hand-magazine absent:
+  // the hand going down empty after the drop.
+  float pouch, drop_t;
+  int   maghide;
+  // THE TWO-MAGAZINE TACTICAL RELOAD. The hand fetches the FRESH magazine
+  // first and comes back to the well holding it; it strips the old one with
+  // the fresh one still in the same hand (both visible side by side), shifts
+  // across (`pair` 0 -> 1) so the fresh one is under the well, seats it, and
+  // only then stows the old one. Two magazines on screen at once is what makes
+  // it read as an EXCHANGE rather than the same magazine going back in.
+  float pair;
+  int   old_vis, fresh_vis;     // which of the two are drawn
+  float old_pouch, fresh_pouch; // how much of the hand's pouch trip each rides
+  float pouch3;                 // the single-magazine view (third person)
+  float index;                  // the fresh magazine's nose-forward tilt, 0..1
+  int   retain;
   float hand;   // support hand off the fore-end and onto the magazine
   float trig;   // trigger travel, 0 = at rest on the blade
   // The BOLT's own 0..1, and it is a monotone RAMP where `cyc` is a hump. They
@@ -13001,6 +13650,9 @@ static void knife_anim(const weapon_t *w, float alpha, gunanim_t *g) {
 
 static gunanim_t gun_anim(const weapon_t *w, float alpha) {
   gunanim_t g = {0};
+  // A weapon at rest HAS its magazine (model group 1 on every weapon). Set
+  // before any early return — zero here drew every rifle without one.
+  g.old_vis = 1;
   int cur = w->cur;
   g.trig = w->prev_trig_s + (w->trig_s - w->prev_trig_s) * alpha;
   if (cur == WPN_KN) {
@@ -13020,6 +13672,7 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
       g.slide = c < 0.28f ? c / 0.28f : (1.0f - c) / 0.72f;
     if (w->ammo[WPN_PT] == 0 && w->reload_t == 0) g.slide = 1.0f;
   }
+  g.drop_t = -1.0f;
   if (w->reload_t <= 0) return g;
   // The SAME duration the sim is counting down, or every beat in the animation
   // lands on a different tick from the sound it is supposed to share.
@@ -13114,12 +13767,77 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
                  ? 1.0f - GUN_MAG_U_TAC(prog) * GUN_MAG_U_TAC(prog) * GUN_MAG_U_TAC(prog)
                  : 1.0f - GUN_MAG_U(prog) * GUN_MAG_U(prog) * GUN_MAG_U(prog))
             : 0.0f;
+  // THE EXCHANGE. Empty: the release at 21.5% lets the spent magazine fall
+  // free (and land on the floor — see the world magazines) while the hand
+  // goes straight to the pouch, comes back up with a fresh one and meets the
+  // well at 40%, where the insert above takes over.
+  // Retained (tactical, either rifle): the two-magazine technique, see `pair`.
+  int retain = w->reload_tac != 0;
+  g.retain = retain;
+  g.old_vis = 1;
+  g.fresh_vis = 0;
+  if (cur == WPN_AR || cur == WPN_SR) {
+    if (!retain) {
+      // A SPEED RELOAD. The support hand does not wait for the magazine: it
+      // leaves the fore-end and is already on its way to the pouch when the
+      // thumb hits the release (21.5%) and the empty falls clear. It reaches
+      // the rig at 30%, closes on the fresh magazine, and brings it back up in
+      // an arc, nose tilted forward to index it against the well (35-45%);
+      // the last 11% is the insert, ending on the seat.
+      g.pouch = prog < 0.12f ? 0.0f
+              : prog < 0.30f ? smooth01((prog - 0.12f) / 0.18f)
+              : prog < 0.35f ? 1.0f
+              : prog < 0.45f ? 1.0f - smooth01((prog - 0.35f) / 0.10f) : 0.0f;
+      g.mag = prog < 0.215f ? 0.0f
+            : prog < 0.45f ? 1.0f
+            : prog < seat ? 1.0f - powf(f_clamp((prog - 0.45f) / (seat - 0.45f), 0.0f, 1.0f), 3.0f)
+            : 0.0f;
+      g.maghide = 0;
+      if (prog >= 0.215f) g.drop_t = (prog - 0.215f) * ticks * TICK_DT;
+      g.old_vis = prog < 0.215f;
+      g.fresh_vis = prog >= 0.30f;          // it comes out of the pouch in the hand
+      g.pair = 0.0f;
+      g.old_pouch = 0.0f;
+      g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
+      g.index = prog >= 0.30f && prog < seat ? g.pouch : 0.0f;
+      g.pouch3 = prog >= 0.30f ? g.pouch : 0.0f;
+      g.maghide = prog >= 0.215f && prog < 0.30f;   // third person: hand empty
+    } else {
+      // THE TACTICAL RELOAD, at a hand's natural pace: to the pouch (8-20%),
+      // close on the fresh magazine (20-23%), back to the well with it held
+      // nose-forward (23-31%), strip the old one beside it (31-37%), shift
+      // across (37-43%), insert (43% to the seat), stow the old one after.
+      float st0 = seat + 0.008f;
+      float st1 = st0 + (tac_ar ? 0.050f : 0.060f);
+      float rt0 = st1 + 0.010f, rt1 = rt0 + (tac_ar ? 0.040f : 0.060f);
+      g.pouch = prog < 0.08f ? 0.0f
+              : prog < 0.20f ? smooth01((prog - 0.08f) / 0.12f)
+              : prog < 0.23f ? 1.0f
+              : prog < 0.31f ? 1.0f - smooth01((prog - 0.23f) / 0.08f)
+              : prog < st0 ? 0.0f
+              : prog < st1 ? smooth01((prog - st0) / (st1 - st0))
+              : prog < rt0 ? 1.0f
+              : prog < rt1 ? 1.0f - smooth01((prog - rt0) / (rt1 - rt0)) : 0.0f;
+      g.mag = prog < 0.31f ? 0.0f
+            : prog < 0.37f ? smooth01((prog - 0.31f) / 0.06f)
+            : prog < 0.43f ? 1.0f
+            : prog < seat ? 1.0f - powf(f_clamp((prog - 0.43f) / (seat - 0.43f), 0.0f, 1.0f), 3.0f)
+            : 0.0f;
+      g.pair = smooth01(f_clamp((prog - 0.37f) / 0.06f, 0.0f, 1.0f));
+      g.old_vis = prog < st1;
+      g.fresh_vis = prog >= 0.20f;
+      g.old_pouch = prog >= 0.31f ? 1.0f : 0.0f;
+      g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
+      g.index = prog >= 0.20f && prog < 0.31f ? g.pouch : 0.0f;
+      g.pouch3 = 0.0f;
+    }
+  }
   // The support hand leaves the fore-end at 10%, is on the magazine by 22% —
   // before the magazine starts moving — and only starts letting go at 72%
   // (tactical AR: the hand rides the magazine to ITS later seat, then makes a
   // quick return — the seat is the event that ends this mechanism).
-  g.hand = smooth01(f_clamp((prog - 0.10f) / 0.12f, 0.0f, 1.0f)) *
-           (tac_ar ? smooth01(f_clamp((0.995f - prog) / 0.10f, 0.0f, 1.0f))
+  g.hand = smooth01(f_clamp((prog - (cur == WPN_AR || cur == WPN_SR ? 0.07f : 0.10f)) / 0.12f, 0.0f, 1.0f)) *
+           (tac_ar ? smooth01(f_clamp((0.995f - prog) / 0.025f, 0.0f, 1.0f))
                    : smooth01(f_clamp((0.90f - prog) / 0.18f, 0.0f, 1.0f)));
   // The AR racks its charging handle on the same window the sniper works its
   // bolt on, and off the same ramp — one mechanism, two shapes.
@@ -13816,7 +14534,7 @@ static void nav_ready(void) {
         const solid_t *sd = &g_solids[k];
         if (c.x < sd->min.x || c.x > sd->max.x || c.z < sd->min.z || c.z > sd->max.z) continue;
         float y = sd->max.y;
-        if (y >= best || y > 6.0f) continue;
+        if (y >= best || y > (g_map_id == MAP_COMPOUND_ID ? 7.0f : 6.0f)) continue;
         if (aabb_fits((v3){{c.x, y + 0.001f, c.z}}, 0.45f, HEIGHT_STAND)) best = y;
       }
       if (best < 1e8f) { g_nav.walk[i] = 1; g_nav.lvl[i] = best; }
@@ -14003,6 +14721,211 @@ static v3 bot_route(bot_t *b, v3 dest) {
   return b->route_wp;
 }
 
+
+// ---------------------------------------------------------------------------
+// HOSTAGE RESCUE, the guard's half: perception and the post/route walk. Both
+// run inside bot_tick and only when rescue_on().
+// ---------------------------------------------------------------------------
+static void rescue_alarm(int why);
+static void rescue_spawn_guard(bot_t *b, int bi) {
+  const guard_post_t *gp = rescue_post(bi);
+  b->pos = b->prev_pos = b->target = (v3){{gp->x, gp->y, gp->z}};
+  b->yaw = b->prev_yaw = b->pup_face = gp->yaw;
+  if (gp->kind == GK_SNIPER) b->wp.cur = WPN_SR;
+  g_resc.detect[bi] = g_resc.prev_detect[bi] = 0.0f;
+  g_resc.radio_t[bi] = 0;
+  g_resc.wp_i[bi] = gp->kind == GK_PATROL ? 1 % GUARD_ROUTES[gp->route].n : 0;
+  g_resc.wait_t[bi] = 0;
+  g_resc.body_found[bi] = 0;
+  g_resc.heard_tick[bi] = 0;
+  anim_reset(&b->anim, b->pos, b->yaw);
+}
+
+// DETECTION. A guard that can see the player fills a 0..1 meter; at 1 it may
+// target him (bot_tick's scan reads rescue_may_target) and starts the radio
+// clock, and a spotter that stays on the radio long enough raises the alarm.
+// Traced every third tick per guard (staggered), which is what keeps eighteen
+// guards' extra line-of-sight rays inside the budget.
+static void rescue_guard_tick(bot_t *b, int bi) {
+  if (!rescue_on()) return;
+  const resc_diff_t *rd = resc_diff();
+  const guard_post_t *gp = rescue_post(bi);
+  float *det = &g_resc.detect[bi];
+  g_resc.prev_detect[bi] = *det;
+  int pe = g_local_ent;
+  const player_t *p = &g_players[0];
+  int engaged = b->tgt == pe && b->belief == BOT_BELIEF_VISIBLE && p->alive;
+  // A gunshot heard is a reason to look (the hearing itself still steers the
+  // turn and the walk over, through bot_tick's startle branch).
+  if (b->hear_tick && b->hear_kind == BOT_NOISE_SHOT && b->hear_tick != g_resc.heard_tick[bi]) {
+    g_resc.heard_tick[bi] = b->hear_tick;
+    if (*det < 0.55f) *det = 0.55f;
+    g_resc.glimpse[bi] = b->hear_pos;
+  }
+  if ((g_tick + bi) % 3 == 0 && p->alive) {
+    const float dt3 = 3.0f * TICK_DT;
+    v3 eo = {{b->pos.x, b->pos.y + bot_eye(b), b->pos.z}};
+    v3 tp = ent_aimpoint(pe);
+    v3 hd = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
+    float dx = tp.x - eo.x, dz = tp.z - eo.z, hl = sqrtf(dx * dx + dz * dz);
+    float d = v3_len(v3_sub(tp, eo));
+    float R = gp->kind == GK_SNIPER ? rd->snipe : gp->kind == GK_WARDEN ? rd->range * 0.8f : rd->range;
+    if (g_resc.alarm) R *= 1.25f;
+    float align = hl > 0.01f ? (dx * sinf(b->yaw) - dz * cosf(b->yaw)) / hl : 1.0f;
+    int seen = 0;
+    // The cone is ~145 deg wide, opening out to the flanks within arm's reach;
+    // behind his back a guard sees nothing (he hears — bot_hear_update).
+    float cone = d < 2.5f ? -0.10f : 0.30f;
+    if (d < R && align > cone && (los_clear(eo, tp) || los_clear(eo, hd))) {
+      float prox = 1.0f - d / R;
+      float periph = 0.30f + 0.70f * f_clamp((align - cone) / (0.92f - cone), 0.0f, 1.0f);
+      float hs = sqrtf(p->vel.x * p->vel.x + p->vel.z * p->vel.z) / g_sim_mv[MV_RUN];
+      float motion = 0.50f + 0.65f * f_clamp(hs, 0.0f, 1.3f) + (p->grounded ? 0.0f : 0.3f);
+      float stance = p->crouched ? 0.45f : 1.0f;
+      float light = g_resc.lit ? 1.7f : 1.0f;
+      float rate = rd->rate * (0.22f + 2.6f * prox * prox) * periph * motion * stance * light;
+      if (d < 4.0f) rate *= 3.0f;
+      if (g_resc.alarm) rate *= 2.2f;
+      if (gp->kind == GK_SNIPER) rate *= 0.8f;
+      *det += rate * dt3;
+      seen = 1;
+      g_resc.glimpse[bi] = p->pos;
+      if (*det >= 1.0f) {
+        g_resc.lkp = p->pos;
+        g_resc.lkp_tick = g_tick;
+      }
+    }
+    if (!seen && !engaged) {
+      float decay = g_resc.alarm ? 0.08f : 0.16f;
+      if (*det >= 1.0f) {   // lost him: go and look where he was
+        b->alert_p = g_resc.glimpse[bi];
+        b->alert_t = 8 * TICK_HZ;
+        *det = 0.95f;
+      }
+      *det -= decay * dt3;
+      if (*det < 0.0f) *det = 0.0f;
+      if (g_resc.prev_detect[bi] > 0.5f && *det <= 0.5f && b->tgt < 0) {
+        b->alert_p = g_resc.glimpse[bi];   // "something was there": check it
+        b->alert_t = 6 * TICK_HZ;
+      }
+    }
+    if (*det > 1.0f) *det = 1.0f;
+    if (*det >= 1.0f && g_resc.prev_detect[bi] < 1.0f) {
+      g_resc.spotted_n++;
+      g_resc.ever_seen = 1;
+    }
+    // BODIES. A guard who walks up on a fallen comrade radios it in.
+    if (--g_resc.body_cd[bi] <= 0) {
+      g_resc.body_cd[bi] = 5;   // x3 ticks
+      for (int j = 0; j < g_match.nbots; j++) {
+        const bot_t *o = &g_bots[j];
+        if (j == bi || !o->active || o->alive || g_resc.body_found[j]) continue;
+        v3 cp = {{o->pos.x, o->pos.y + 0.35f, o->pos.z}};
+        float cx = cp.x - eo.x, cz = cp.z - eo.z, cl = sqrtf(cx * cx + cz * cz);
+        if (cl > 17.0f) continue;
+        float ca = cl > 0.01f ? (cx * sinf(b->yaw) - cz * cosf(b->yaw)) / cl : 1.0f;
+        if (ca < 0.35f || !los_clear(eo, cp)) continue;
+        g_resc.body_found[j] = 1;
+        g_resc.bodies++;
+        g_resc.radio_why[bi] = RW_BODY;
+        if (g_resc.radio_t[bi] < 1) g_resc.radio_t[bi] = 1;
+        b->alert_p = o->pos;
+        b->alert_t = 10 * TICK_HZ;
+        if (*det < 0.6f) *det = 0.6f;
+        g_resc.glimpse[bi] = o->pos;
+        if (!g_resc.alarm) rescue_msg(1, "BODY DISCOVERED", "KILL THE GUARD BEFORE HE RADIOS IT IN");
+        break;
+      }
+    }
+  }
+  // THE RADIO. Seeing the player (engaged) or a body keeps the call going; a
+  // guard killed before it finishes never gets it out.
+  if (!g_resc.alarm) {
+    if (engaged) {
+      g_resc.radio_why[bi] = RW_SPOTTED;
+      g_resc.radio_t[bi]++;
+    } else if (g_resc.radio_why[bi] == RW_BODY && g_resc.radio_t[bi] > 0) {
+      g_resc.radio_t[bi]++;
+    } else if (g_resc.radio_t[bi] > 0) {
+      g_resc.radio_t[bi] -= 2;
+      if (g_resc.radio_t[bi] < 0) g_resc.radio_t[bi] = 0;
+    }
+    float need = rd->radio_s * (g_resc.radio_why[bi] == RW_BODY ? 1.6f : 1.0f);
+    if (g_resc.radio_t[bi] > (int)(need * TICK_HZ))
+      rescue_alarm(g_resc.radio_why[bi]);
+  }
+}
+
+// THE POST AND THE ROUTE, in place of bot_tick's random wander (it runs only
+// where that would have: no target, no fresh noise, no spot to clear).
+// Returns 1 when it set the intent.
+static int rescue_patrol(bot_t *b, int bi, float *yaw, float *pitch, float *wx,
+                         float *wz, float *pace) {
+  const guard_post_t *gp = rescue_post(bi);
+  float det = g_resc.detect[bi];
+  b->crouch = 0;
+  b->crouch_t = 0;
+  *pitch = 0.0f;
+  if (det > 0.22f) {
+    // SUSPICIOUS: turn to what it glimpsed; past halfway, walk over to look.
+    v3 gl = g_resc.glimpse[bi];
+    float dx = gl.x - b->pos.x, dz = gl.z - b->pos.z, l = sqrtf(dx * dx + dz * dz);
+    if (l > 0.01f) *yaw = atan2f(dx, -dz);
+    if (det > 0.6f && l > 2.0f && fabsf(wrap_pi(*yaw - b->yaw)) < 0.8f) {
+      v3 rw = bot_route(b, gl);
+      float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+      if (rl > 0.01f) { *wx = rx / rl; *wz = rz / rl; *yaw = atan2f(rx, -rz); }
+      *pace = 0.45f;
+    }
+    return 1;
+  }
+  if (gp->kind != GK_PATROL) {
+    // HOLD THE POST: back to it if anything moved the guard, then sweep.
+    float dx = gp->x - b->pos.x, dz = gp->z - b->pos.z, l = sqrtf(dx * dx + dz * dz);
+    if (l > 0.9f) {
+      v3 rw = bot_route(b, (v3){{gp->x, gp->y, gp->z}});
+      float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+      if (rl > 0.01f) *yaw = atan2f(rx, -rz);
+      if (rl > 0.01f && fabsf(wrap_pi(*yaw - b->yaw)) < 1.0f) { *wx = rx / rl; *wz = rz / rl; }
+      *pace = 0.5f;
+      return 1;
+    }
+    float amp = gp->kind == GK_SNIPER ? 1.15f : gp->kind == GK_WARDEN ? 0.65f : 0.95f;
+    float per = gp->kind == GK_SNIPER ? 13.0f : 9.0f;
+    float ph = (float)g_tick * TICK_DT * (2.0f * F_PI / per) + (float)bi * 1.7f;
+    // A sweep that HOLDS at each end, the way a person scans: a softened sine.
+    float sw = sinf(ph);
+    sw = sw * (1.35f - 0.35f * sw * sw);
+    *yaw = gp->yaw + amp * sw;
+    if (gp->kind == GK_SNIPER) *pitch = -0.12f;
+    return 1;
+  }
+  // PATROL: walk the route; at each point stop and look about.
+  const guard_route_t *rt = &GUARD_ROUTES[gp->route];
+  int *wi = &g_resc.wp_i[bi];
+  if (*wi < 0 || *wi >= rt->n) *wi = 0;
+  if (g_resc.wait_t[bi] > 0) {
+    int w = --g_resc.wait_t[bi];
+    *yaw = g_resc.look_yaw[bi] + 0.85f * sinf((float)w * TICK_DT * 1.4f);
+    return 1;
+  }
+  v3 tgt = {{rt->p[*wi][0], 0.0f, rt->p[*wi][1]}};
+  float dx = tgt.x - b->pos.x, dz = tgt.z - b->pos.z, l = sqrtf(dx * dx + dz * dz);
+  if (l < 1.0f || b->stuck > 150) {
+    *wi = (*wi + 1) % rt->n;
+    g_resc.wait_t[bi] = (int)rng_rangef(&g_rng_bot, 2.0f, 4.0f) * TICK_HZ;
+    g_resc.look_yaw[bi] = b->yaw;
+    b->stuck = 0;
+    return 1;
+  }
+  v3 rw = bot_route(b, tgt);
+  float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+  if (rl > 0.01f) *yaw = atan2f(rx, -rz);
+  if (rl > 0.01f && fabsf(wrap_pi(*yaw - b->yaw)) < 1.0f) { *wx = rx / rl; *wz = rz / rl; }
+  *pace = g_resc.alarm ? 0.6f : 0.34f;
+  return 1;
+}
+
 static void bot_tick(int bi) {
   bot_t *b = &g_bots[bi];
   const bot_skill_t *sk = &BOT_SKILL[g_cfg.sp_diff];
@@ -14073,6 +14996,7 @@ static void bot_tick(int bi) {
   if (b->cov_retry > 0) b->cov_retry--;
   if (b->swap_cd > 0) b->swap_cd--;
   bot_hear_update(b, bi);
+  rescue_guard_tick(b, bi);
   float flk = expf(-6.0f * TICK_DT);
   b->fl_y *= flk;
   b->fl_p *= flk;
@@ -14145,6 +15069,7 @@ static void bot_tick(int bi) {
     bot_target_choice_t best = {.ent = -1, .score = -1.0e30f, .dist = 1.0e9f};
     ENT_FOREACH(e) {   // P1-54: without the human range, humans are invisible to the whole AI
       if (e == bi + 1 || !ent_alive(e)) continue;
+      if (rescue_on() && !rescue_may_target(b, bi, e)) continue;
       // Cheap rejects FIRST: most candidates fail the cone/heard gate, and the
       // LOS trace is the expensive test. The range gate and the distance are
       // bot_can_see's own arithmetic, so the reorder cannot change a verdict.
@@ -14531,7 +15456,8 @@ static void bot_tick(int bi) {
       pace = BOT_ALERT_PACE;
     }
   }
-  if (b->tgt < 0 && !startled && b->alert_t == 0) {
+  if (b->tgt < 0 && !startled && b->alert_t == 0 &&
+      !(rescue_on() && rescue_patrol(b, bi, &want_yaw, &want_pitch, &wx, &wz, &pace))) {
     // Patrol: wander between random reachable waypoints.
     // STAND UP FIRST. Every other branch clears the crouch and this one did
     // not, so a bot that killed its target from a crouched hold stayed crouched
@@ -14976,6 +15902,7 @@ static void match_scores_clear(void) {
   g_match.over = 0; g_match.winner = 0; g_match.last_killer = 0;
 }
 
+static void rescue_reset(void);
 static void match_restart(void) {
   int n = g_match.nbots;
   memset(&g_match, 0, sizeof g_match);   // the human roster lives OUTSIDE
@@ -14983,12 +15910,15 @@ static void match_restart(void) {
   g_match.mode = g_cfg.sp_mode;          // the MATCH tab's choice lands HERE
   g_match.round_win = -1;
   g_match.round_no = 1;
+  g_ballistics = g_ballistics_srv || g_cfg.ballistics;   // latches per match
+  proj_clear();
   // Fresh procedural arena every match (or the next map of the rotation, or
   // the chosen handmade one); everyone respawns onto it.
   map_pick_apply(1);
   g_map_seed = map_seed_next(g_map_seed);
   map_generate(g_map_seed);
   g_world_dirty = 1;
+  rescue_reset();   // before anyone spawns: posts and the insertion
   // EVERY human (P1-60): respawning only one leaves the others on their old
   // positions inside freshly generated geometry.
   for (int h = 0; h < MAX_HUMANS; h++)
@@ -15164,6 +16094,290 @@ static void lms_tick(void) {
   g_match.round_t = LMS_INTERMISSION_TICKS;
 }
 
+
+// ---------------------------------------------------------------------------
+// HOSTAGE RESCUE, the mission's half: the alarm, the execution clock, the
+// hostages (captive, freed and following, extracted) and the win/fail rules.
+// ---------------------------------------------------------------------------
+static void rescue_reset(void) {
+  memset(&g_resc, 0, sizeof g_resc);
+  g_resc.on = g_match.mode == GM_RESCUE && !g_home && !g_server && !g_online;
+  g_resc.reach_i = g_resc.cutting = -1;
+  if (!g_resc.on) return;
+  g_resc.exec_max = (int)(resc_diff()->exec_s * TICK_HZ);
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &g_resc.h[i];
+    h->pos = h->prev = (v3){{RESC_HOLD[i][0], RESC_HOLD[i][2], RESC_HOLD[i][1]}};
+    h->yaw = h->prev_yaw = RESC_HOLD[i][3];
+    h->state = HS_CAPTIVE;
+    h->grounded = 1;
+  }
+  rescue_msg(0, "OPERATION NIGHTFALL", "FREE THE 3 HOSTAGES  \x05  GET THEM TO THE LZ");
+  g_resc.msg_t = 7 * TICK_HZ;
+}
+
+static void rescue_alarm(int why) {
+  if (!rescue_on() || g_resc.alarm || g_resc.result != RR_RUNNING) return;
+  g_resc.alarm = 1;
+  g_resc.alarm_tick = (int)g_tick;
+  g_resc.alarm_why = why;
+  g_resc.exec_t = g_resc.exec_max;
+  g_resc.siren_t = 0;
+  int captive = 0;
+  for (int i = 0; i < RESC_HOSTAGES; i++) captive += g_resc.h[i].state == HS_CAPTIVE;
+  rescue_msg(2, "ALARM RAISED",
+             captive ? "THE HOSTAGES WILL BE EXECUTED - MOVE NOW" : "GET TO THE LZ");
+  // Every hunter is sent to where the player was last seen (or is now, if
+  // nobody has seen him yet — a body was found, the shooter is close).
+  v3 at = g_resc.lkp_tick ? g_resc.lkp : g_players[0].pos;
+  for (int i = 0; i < g_match.nbots; i++) {
+    bot_t *b = &g_bots[i];
+    int k = rescue_post(i)->kind;
+    if (!b->active || !b->alive || k == GK_WARDEN || k == GK_SNIPER) continue;
+    if (b->tgt < 0) { b->alert_p = at; b->alert_t = 20 * TICK_HZ; }
+  }
+}
+
+// The captive within reach of the player, or -1.
+static int rescue_reach(const player_t *p) {
+  int best = -1;
+  float bd = 2.2f * 2.2f;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    const hostage_t *h = &g_resc.h[i];
+    if (h->state != HS_CAPTIVE || fabsf(h->pos.y - p->pos.y) > 1.2f) continue;
+    float dx = h->pos.x - p->pos.x, dz = h->pos.z - p->pos.z, dd = dx * dx + dz * dz;
+    if (dd < bd) { bd = dd; best = i; }
+  }
+  return best;
+}
+// Does the RELOAD key belong to a hostage right now? (weapon_tick asks.)
+static int rescue_reload_block(const player_t *p) {
+  return rescue_on() && p == &g_players[0] && p->alive && rescue_reach(p) >= 0;
+}
+
+static int rescue_in_lz(v3 p) {
+  return p.x > RESC_LZ_X0 && p.x < RESC_LZ_X1 && p.z > RESC_LZ_Z0 && p.z < RESC_LZ_Z1;
+}
+
+// ONE FREED HOSTAGE: follow the player on the bots' own grid routes, keep a
+// little apart from the others, and stop at a polite distance. Same collision
+// as everyone (ent_move), so walls are walls and stairs are stairs.
+static void hostage_follow(hostage_t *h, int i, v3 goal, float stop) {
+  float dx = goal.x - h->pos.x, dz = goal.z - h->pos.z, d = sqrtf(dx * dx + dz * dz);
+  float wx = 0.0f, wz = 0.0f, spd = 0.0f;
+  if (d > stop) {
+    if (--h->wp_t <= 0 || (h->wp.x == 0.0f && h->wp.z == 0.0f)) {
+      h->wp_t = TICK_HZ / 5;
+      h->wp = goal;
+      if (map_routes() && !nav_clear(h->pos, goal)) {
+        nav_ready();
+        int gc = nav_snap(goal);
+        v3 w;
+        if (gc >= 0 && nav_next(nav_field_for(gc), h->pos, 8, &w)) h->wp = w;
+      }
+    }
+    float rx = h->wp.x - h->pos.x, rz = h->wp.z - h->pos.z, rl = sqrtf(rx * rx + rz * rz);
+    if (rl > 0.01f) { wx = rx / rl; wz = rz / rl; }
+    spd = f_clamp((d - stop) * 1.8f + 1.6f, 0.0f, 6.4f);
+  }
+  // keep apart
+  for (int j = 0; j < RESC_HOSTAGES; j++) {
+    if (j == i || g_resc.h[j].state == HS_DEAD) continue;
+    float ox = h->pos.x - g_resc.h[j].pos.x, oz = h->pos.z - g_resc.h[j].pos.z;
+    float ol = sqrtf(ox * ox + oz * oz);
+    if (ol < 1.0f && ol > 0.001f && fabsf(h->pos.y - g_resc.h[j].pos.y) < 1.0f) {
+      wx += ox / ol * (1.0f - ol) * 1.5f;
+      wz += oz / ol * (1.0f - ol) * 1.5f;
+      if (spd < 1.2f) spd = 1.2f;
+    }
+  }
+  float wl = sqrtf(wx * wx + wz * wz);
+  if (wl > 1.0f) { wx /= wl; wz /= wl; }
+  float k = f_clamp(14.0f * TICK_DT, 0.0f, 1.0f);
+  h->vel.x += (wx * spd - h->vel.x) * k;
+  h->vel.z += (wz * spd - h->vel.z) * k;
+  h->vel.y -= GRAVITY * TICK_DT;
+  h->grounded = 0;
+  // A step up, the way STEP_H lifts everyone else: try the body a step higher
+  // when the floor ahead is a stair.
+  v3 ahead = {{h->pos.x + wx * 0.45f, h->pos.y, h->pos.z + wz * 0.45f}};
+  if (spd > 0.3f && !aabb_fits(ahead, PLAYER_RADIUS, HEIGHT_STAND) &&
+      aabb_fits((v3){{ahead.x, h->pos.y + 0.42f, ahead.z}}, PLAYER_RADIUS, HEIGHT_STAND) &&
+      h->vel.y <= 0.0f)
+    h->pos.y += 0.42f;
+  ent_move(&h->pos, &h->vel, &h->grounded, HEIGHT_STAND);
+  arena_clamp(&h->pos);
+  float hs = sqrtf(h->vel.x * h->vel.x + h->vel.z * h->vel.z);
+  if (hs > 0.4f) {
+    float ty = atan2f(h->vel.x, -h->vel.z);
+    h->yaw += wrap_pi(ty - h->yaw) * f_clamp(10.0f * TICK_DT, 0.0f, 1.0f);
+  } else if (d > 0.5f) {
+    h->yaw += wrap_pi(atan2f(dx, -dz) - h->yaw) * f_clamp(4.0f * TICK_DT, 0.0f, 1.0f);
+  }
+  h->move += (f_clamp(hs / 5.0f, 0.0f, 1.0f) - h->move) * f_clamp(8.0f * TICK_DT, 0.0f, 1.0f);
+  h->gait += hs * TICK_DT * 2.1f;
+  // Lost behind a corner for good: catch up behind the player rather than
+  // wedging (a rescue is not a pathfinding test).
+  if (spd > 1.0f && hs < 0.25f) h->stuck++; else h->stuck = 0;
+  if (h->stuck > 3 * TICK_HZ && d > 4.0f) {
+    const player_t *p = &g_players[0];
+    for (int t = 0; t < 8; t++) {
+      float a = p->yaw + F_PI + ((float)t - 3.5f) * 0.5f;
+      v3 c = {{p->pos.x + sinf(a) * 1.8f, p->pos.y, p->pos.z - cosf(a) * 1.8f}};
+      if (aabb_fits(c, PLAYER_RADIUS, HEIGHT_STAND)) {
+        h->pos = h->prev = c;
+        h->vel = (v3){{0, 0, 0}};
+        break;
+      }
+    }
+    h->stuck = 0;
+  }
+}
+
+static void rescue_end(int result, int why) {
+  if (g_resc.result != RR_RUNNING) return;
+  g_resc.result = result;
+  g_resc.why = why;
+  g_resc.end_tick = g_resc.clock;
+  match_end(result == RR_SUCCESS ? g_local_ent : 1);
+}
+
+// The mission's sounds, played from the tick that caused them. Not positional:
+// a siren across the compound and a cue in the operator's ear are both global.
+static void rescue_sfx_flush(void) {
+  int f = g_resc.sfx_pending;
+  g_resc.sfx_pending = 0;
+  if (!f || g_server) return;
+  if (f & 1) { audio_play(SFX_SNIP, 0.85f, 1.0f, 0.0f, 0.0f); audio_play(SFX_CHIME, 0.45f, 1.0f, 0.0f, 0.25f); }
+  if (f & 2) audio_play(SFX_CHIME, 0.55f, 1.12f, 0.0f, 0.0f);
+  if (f & 4) audio_play(SFX_ALARM, 0.40f, 1.0f, 0.0f, 0.0f);
+  if (f & 8)
+    for (int k = 0; k < RESC_HOSTAGES; k++)
+      audio_play(SFX_FAR_PT, 0.75f, 0.97f + 0.03f * (float)k, -0.4f + 0.4f * (float)k, 0.45f * (float)k);
+}
+
+static void rescue_tick(void) {
+  rescue_sfx_flush();
+  if (!rescue_on()) return;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &g_resc.h[i];
+    h->prev = h->pos;
+    h->prev_yaw = h->yaw;
+    h->prev_gait = h->gait;
+    h->prev_move = h->move;
+    h->prev_pose = h->pose;
+  }
+  g_resc.prev_rotor = g_resc.rotor;
+  if (g_match.over) {
+    // The debrief plays over a live LZ: the rotor at flight speed, the
+    // rescued walking to their seats.
+    if (g_resc.result == RR_SUCCESS) {
+      g_resc.rotor_w = fminf(g_resc.rotor_w + TICK_DT * 6.0f, 42.0f);
+      g_resc.rotor += g_resc.rotor_w * TICK_DT;
+      for (int i = 0; i < RESC_HOSTAGES; i++)
+        if (g_resc.h[i].state == HS_EXTRACTED)
+          hostage_follow(&g_resc.h[i], i, (v3){{RESC_SEAT[i][0], 0.0f, RESC_SEAT[i][1]}}, 0.15f);
+    }
+    return;
+  }
+  player_t *p = &g_players[0];
+  g_resc.clock++;
+  if (g_resc.msg_t > 0) g_resc.msg_t--;
+  // Lamp light: a lit lamp within 7 m makes the player far easier to see.
+  g_resc.lit = 0;
+  for (int i = 0; i < g_nprops; i++) {
+    if (g_props[i].kind != PROP_LAMP) continue;
+    float dx = g_props[i].x - p->pos.x, dz = g_props[i].z - p->pos.z;
+    if (dx * dx + dz * dz < 49.0f && p->pos.y < 3.0f &&
+        los_clear((v3){{g_props[i].x, 3.7f, g_props[i].z}}, (v3){{p->pos.x, p->pos.y + 1.2f, p->pos.z}})) {
+      g_resc.lit = 1;
+      break;
+    }
+  }
+  if (!p->alive) { rescue_end(RR_FAIL, RF_KILLED); return; }
+  // THE RESTRAINTS: hold RELOAD beside a captive for 1.5 s.
+  g_resc.reach_i = rescue_reach(p);
+  if (g_resc.reach_i >= 0 && g_resc.use_held) {
+    hostage_t *h = &g_resc.h[g_resc.reach_i];
+    g_resc.cutting = g_resc.reach_i;
+    h->free_t += TICK_DT / 1.5f;
+    if (h->free_t >= 1.0f) {
+      h->free_t = 1.0f;
+      h->state = HS_FOLLOW;
+      g_resc.freed++;
+      g_resc.sfx_pending |= 1;
+      char b[48];
+      snprintf(b, sizeof b, "%d OF %d FREED", g_resc.freed, RESC_HOSTAGES);
+      rescue_msg(3, "HOSTAGE FREED", g_resc.freed == RESC_HOSTAGES ?
+                 "ALL FREE  \x05  GET THEM TO THE LZ" : b);
+    }
+  } else {
+    g_resc.cutting = -1;
+    for (int i = 0; i < RESC_HOSTAGES; i++)
+      if (g_resc.h[i].state == HS_CAPTIVE && g_resc.h[i].free_t > 0.0f)
+        g_resc.h[i].free_t = fmaxf(0.0f, g_resc.h[i].free_t - TICK_DT);
+  }
+  // The followers, in the order they were freed, each a step further back.
+  int order = 0;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &g_resc.h[i];
+    if (h->state == HS_FOLLOW || h->state == HS_EXTRACTED)
+      h->pose = fminf(1.0f, h->pose + TICK_DT * 1.4f);
+    if (h->state == HS_FOLLOW) {
+      hostage_follow(h, i, p->pos, 2.0f + 1.1f * (float)order++);
+      if (rescue_in_lz(h->pos)) {
+        h->state = HS_EXTRACTED;
+        g_resc.extracted++;
+        g_resc.sfx_pending |= 2;
+      }
+    } else if (h->state == HS_EXTRACTED) {
+      v3 seat = {{RESC_SEAT[i][0], 0.0f, RESC_SEAT[i][1]}};
+      hostage_follow(h, i, seat, 0.15f);
+    }
+  }
+  if (g_resc.extracted > 0 || g_resc.freed == RESC_HOSTAGES)
+    g_resc.rotor_w = fminf(g_resc.rotor_w + TICK_DT * 6.0f, g_resc.extracted == RESC_HOSTAGES ? 42.0f : 9.0f);
+  g_resc.rotor += g_resc.rotor_w * TICK_DT;
+  // THE ALARM: sirens, radio updates, and the clock.
+  if (g_resc.alarm) {
+    if (g_resc.siren_t-- <= 0 && (int)g_tick - g_resc.alarm_tick < 14 * TICK_HZ) {
+      g_resc.siren_t = 2 * TICK_HZ;
+      g_resc.sfx_pending |= 4;
+    }
+    // Every 5 s the radio passes on where the player was last seen.
+    if (((int)g_tick - g_resc.alarm_tick) % (5 * TICK_HZ) == 0 && g_resc.lkp_tick) {
+      for (int i = 0; i < g_match.nbots; i++) {
+        bot_t *b = &g_bots[i];
+        int k = rescue_post(i)->kind;
+        if (!b->active || !b->alive || k == GK_WARDEN || k == GK_SNIPER || b->tgt >= 0) continue;
+        b->alert_p = g_resc.lkp;
+        b->alert_t = 10 * TICK_HZ;
+      }
+    }
+    int captive = 0;
+    for (int i = 0; i < RESC_HOSTAGES; i++) captive += g_resc.h[i].state == HS_CAPTIVE;
+    if (captive && --g_resc.exec_t <= 0) {
+      for (int i = 0; i < RESC_HOSTAGES; i++)
+        if (g_resc.h[i].state == HS_CAPTIVE) g_resc.h[i].state = HS_DEAD;
+      g_resc.sfx_pending |= 8;
+      rescue_end(RR_FAIL, RF_EXECUTED);
+      return;
+    }
+  }
+  if (g_resc.extracted == RESC_HOSTAGES) rescue_end(RR_SUCCESS, RF_NONE);
+}
+
+// The guard side of a kill (match_on_kill asks): the count, and the end of
+// a mission whose operator is down.
+static void rescue_on_kill(int src, int dst, int hs) {
+  if (!rescue_on()) return;
+  if (human_of_ent(src) >= 0 && dst >= 1 && dst <= MAX_BOTS) {
+    g_resc.kills++;
+    if (hs) g_resc.heads++;
+    g_resc.radio_t[dst - 1] = 0;   // a dead man radios nobody
+  }
+}
+
 // Runs once per sim tick: live-applies the BOTS slider (fresh bots spawn,
 // extras retire), services a queued restart, then ticks every active bot.
 static void match_tick(void) {
@@ -15187,7 +16401,9 @@ static void match_tick(void) {
 
   for (int i = 0; i < g_match.nbots; i++) bot_tick(i);
   nade_tick(1);
+  if (g_ballistics) proj_tick();
   lms_tick();
+  rescue_tick();
 }
 
 static void match_init(void) {
@@ -15196,6 +16412,7 @@ static void match_init(void) {
   g_match.round_win = -1;
   g_match.round_no = 1;
   memset(g_bots, 0, sizeof g_bots);
+  rescue_reset();
   g_match.nbots = sp_bot_count();
   for (int i = 0; i < g_match.nbots; i++) bot_spawn(i);
   for (int h = 0; h < MAX_HUMANS; h++)   // P1-62: every human starts with a
@@ -15293,6 +16510,7 @@ static void grenade_tick(player_t *p, int ent, weapon_t *w, const int held[IN_CO
   }
 }
 
+static int rescue_reload_block(const player_t *p);
 static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   weapon_t *w = &p->wp;
   const wpn_def_t *def = &WPN_DEF[w->cur];
@@ -15398,7 +16616,7 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   // has cycled. Same path as the key, so it predicts, sounds and animates alike,
   // and a swap onto an empty weapon reloads once the raise finishes.
   int auto_rl = w->ammo[w->cur] == 0 && w->cool[w->cur] == 0 && p->alive;  // the grenade returned above
-  if (((held[IN_RELOAD] && !p->prev_held[IN_RELOAD]) || auto_rl) && !busy &&
+  if (((held[IN_RELOAD] && !p->prev_held[IN_RELOAD] && !rescue_reload_block(p)) || auto_rl) && !busy &&
       w->ammo[w->cur] < def->mag) {
     w->reload_tac = w->ammo[w->cur] > 0;
     w->reload_t = w->reload_tac ? def->reload_tac_ticks : def->reload_ticks;
@@ -15437,6 +16655,15 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
 // changes drag the gun), walk bob (figure-8 from a distance phase), the fire
 // kick (impulse into a stiff return spring), slide/strafe roll, and the
 // landing dip (shared with the camera). SWAY/BOB scales the ambient ones.
+static float sp_h_(const player_t *p) { return sqrtf(p->vel.x * p->vel.x + p->vel.z * p->vel.z); }
+// One step of a damped spring toward `target`: natural frequency `hz`,
+// damping ratio `zeta` (1 = critical, < 1 overshoots). Semi-implicit Euler at
+// 120 Hz is stable far past any frequency used here.
+static void vm_spring(float *x, float *xv, float target, float hz, float zeta) {
+  float w = F_TAU * hz;
+  *xv += (w * w * (target - *x) - 2.0f * zeta * w * *xv) * TICK_DT;
+  *x += *xv * TICK_DT;
+}
 static void vm_tick(player_t *p) {
   vm_t *v = &p->vm;
   float sc = g_cfg.wp[p->wp.cur][WP_SWAY];
@@ -15451,9 +16678,21 @@ static void vm_tick(player_t *p) {
   float dyaw = p->yaw - v->last_yaw, dpit = p->pitch - v->last_pitch;
   v->last_yaw = p->yaw; v->last_pitch = p->pitch;
   float damp = 1.0f - 0.88f * p->wp.ads_s;  // ADS pins the sight
-  float a = f_clamp(14.0f * TICK_DT, 0, 1);
-  v->sway_y += (f_clamp(-dyaw / TICK_DT * 0.014f, -0.05f, 0.05f) * sc * damp - v->sway_y) * a;
-  v->sway_p += (f_clamp(-dpit / TICK_DT * 0.011f, -0.04f, 0.04f) * sc * damp - v->sway_p) * a;
+  v->prev_twist = v->twist;
+  v->prev_wall = v->wall;
+  v->prev_cam_roll = v->cam_roll;
+  // The idle FIGURE-8: a shooter's chest rises and falls ~15 times a minute,
+  // and a held weapon traces a lissajous over it (side at f, lift at 2f).
+  // Present at rest and in ADS, where it is what makes a scope feel held.
+  v->breath += F_TAU * 0.26f * TICK_DT;
+  if (v->breath > F_TAU * 8.0f) v->breath -= F_TAU * 8.0f;
+  float br = sc * (1.0f - 0.55f * p->wp.ads_s);
+  float br_p = sinf(v->breath * 2.0f) * 0.0024f * br;
+  float br_y = sinf(v->breath) * 0.0032f * br;
+  vm_spring(&v->sway_y, &v->sway_yv,
+            f_clamp(-dyaw / TICK_DT * 0.014f, -0.05f, 0.05f) * sc * damp + br_y, 3.1f, 0.52f);
+  vm_spring(&v->sway_p, &v->sway_pv,
+            f_clamp(-dpit / TICK_DT * 0.011f, -0.04f, 0.04f) * sc * damp + br_p, 3.4f, 0.55f);
 
   // Move inertia: world acceleration projected into gun space.
   v3 dv = v3_add(p->vel, v3_scale(v->last_vel, -1.0f));
@@ -15461,10 +16700,34 @@ static void vm_tick(player_t *p) {
   float fx = sinf(p->yaw), fz = -cosf(p->yaw);
   float ax = (dv.x * fz * -1.0f + dv.z * fx) / TICK_DT;        // right accel
   float az = (dv.x * fx + dv.z * fz) / TICK_DT;                // forward accel
-  a = f_clamp(10.0f * TICK_DT, 0, 1);
-  v->lag_x += (f_clamp(-ax * 0.0009f, -0.03f, 0.03f) * sc * damp - v->lag_x) * a;
-  v->lag_z += (f_clamp(-az * 0.0007f, -0.035f, 0.035f) * sc * damp - v->lag_z) * a;
-  v->lag_y += (f_clamp(-p->vel.y * 0.006f, -0.035f, 0.035f) * sc * damp - v->lag_y) * a;
+  vm_spring(&v->lag_x, &v->lag_xv, f_clamp(-ax * 0.0009f, -0.03f, 0.03f) * sc * damp, 2.3f, 0.45f);
+  vm_spring(&v->lag_z, &v->lag_zv, f_clamp(-az * 0.0007f, -0.035f, 0.035f) * sc * damp, 2.6f, 0.50f);
+  vm_spring(&v->lag_y, &v->lag_yv, f_clamp(-p->vel.y * 0.006f, -0.035f, 0.035f) * sc * damp, 2.4f, 0.42f);
+  // LANDING SHOCK: the arms take the impact, so the weapon compresses down
+  // into it and springs back, by how hard the feet hit.
+  if (p->grounded && !v->was_grounded) {
+    float impact = f_clamp(-(v->last_vel.y - dv.y), 0.0f, 14.0f);  // pre-landing fall speed
+    v->lag_yv -= impact * 0.020f * sc * (1.0f - 0.6f * p->wp.ads_s);
+    v->roll_v += impact * 0.010f * sc;
+  }
+  v->was_grounded = p->grounded;
+  // WALL AVOIDANCE: a rifle is ~0.8 m long, and pushed into a wall it does not
+  // clip — the shooter draws it back to the chest and brings the muzzle up.
+  // One trace along the view per tick; the spring makes the move a motion.
+  {
+    v3 eye = player_eye_pos(p);
+    v3 fwd = {{cosf(p->pitch) * sinf(p->yaw), sinf(p->pitch), -cosf(p->pitch) * cosf(p->yaw)}};
+    v3 wn;
+    int ws;
+    float wd = trace_world(eye, fwd, &wn, &ws);
+    float reach = p->wp.cur == WPN_SR ? 1.05f : p->wp.cur == WPN_PT ? 0.55f : 0.85f;
+    float tw = p->wp.cur == WPN_KN || p->wp.cur == WPN_GR ? 0.0f
+             : f_clamp((reach - wd) / (reach * 0.55f), 0.0f, 1.0f);
+    vm_spring(&v->wall, &v->wall_v, tw, 2.2f, 0.9f);
+    v->wall = f_clamp(v->wall, 0.0f, 1.0f);
+  }
+  // Torque twist from the last shot (impulse in weapon_fire), ringing out.
+  vm_spring(&v->twist, &v->twist_v, 0.0f, 4.2f, 0.32f);
 
   // Walk bob: the phase advances at a STRIDE CADENCE (~1.6..2.3 Hz), not
   // with distance — at 12 m/s a distance phase would wag the gun at ~10 Hz,
@@ -15477,8 +16740,9 @@ static void vm_tick(player_t *p) {
   if (v->bob_amp > 0.01f)
     v->bob_phase += F_TAU * (1.6f + 0.7f * run_t) * TICK_DT;
   float bs = v->bob_amp * sc * damp;
-  v->bob_x = sinf(v->bob_phase) * 0.014f * bs;
-  v->bob_y = -(0.5f - 0.5f * cosf(v->bob_phase * 2.0f)) * 0.011f * bs;
+  v->bob_x = sinf(v->bob_phase) * 0.014f * bs + sinf(v->breath) * 0.0016f * br;
+  v->bob_y = -(0.5f - 0.5f * cosf(v->bob_phase * 2.0f)) * 0.011f * bs
+           + sinf(v->breath * 2.0f) * 0.0010f * br;
 
   // Fire kick: stiff underdamped return.
   v->kick_v += (-1400.0f * v->kick - 55.0f * v->kick_v) * TICK_DT;
@@ -15488,13 +16752,22 @@ static void vm_tick(player_t *p) {
   // off two arms, so it arrives at the new lean a beat late and settles. The
   // whole tell is the DIFFERENCE between this and the player's lean, which is
   // zero except while the lean is actually moving.
-  v->lean_lag += (p->lean - v->lean_lag) * f_clamp(9.0f * TICK_DT, 0, 1);
+  vm_spring(&v->lean_lag, &v->lean_v, p->lean, 1.9f, 0.62f);
 
   // Roll: slide tilt plus a strafe hint.
   float roll_t = (p->sliding ? 0.09f : 0.0f);
   float side = p->vel.x * fz * -1.0f + p->vel.z * fx;
   roll_t += f_clamp(-side / g_cfg.mv[MV_RUN], -1, 1) * 0.018f * damp;
-  v->roll += (roll_t * sc - v->roll) * f_clamp(7.0f * TICK_DT, 0, 1);
+  vm_spring(&v->roll, &v->roll_v, roll_t * sc, 1.8f, 0.60f);
+  // THE CAMERA BANKS INTO A SLIDE: a few degrees, toward the side the body is
+  // drifting (a straight slide banks to the weapon side). A roll about the
+  // view axis never moves the crosshair, so it is free against point of aim.
+  float bank = 0.0f;
+  if (p->sliding) {
+    float lat = f_clamp(side / fmaxf(sp_h_(p), 1.0f), -1.0f, 1.0f);
+    bank = (fabsf(lat) > 0.15f ? -lat : -0.6f) * 0.052f;
+  }
+  vm_spring(&v->cam_roll, &v->cam_roll_v, bank, 1.6f, 0.75f);
 }
 
 // One tick of the lean. The command eases toward the held keys (both keys, or
@@ -15579,6 +16852,57 @@ static void player_lean_tick(player_t *p, const int held[IN_COUNT]) {
 // every other human see this tick's positions. wish_px/wish_py is the
 // analog move intent AFTER deadzone, handed in by the caller: the sim half
 // itself never reads g_pad (a pad is client input).
+// THE LEDGE. A jump pressed into cover becomes one of two moves:
+//   VAULT  — waist-high cover (0.50..1.15 m) taken at speed: a LOW, fast arc
+//            that only just clears the top and keeps the run's momentum, so
+//            sprinting over a crate costs nothing like a full jump's hang time.
+//   MANTLE — a chest-high ledge (1.15..1.75 m) the plain jump cannot reach:
+//            enough lift to put the feet on top, with a little drive forward.
+// Probed straight ahead of the body along the move (or the view when
+// standing), and only where the top has standing room above it.
+static float ledge_top(v3 at, float lo, float hi) {
+  float top = -1.0f;
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *sd = &g_solids[i];
+    if (at.x < sd->min.x || at.x > sd->max.x || at.z < sd->min.z || at.z > sd->max.z) continue;
+    if (sd->max.y > lo && sd->max.y <= hi && sd->min.y < sd->max.y - 0.2f && sd->max.y > top)
+      top = sd->max.y;
+  }
+  return top;
+}
+static int ledge_room(v3 at, float y0, float y1) {
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *sd = &g_solids[i];
+    if (at.x < sd->min.x - 0.2f || at.x > sd->max.x + 0.2f ||
+        at.z < sd->min.z - 0.2f || at.z > sd->max.z + 0.2f) continue;
+    if (sd->min.y < y1 && sd->max.y > y0) return 0;
+  }
+  return 1;
+}
+static void mv_ledge(player_t *p, float wx, float wz, float wlen, float sp2d) {
+  float dx, dz;
+  if (wlen > 0.2f) { dx = wx / wlen; dz = wz / wlen; }
+  else { dx = sinf(p->yaw); dz = -cosf(p->yaw); }
+  v3 at = {{p->pos.x + dx * (PLAYER_RADIUS + 0.38f), p->pos.y, p->pos.z + dz * (PLAYER_RADIUS + 0.38f)}};
+  float top = ledge_top(at, p->pos.y + 0.50f, p->pos.y + 1.75f);
+  if (top < 0.0f) return;
+  float h = top - p->pos.y;
+  if (!ledge_room(at, top + 0.02f, top + HEIGHT_CROUCH)) return;
+  // ...and the body has to be able to rise there: nothing over the head now.
+  v3 here = {{p->pos.x, p->pos.y, p->pos.z}};
+  if (!ledge_room(here, p->pos.y + HEIGHT_STAND, top + HEIGHT_STAND)) return;
+  float toward = p->vel.x * dx + p->vel.z * dz;
+  if (h <= 1.15f && toward > g_sim_mv[MV_RUN] * 0.55f) {
+    p->vel.y = sqrtf(2.0f * GRAVITY * (h + 0.10f)) + 0.5f * GRAVITY * TICK_DT;
+    float go = fmaxf(sp2d, g_sim_mv[MV_RUN] * 0.95f);
+    p->vel.x = dx * go; p->vel.z = dz * go;
+  } else if (h > 1.15f) {
+    p->vel.y = sqrtf(2.0f * GRAVITY * (h + 0.16f)) + 0.5f * GRAVITY * TICK_DT;
+    float go = fmaxf(toward, 2.4f);
+    p->vel.x = dx * go; p->vel.z = dz * go;
+  }
+}
+
 static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
                              float wish_px, float wish_py) {
   const float *mv = g_sim_mv;
@@ -15745,6 +17069,11 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
     else            mv_walk(&p->vel, wx, wz, wlen, max_speed);
     if (p->jump_buf > 0) {
       p->vel.y = mv_jump_speed();
+      // CONTEXT: a jump into a ledge is a vault or a mantle (mv_ledge). It is
+      // a VELOCITY decision on the press tick and nothing else — no state, no
+      // animation lock — so a client predicting it and the server simulating
+      // it cannot disagree about anything a snapshot does not carry.
+      mv_ledge(p, wx, wz, wlen, sp2d);
       p->grounded = 0;
       p->sliding = 0;  // slide-jump: full horizontal momentum carries over
       p->jump_buf = 0;
@@ -15869,6 +17198,7 @@ static void player_tick(player_t *p, const int held[IN_COUNT]) {
     player_move_tick(hp, ent, hh, wpx, wpy);
     g_lagcomp_view = -1;               // bots and the present half stay live
   }
+  g_resc.use_held = held[IN_RELOAD] && !g_menu_open;   // a hostage's restraints
   match_tick();
   vfx_tick();
   for (int h = 0; h < MAX_HUMANS; h++)
@@ -17409,17 +18739,21 @@ static int net_cl_poll(void) {
   "  vec3 F = F0 + (1.0 - F0) * pow(1.0 - VoH, 5.0);\n" \
   "  return (diff + D * Vis * F) * NoL * rad;\n" \
   "}\n" \
-  "vec3 tonemap(vec3 x){\n" \
-  "  x *= EXPOSURE;\n" \
-  "  x = (x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14);\n" \
-  "  x = sqrt(clamp(x, 0.0, 1.0));\n" \
-  /* Half an LSB of interleaved-gradient noise. A smooth sky quantised to 8 bits
-     shows about eighty hard Mach bands ten pixels apart; dither turns the step
-     into grain the eye integrates away, and it costs three instructions. */ \
-  "  float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy,\n" \
-  "                                          vec2(0.06711056, 0.00583715))));\n" \
-  "  return x + (dth - 0.5) * 0.0039216;\n" \
-  "}\n"
+  /* SCENE-REFERRED NOW. The name is kept because forty call sites mean "the  \
+     value this pixel finally holds"; what it holds is linear radiance at the \
+     preset's exposure, and the ACES curve, the gamma-2 encode and the dither \
+     all moved to POST_FS, where they run once over the finished frame. */ \
+  "vec3 tonemap(vec3 x){ return clamp(x * EXPOSURE, vec3(0.0), vec3(256.0)); }\n" \
+  /* The inverse of the display transform, for the colours that were AUTHORED \
+     as display values — the additive glow (tracers, sparks, flash petals) and \
+     the lit inlays. Each is put back into the scene at the radiance that the \
+     post chain maps onto the colour it was authored as. */ \
+  "vec3 aces_inv(vec3 y){\n" \
+  "  y = clamp(y, 0.0, 0.985);\n" \
+  "  vec3 a = 2.51 - 2.43 * y, b = 0.03 - 0.59 * y, c = -0.14 * y;\n" \
+  "  return (-b + sqrt(b * b - 4.0 * a * c)) / (2.0 * a);\n" \
+  "}\n" \
+  "vec3 display_in(vec3 d){ return aces_inv(d * d); }\n"
 
 // ---------------------------------------------------------------------------
 // Atmospheres. Each arena gets one, picked from the map seed so every player in
@@ -17453,8 +18787,15 @@ static const atm_t ATM[] = {
    {0.15f, 0.19f, 0.28f}, {0.32f, 0.32f, 0.34f}, {0.05f, 0.06f, 0.08f},
    0.46f, 2.00f, 1.3e-4f, 0.68f, 0.22f, 0.96f, 0.38f, 0.30f,
    {0.98f, 1.00f, 1.02f}, {0.002f, 0.006f, 0.010f}},
+  // BLUE HOUR: the sun just under the dunes, the lamps lit. COMPOUND's own —
+  // the arena's seed pick below never reaches it.
+  {"BLUE HOUR",   {0.52f, 0.15f, -0.84f}, {1.55f, 0.95f, 0.68f}, {0.46f, 0.46f, 0.66f},
+   {0.035f, 0.07f, 0.22f}, {0.20f, 0.19f, 0.24f}, {0.70f, 0.34f, 0.26f},
+   0.56f, 1.70f, 8.0e-5f, 0.26f, 0.48f, 1.02f, 0.34f, 0.32f,
+   {0.97f, 0.99f, 1.04f}, {0.004f, 0.008f, 0.020f}},
 };
 #define ATM_COUNT ((int)(sizeof ATM / sizeof ATM[0]))
+#define ATM_ARENA_N 5   // the presets ARENA draws from (BLUE HOUR is COMPOUND's)
 static const atm_t *atm_now(void) {
   int ma = MAP_DEFS[map_id_valid(g_map_id)].atm;   // a handmade map's own sky
   if (ma >= 0 && ma < ATM_COUNT) return &ATM[ma];
@@ -17462,7 +18803,7 @@ static const atm_t *atm_now(void) {
   // the presets in lockstep.
   uint32_t h = g_map_seed ^ 0x9e3779b9u;
   h ^= h >> 16; h *= 0x85ebca6bu; h ^= h >> 13; h *= 0xc2b2ae35u; h ^= h >> 16;
-  return &ATM[h % (uint32_t)ATM_COUNT];
+  return &ATM[h % (uint32_t)ATM_ARENA_N];
 }
 static v3 atm_sun(void) {
   const atm_t *a = atm_now();
@@ -17535,6 +18876,10 @@ static const char *WORLD_FS =
   // global look, because the single thing that would undo every other detail in
   // the frame is a puddle in a desert. See surf_kind_t.
   "uniform vec4 uSurf;\n"
+  "uniform int uTown;\n"
+  "uniform vec3 uWrist;\n"
+  "uniform float uLampOn;\n"             // 0 by day .. 1 at dusk: lanterns lit
+  "uniform vec4 uLamp[8];\n"             // the nearest lanterns: position, power               // wrist display: ammo, magazine, clock                 // 0 citadel, 1 harbor, 2 refinery, -1 none
   "uniform vec2 uSmStep;\n"               // one shadow texel in UV
   "uniform sampler2DShadow uSm;\n"
   "out vec4 oCol;\n"
@@ -17552,16 +18897,38 @@ static const char *WORLD_FS =
   "  f = f * f * (3.0 - 2.0 * f);\n"
   "  return mix(vhash1(i), vhash1(i + 1.0), f);\n"
   "}\n"
+  // PERCENTAGE-CLOSER SOFT SHADOWS. A real penumbra widens with the distance
+  // from the caster: the foot of a wall casts a razor line, its parapet ten
+  // metres up a soft one. Step 1 finds the average BLOCKER depth over a disc
+  // (the raw depths, through a second sampler on the same texture with the
+  // compare switched off); step 2 sizes the filter from the receiver-blocker
+  // gap and runs a hardware-compared Poisson filter that wide. The disc is a
+  // FIXED pattern, not rotated per pixel: with no temporal filter to average
+  // it, a rotated disc is grain, and sixteen bilinear-compared taps on a fixed
+  // one are smooth. uSmPen turns depth-units of gap into uv of penumbra (the
+  // sun's 0.53 degrees, widened for sky scatter).
+  "uniform sampler2D uSmRaw;\n"
+  "uniform float uSmPen;\n"
+  "const vec2 PD[16] = vec2[](\n"
+  "  vec2(-0.9420, -0.3991), vec2(0.9456, -0.7689), vec2(-0.0942, -0.9294), vec2(0.3450, 0.2939),\n"
+  "  vec2(-0.9159, 0.4577), vec2(-0.8154, -0.8791), vec2(-0.3828, 0.2768), vec2(0.9748, 0.7565),\n"
+  "  vec2(0.4432, -0.9751), vec2(0.5374, -0.4737), vec2(-0.2650, -0.4189), vec2(0.7920, 0.1909),\n"
+  "  vec2(-0.2419, 0.9971), vec2(-0.8141, 0.9144), vec2(0.1998, 0.7864), vec2(0.1438, -0.1410));\n"
   "float sun_shadow(){\n"
   "  if (uShadow < 0.5) return 1.0;\n"
   "  vec3 p = vLit.xyz / vLit.w;\n"
   "  if (p.z >= 1.0) return 1.0;\n"
   "  p = p * 0.5 + 0.5;\n"
+  "  float srch = uSmStep.x * 9.0, bsum = 0.0, bn = 0.0;\n"
+  "  for (int i = 0; i < 16; i += 2) {\n"
+  "    float b = texture(uSmRaw, p.xy + PD[i] * srch).r;\n"
+  "    if (b < p.z - 0.0004) { bsum += b; bn += 1.0; }\n"
+  "  }\n"
+  "  if (bn < 0.5) return 1.0;\n"     // nothing between this point and the sun
+  "  float gap = p.z - bsum / bn;\n"
+  "  float w = clamp(gap * uSmPen, uSmStep.x * 1.2, uSmStep.x * 9.0);\n"
   "  float s = 0.0;\n"
-  "  for (int y = -1; y <= 2; y++)\n"
-  "    for (int x = -1; x <= 2; x++)\n"
-  "      s += texture(uSm, vec3(p.xy + vec2(float(x) - 0.5, float(y) - 0.5)\n"
-  "                                    * uSmStep, p.z));\n"
+  "  for (int i = 0; i < 16; i++) s += texture(uSm, vec3(p.xy + PD[i] * w, p.z));\n"
   "  return s * 0.0625;\n"
   "}\n"
   // --- BUILDING MATERIALS ----------------------------------------------------
@@ -17598,6 +18965,15 @@ static const char *WORLD_FS =
   "  float dm = min(min(f.x, w - f.x), min(f.y, h - f.y));\n"
   "  return vec3(dm, col, row);\n"
   "}\n"
+  // A weld bead: welded plate and pipe are joined in rings, one every 2 m
+  // along the run and one per 2.4 m course up a column. A raised, rippled bead.
+  "float weld(vec2 uv){\n"
+  "  float a = abs(fract(uv.x / 2.0) - 0.5) * 2.0, b = abs(fract(uv.y / 2.4) - 0.5) * 2.4;\n"
+  "  float d = min(a, b);\n"
+  "  return (1.0 - smoothstep(0.004, 0.011, d)) * (0.8 + 0.2 * sin((uv.x + uv.y) * 900.0));\n"
+  "}\n"
+  "float fbm4(vec2 p){ return vnoise2(p) * 0.52 + vnoise2(p * 2.07 + 3.1) * 0.26\n"
+  "                         + vnoise2(p * 4.13 + 7.7) * 0.14 + vnoise2(p * 8.21 + 1.3) * 0.08; }\n"
   // HEIGHT, in metres, of material m at uv. Joints are recesses, panels are flat,
   // sheet is corrugated. Only the relief that survives the footprint is returned.
   "float mat_h(int m, vec2 uv, float fp) {\n"
@@ -17646,6 +19022,15 @@ static const char *WORLD_FS =
   "  if (m == 7) {                                       // planking\n"
   "    vec3 b = bond(vec2(uv.x, uv.y), 1.2, 0.145, 0.37);\n"
   "    return 0.003 * smoothstep(0.002, 0.006, b.x) * mfade(0.145, fp);\n"
+  "  }\n"
+  "  if (m == 8) {                                       // copper: standing seams\n"
+  "    float sx = abs(fract(uv.x / 0.46) - 0.5) * 0.46;\n"
+  "    return 0.006 * (1.0 - smoothstep(0.004, 0.012, sx)) * mfade(0.46, fp)\n"
+  "         + 0.0008 * vnoise2(uv * 40.0) * mfade(0.03, fp);\n"
+  "  }\n"
+  "  if (m == 9 || m == 10) {                            // steel: weld rings\n"
+  "    float w = weld(uv);\n"
+  "    return 0.0025 * w * mfade(0.05, fp) + 0.0004 * vnoise2(uv * 90.0) * mfade(0.01, fp);\n"
   "  }\n"
   "  return 0.0;\n"
   "}\n"
@@ -17742,10 +19127,101 @@ static const char *WORLD_FS =
   "    det = mix(det, alb * 0.35, gap);\n"
   "    alb = mix(alb * 0.97, det, fb);\n"
   "    rough = clamp(rough + 0.04, 0.045, 1.0);\n"
+  "  } else if (m == 8) {\n"
+  // VERDIGRIS. Copper that has weathered for decades is not one green: the
+  // patina is thickest and palest where rain runs and pools (the lower courses,
+  // the seams), and the brown metal still shows where it is sheltered.
+  "    float run = fbm4(vec2(uv.x * 2.2, uv.y * 0.35));\n"
+  "    float pat = smoothstep(0.30, 0.75, run + (1.0 - smoothstep(0.0, 4.0, uv.y - 7.6)) * 0.25);\n"
+  "    vec3 bronze = vec3(0.20, 0.11, 0.06), green = vec3(0.24, 0.46, 0.52) * vec3(1.05, 1.15, 0.95);\n"
+  "    vec3 pale = vec3(0.42, 0.62, 0.58);\n"
+  "    vec3 c = mix(bronze, mix(green, pale, smoothstep(0.55, 0.95, run)), pat);\n"
+  "    alb = c * c * (0.90 + 0.20 * vnoise2(uv * 6.0));\n"
+  "    rough = clamp(mix(0.35, 0.80, pat), 0.045, 1.0);\n"
+  "  } else if (m == 9) {\n"
+  // Weathered steel: mill-scale mottle, brushed along the run, the weld rings
+  // heat-tinted, and rust bleeding down from each of them.
+  "    float w = weld(uv);\n"
+  "    float mot = fbm4(uv * 1.4);\n"
+  "    float brush = vnoise2(vec2(uv.x * 3.0, uv.y * 240.0)) * mfade(0.01, fp);\n"
+  "    alb *= 0.88 + 0.22 * mot + 0.06 * brush;\n"
+  "    alb = mix(alb, alb * vec3(0.62, 0.52, 0.48), w * 0.6);\n"
+  "    float bleed = smoothstep(0.62, 0.92, vnoise2(vec2(uv.x * 7.0, uv.y * 0.5))) * smoothstep(0.7, 0.0, fract(uv.y / 2.4));\n"
+  "    alb = mix(alb, vec3(0.13, 0.06, 0.03), bleed * 0.35);\n"
+  "    rough = clamp(rough - 0.25 + 0.2 * mot + 0.3 * bleed - 0.08 * brush, 0.18, 1.0);\n"
+  "  } else if (m == 10) {\n"
+  // HAZARD PAINT: safety yellow with 45-degree black bands on the ends of a
+  // run, chipped to primer and rusty steel wherever it has been knocked.
+  "    float d = uv.x + uv.y;\n"
+  "    float band = step(0.5, fract(d / 0.30)) * step(0.82, vnoise2(vec2(floor(uv.x / 3.0), 7.0)) + 0.4);\n"
+  "    alb = mix(alb, vec3(0.012), band * mfade(0.15, fp));\n"
+  // Chips gather where paint is knocked: low on a post, and in clusters.
+  "    float cn = fbm4(uv * 5.5) + vnoise2(uv * 31.0) * 0.10 + fbm4(uv * 0.6) * 0.18 - 0.09;\n"
+  "    float chip = smoothstep(0.80, 0.84, cn);\n"
+  "    float rust = smoothstep(0.86, 0.92, cn);\n"
+  "    alb = mix(alb, vec3(0.16, 0.16, 0.15), chip);\n"
+  "    alb = mix(alb, vec3(0.14, 0.065, 0.03), rust);\n"
+  "    alb *= 0.92 + 0.12 * vnoise2(uv * 0.8);\n"
+  "    rough = clamp(rough - 0.12 + 0.25 * chip, 0.25, 1.0);\n"
+  "  }\n"
+  // --- PER-TOWN WEATHERING, over whatever the material is ---------------
+  // Citadel: sun-baked sandstone grain in every masonry face. Harbor: salt
+  // efflorescence creeping up from the foot of every wall, worst on steel.
+  "  if (uTown == 0 && (m == 6 || m == 1 || m == 3)) {\n"
+  "    float sf = fbm4(uv * 3.3) * 0.6 + fbm4(uv * 11.0 + 4.0) * 0.4 * mfade(0.03, fp);\n"
+  "    alb *= 0.90 + 0.22 * sf;\n"
+  "    alb = mix(alb, alb * vec3(1.08, 0.96, 0.84), smoothstep(0.55, 0.85, fbm4(uv * 0.5 + 9.0)) * 0.5);\n"
+  "  }\n"
+  "  if (uTown == 1) {\n"
+  "    float salt = smoothstep(0.55, 0.85, fbm4(uv * 2.6) + (1.0 - smoothstep(0.0, 1.4, uv.y)) * 0.45)\n"
+  "               * (1.0 - smoothstep(0.4, 2.0, uv.y)) * ((m == 4 || m == 5 || m == 9) ? 1.0 : 0.6);\n"
+  "    alb = mix(alb, vec3(0.62, 0.62, 0.60), salt * 0.45 * mfade(0.03, fp));\n"
+  "    rough = mix(rough, 1.0, salt * 0.6);\n"
   "  }\n"
   "}\n"
+  // A seven-segment digit in a cell of half-extent (0.5, 1): bit order abcdefg.
+  "float seg7(vec2 p, int d){\n"
+  "  int m[10] = int[](0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F);\n"
+  "  int b = m[clamp(d, 0, 9)];\n"
+  "  if (abs(p.x) > 0.62 || abs(p.y) > 1.08) return 0.0;\n"
+  "  float r = 0.0;\n"
+  "  vec2 H = vec2(0.30, 0.075), V = vec2(0.075, 0.36);\n"
+  "  vec2 q[7] = vec2[](vec2(0.0, 0.9), vec2(0.40, 0.45), vec2(0.40, -0.45), vec2(0.0, -0.9),\n"
+  "                     vec2(-0.40, -0.45), vec2(-0.40, 0.45), vec2(0.0, 0.0));\n"
+  "  for (int i = 0; i < 7; i++) {\n"
+  "    if ((b & (1 << i)) == 0) continue;\n"
+  "    vec2 e = (i == 0 || i == 3 || i == 6) ? H : V;\n"
+  "    vec2 dd = abs(p - q[i]) - e;\n"
+  "    float sd = length(max(dd, 0.0)) + min(max(dd.x, dd.y), 0.0);\n"
+  "    r = max(r, 1.0 - smoothstep(0.0, 0.05, sd));\n"
+  "  }\n"
+  "  return r;\n"
+  "}\n"
+  // Cellular (Worley) F1 distance: the pitted micro-texture of a moulded
+  // polymer, which is a field of tiny craters rather than a smooth noise.
+  "float worley2(vec2 p){\n"
+  "  vec2 i = floor(p), f = fract(p); float d = 1.0;\n"
+  "  for (int y = -1; y <= 1; y++) for (int x = -1; x <= 1; x++) {\n"
+  "    vec2 g = vec2(float(x), float(y));\n"
+  "    vec2 o = vhash3(i + g).xy;\n"
+  "    vec2 r = g + o - f; d = min(d, dot(r, r));\n"
+  "  }\n"
+  "  return sqrt(d);\n"
+  "}\n"
+  // Bump from a scalar height through screen-space derivatives (Mikkelsen):
+  // no tangent frame needed, so it works on every part of every model.
+  "vec3 bumpn(vec3 n, float h, float k){\n"
+  "  vec3 dpx = dFdx(vWorld), dpy = dFdy(vWorld);\n"
+  "  vec3 r1 = cross(dpy, n), r2 = cross(n, dpx);\n"
+  "  float det = dot(dpx, r1);\n"
+  "  vec3 g = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);\n"
+  "  return normalize(abs(det) * n - g * k);\n"
+  "}\n"
   "void main(){\n"
-  "  if (uEmis > 0.5) { oCol = vec4(vCol, 1.0); return; }\n"
+  // 2 = MULTIPLY (smoke): a transmittance, not a colour — it passes untouched.
+  // 1 = additive glow, authored as display colour: lifted back into radiance.
+  "  if (uEmis > 1.5) { oCol = vec4(vCol, 1.0); return; }\n"
+  "  if (uEmis > 0.5) { oCol = vec4(display_in(vCol) * 1.35, 1.0); return; }\n"
   "  vec3 n = normalize(vNrm);\n"
   "  vec3 alb = vCol * vCol;\n"                 // authored display -> linear
   "  vec3 dv = vWorld - uEye;\n"
@@ -17789,9 +19265,65 @@ static const char *WORLD_FS =
   "    float mq = floor(ao * 0.25 + 1e-3);\n"
   "    smat = int(mq); ao -= mq * 4.0;\n"
   "  }\n"
-  // Walls and tops only: the underside of a slab is in shadow and edge-on to
-  // every view a player has, so relief there is cost with nothing to show.
-  "  if (smat > 0 && n.y > -0.5) {\n"
+  // GLASS, LANTERNS AND SIGNS. Not relief materials at all: a window is a
+  // mirror over a room, a lantern and an LED are light sources.
+  "  vec3 emi = vec3(0.0);\n"
+  "  if (smat >= 13) {\n"
+  "    float on = smat == 14 ? 1.0 : uLampOn;\n"
+  "    if (on > 0.02) {\n"
+  "      float k = smat == 14 ? 6.5 : 11.0;\n"
+  "      vec3 e = alb * mix(0.6, k, on);\n"
+  "      e = mix(e, sky_env(-V, 0.0), 1.0 - exp(-d * d * uFog));\n"
+  "      oCol = vec4(tonemap(e), 1.0); return;\n"
+  "    }\n"
+  "  }\n"
+  "  if (smat >= 11) {\n"
+  "    vec3 tint = alb;\n"
+  "    alb = vec3(0.004); rough = 0.035; metal = 0.0;\n"
+  "    vec3 ambi = mix(SKY_GND * 0.44, mix(SKY_HOR, SKY_TOP, 0.45) * 0.40, 0.5) * uAmb;\n"
+  "    if (smat == 11 && abs(n.y) < 0.5) {\n"
+  // INTERIOR MAPPING: the window is a portal into a room that is not modelled.
+  // The view ray is intersected, in the shader, with the walls, floor and
+  // ceiling of an imaginary room behind the facade — one room per bay and
+  // storey — so every window has depth, a back wall, parallax as the player
+  // moves, and a different room from its neighbour. Some rooms have their
+  // lights on at dusk; some have the blind half down.
+  "      vec3 T = abs(n.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);\n"
+  "      vec3 rs = vec3(uTown == 0 ? 2.7 : 3.4, 3.2, 3.6);\n"
+  "      vec3 o = vec3(dot(vWorld, T) / rs.x, vWorld.y / rs.y, 0.0);\n"
+  "      vec2 cell = floor(o.xy); vec2 f = fract(o.xy);\n"
+  "      vec3 rd = normalize(vWorld - uEye);\n"
+  "      vec3 d = vec3(dot(rd, T) / rs.x, rd.y / rs.y, max(dot(rd, -n), 0.05) / rs.z);\n"
+  "      float tx = d.x > 0.0 ? (1.0 - f.x) / d.x : -f.x / min(d.x, -1e-4);\n"
+  "      float ty = d.y > 0.0 ? (1.0 - f.y) / d.y : -f.y / min(d.y, -1e-4);\n"
+  "      float tz = 1.0 / d.z;\n"
+  "      float t = min(tz, min(tx, ty));\n"
+  "      vec3 h = vec3(f, 0.0) + d * t;\n"
+  "      vec3 r3 = vhash3(cell + vec2(float(uTown) * 7.3, 1.7));\n"
+  "      vec3 wall = mix(vec3(0.62, 0.56, 0.46), vec3(0.46, 0.52, 0.56), r3.x) * (0.75 + 0.25 * r3.z);\n"
+  "      vec3 c;\n"
+  "      if (t == ty) c = d.y < 0.0 ? vec3(0.30, 0.22, 0.15) : vec3(0.78, 0.76, 0.72);\n"
+  "      else if (t == tx) c = wall * 0.85;\n"
+  "      else {\n"
+  "        c = wall;\n"
+  // A dark piece of furniture against the back wall, a picture above it.
+  "        if (h.y < 0.32 && abs(h.x - 0.3 - 0.4 * r3.z) < 0.22) c *= 0.35;\n"
+  "        if (h.y > 0.48 && h.y < 0.66 && abs(h.x - 0.5) < 0.12) c = mix(c, vec3(0.35, 0.22, 0.18), 0.7);\n"
+  "      }\n"
+  "      c *= 1.0 - 0.45 * h.z;\n"                         // deeper is darker
+  "      float lit = step(0.70, r3.y) * uLampOn;\n"
+  "      vec3 light = mix(ambi * 0.55, vec3(1.0, 0.70, 0.42) * 1.6, lit);\n"
+  "      if (t == ty && d.y > 0.0) light += vec3(1.0, 0.8, 0.55) * 1.2 * lit;\n"   // the ceiling lamp
+  "      vec3 room = c * c * light;\n"
+  // The blind: drawn on the glass, so it does not parallax.
+  "      float bl = r3.z * 0.55;\n"
+  "      if (f.y > 1.0 - bl) room = mix(room, vec3(0.62, 0.56, 0.46) * mix(ambi * 0.7, vec3(1.0, 0.75, 0.5) * 0.9, lit), 0.92);\n"
+  "      emi = room;\n"
+  "    } else {\n"
+  "      emi = tint * tint * ambi * 0.35;\n"                // a vehicle's dark cabin
+  "    }\n"
+  "  }\n"
+  "  if (smat > 0 && smat < 11 && n.y > -0.5) {\n"
   "    bool top = n.y > 0.5;\n"
   "    vec3 T = top ? vec3(1.0, 0.0, 0.0) : (abs(n.x) > 0.5 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0));\n"
   "    vec3 B = top ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);\n"
@@ -17820,6 +19352,33 @@ static const char *WORLD_FS =
   "    vec2 cp = vec2(lp.x + lp.y * 0.8, lp.z) * 24.0;\n"
   "    float knit = vnoise2(cp * 30.0);\n"
   "    float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
+  // THE WRIST DISPLAY (mf -8): the amber panel on the support gauntlet shows
+  // the magazine — two seven-segment digits and a fill bar — in the same
+  // backlit acrylic as the inlays, so it reads as part of the glove. UV rides
+  // in the vertex colour (the panel is built for it in vm_build).
+  "    if (mf < -7.5) {\n"
+  "      vec2 uv = vCol.rg;\n"
+  "      float ammo = uWrist.x, mag = max(uWrist.y, 1.0);\n"
+  "      float low = step(ammo, mag * 0.25);\n"
+  "      float blink = low * step(0.5, fract(uWrist.z * 2.2));\n"
+  "      vec3 on = mix(vec3(1.0, 0.55, 0.12), vec3(1.0, 0.16, 0.06), low);\n"
+  "      vec3 bg = vec3(0.10, 0.045, 0.012);\n"
+  "      float lit = 0.0;\n"
+  "      int a = int(ammo + 0.5);\n"
+  "      for (int k = 0; k < 2; k++) {\n"
+  "        int dg = k == 0 ? (a / 10) % 10 : a % 10;\n"
+  "        if (k == 0 && a < 10) continue;\n"
+  "        vec2 c = vec2(uv.x - (k == 0 ? 0.30 : 0.70), uv.y - 0.60) * vec2(4.6, 3.3);\n"
+  "        lit = max(lit, seg7(c, dg));\n"
+  "      }\n"
+  "      float bar = step(0.10, uv.y) * step(uv.y, 0.20) * step(0.08, uv.x) * step(uv.x, 0.92);\n"
+  "      float fill = step(uv.x, 0.08 + 0.84 * ammo / mag);\n"
+  "      lit = max(lit, bar * mix(0.18, 1.0, fill));\n"
+  "      lit *= 1.0 - 0.75 * blink;\n"
+  "      vec3 e = mix(bg, on * 3.2, lit);\n"
+  "      oCol = vec4(display_in(sqrt(clamp(e / 3.2, 0.0, 1.0))) * 3.0 + e * 0.15, 1.0);\n"
+  "      return;\n"
+  "    }\n"
   "    if (mf < -6.5) {\n"            // 45-deg diamond-knurled tactical grip leather
   "      vec3 nl = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
   "      nl *= nl; nl *= nl; nl /= nl.x + nl.y + nl.z + 1e-4;\n"
@@ -17844,28 +19403,67 @@ static const char *WORLD_FS =
   "        rough = clamp(rough + (blot - 0.5) * 0.26 - 0.20 * wear, 0.14, 1.0);\n"
   "      } else if (mf < -4.5) {\n"      // anodised alloy: a brushed metallic sheen
   "        float brush = vnoise2(vec2(lp.z * 34.0, (lp.x + lp.y) * 900.0));\n"
+  // ANISOTROPIC: the brushing is a field of grooves along the bore, so the
+  // normal is tilted ACROSS it only — the highlight stretches into a streak
+  // along the rail instead of sitting as a round spot.
+  "        float bh = vnoise1((lp.x + lp.y) * 2600.0) * 0.6 + vnoise1((lp.x - lp.y) * 7100.0) * 0.4;\n"
+  "        n = bumpn(n, bh * 0.00006, 1.0);\n"
+  // EDGE WEAR off the curvature: anodising is a few microns thick and the
+  // first thing a holster or a barricade takes off a sharp edge, so the
+  // arrises go to bright bare aluminium.
+  "        float wear = smoothstep(0.38, 0.80, ew * (0.65 + 0.70 * blot) + (gr - 0.5) * 0.25);\n"
   "        alb = alb * (1.25 + 0.10 * brush) + vec3(0.010) * ew;\n"
-  "        metal = 0.30;\n"
-  "        rough = clamp(rough - 0.06 + (brush - 0.5) * 0.10 + (blot - 0.5) * 0.08, 0.20, 1.0);\n"
-  "      } else {\n"                     // moulded polymer: matte, fine grain
-  "        alb *= 0.90 + 0.20 * gr;\n"
-  "        rough = clamp(rough + 0.10 + (gr - 0.5) * 0.16, 0.2, 1.0);\n"
+  "        alb = mix(alb, vec3(0.50, 0.50, 0.52), wear);\n"
+  "        metal = mix(0.30, 0.95, wear);\n"
+  "        rough = clamp(rough - 0.06 + (brush - 0.5) * 0.10 + (blot - 0.5) * 0.08 - 0.12 * wear, 0.16, 1.0);\n"
+  "      } else {\n"                     // moulded polymer: matte, cellular grain
+  // A moulded texture is EDM pitting on the tool — a field of small craters
+  // (Worley F1), not a smooth noise. ~0.4 mm cells, with the roughness
+  // scattering cell to cell so the sheen breaks up like stippled nylon.
+  "        float wc = worley2(cp * 70.0);\n"
+  "        float wc2 = worley2(cp * 170.0 + 7.0);\n"
+  "        float pit = smoothstep(0.05, 0.55, wc) * 0.7 + smoothstep(0.05, 0.6, wc2) * 0.3;\n"
+  "        n = bumpn(n, pit * 0.000020 * (1.0 - smoothstep(0.005, 0.014, length(fwidth(cp)))), 1.0);\n"
+  "        alb *= (0.90 + 0.20 * gr) * (0.93 + 0.09 * pit);\n"
+  "        rough = clamp(rough + 0.10 + (gr - 0.5) * 0.16 + (vhash3(floor(cp * 52.0)).z - 0.5) * 0.10, 0.2, 1.0);\n"
   "      }\n"
   "    } else if (mf < -2.5) {\n"        // lit inlay: ignores the scene's light
-  "      oCol = vec4(tonemap(alb * vec3(1.0, 0.86, 0.72) * 1.05 / EXPOSURE), 1.0);\n"
+  // An LED behind amber acrylic: well past the bloom knee (>4 in scene
+  // units), so the strip glows into the glove around it instead of reading as
+  // orange paint.
+    // The tint is pushed redder than the authored amber because ACES walks a
+  // saturated orange toward yellow as it compresses: what comes out of the
+  // curve is the amber that went in.
+"      oCol = vec4(display_in(sqrt(alb) * vec3(1.0, 0.86, 0.72)) * vec3(3.4, 2.2, 1.6), 1.0);\n"
   "      return;\n"
-  "    } else if (mf < -1.5) {\n"        // glove: fine tactical weave, triplanar
+  "    } else if (mf < -1.5) {\n"        // glove: 2x2 twill aramid, triplanar
+  // A 2/2 TWILL: each thread passes over two and under two, shifted one per
+  // row, which is what draws the diagonal rib a Kevlar or carbon weave is
+  // recognised by. Each cell is a warp or a weft float with a rounded
+  // profile, and the float on top is the one that catches the light — so the
+  // weave is a pattern in the NORMAL and the SPECULAR, not a printed check.
   "      vec3 nl = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
   "      nl *= nl; nl *= nl; nl /= nl.x + nl.y + nl.z + 1e-4;\n"
-  "      vec3 hg = vec3(0.0);\n"
+  "      vec3 th = vec3(0.0), ov = vec3(0.0);\n"
   "      for (int i = 0; i < 3; i++) {\n"
-  "        vec2 m2 = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 1080.0;\n"
-  "        m2.x += floor(m2.y) * 0.5;\n"
-  "        hg[i] = 1.0 - smoothstep(0.20, 0.36, length(fract(m2) - 0.5));\n"
+  "        vec2 m2 = (i == 0 ? lp.yz : i == 1 ? lp.xz : lp.xy) * 620.0;\n"
+  "        vec2 ci = floor(m2), f = fract(m2);\n"
+  "        float warp = step(mod(ci.x + ci.y, 4.0), 1.5);\n"
+  "        float prof = warp > 0.5 ? sin(f.x * 3.14159) : sin(f.y * 3.14159);\n"
+  "        float along = warp > 0.5 ? sin(f.y * 3.14159) : sin(f.x * 3.14159);\n"
+  "        th[i] = prof * (0.75 + 0.25 * along);\n"
+  "        ov[i] = warp;\n"
   "      }\n"
-  "      float hole = dot(hg, nl);\n"
-  "      alb *= (1.0 - 0.18 * hole) * (0.92 + 0.16 * knit);\n"
-  "      rough = clamp(rough + 0.06 * hole, 0.35, 1.0);\n"
+  "      float tw = dot(th, nl), wp = dot(ov, nl);\n"
+  "      float wv = 1.0 - smoothstep(0.0008, 0.0022, fwidth(lp.x) + fwidth(lp.y));\n"
+  // SUBTLE, and that is the correction: at 0.22 mm of relief and glossy
+  // thread tops every float caught the rim light and the sky as its own
+  // highlight, which read across the whole glove as white powder. Aramid is
+  // a MATTE fibre; the weave is a texture you see in the albedo and barely
+  // in the sheen.
+  "      n = bumpn(n, tw * 0.00007 * wv, 1.0);\n"
+  "      alb *= (0.95 + 0.06 * tw * wv) * (0.92 + 0.16 * knit) * (1.0 + 0.04 * (wp - 0.5) * wv);\n"
+  "      rough = clamp(rough + 0.08 - 0.04 * tw * wv, 0.45, 1.0);\n"
   "    } else {\n"                       // sleeve: plain ripstop
   "      vec2 rg = abs(fract(cp * 1.5) - 0.5);\n"
   "      alb *= (0.86 + 0.28 * knit) * (1.0 - 0.14 * step(0.47, max(rg.x, rg.y)));\n"
@@ -17985,7 +19583,8 @@ static const char *WORLD_FS =
   // fp and hands what it lost to ROUGHNESS, which is the honest average of a
   // wrinkle too small to resolve. That single rule is what lets the floor be
   // this detailed up close and stay dead calm at thirty metres.
-  "  float wet = 0.0, glint = 0.0;\n"
+  "  float wet = 0.0, glint = 0.0, oil = 0.0;\n"
+  "  vec3 film = vec3(0.0);\n"
   "  if (n.y > 0.95 && vWorld.y < 0.05) {\n"
   "    vec2 P = vWorld.xz;\n"
   // ONE sqrt, not two: sqrt is monotone and correctly rounded, so the max of the
@@ -18222,6 +19821,39 @@ static const char *WORLD_FS =
   "      n = normalize(n + vec3(wv.x, 0.0, wv.y) * 0.05 * pool * ws);\n"
   "      wet = pool;\n"
   "    }\n"
+  // PAINTED MARKINGS on the port and refinery yards: dashed lane lines on a
+  // 14 m grid, worn away where the traffic runs. Yellow on the quay, white
+  // in the plant. (Under a building they are simply never seen.)
+  "    if (uTown >= 1) {\n"
+  "      float lw = 0.065;\n"
+  "      vec2 gd = abs(fract(P / 14.0 + 0.5) - 0.5) * 14.0;\n"
+  "      float dx = step(fract(P.y / 2.4), 0.58), dz = step(fract(P.x / 2.4), 0.58);\n"
+  "      float ln = max((1.0 - smoothstep(lw, lw + fp, gd.x)) * dx,\n"
+  "                     (1.0 - smoothstep(lw, lw + fp, gd.y)) * dz);\n"
+  "      vec2 tk = abs(fract(P / 2.8 + 0.5) - 0.5) * 2.8;\n"
+  "      ln = max(ln, (1.0 - smoothstep(lw, lw + fp, tk.x)) * step(gd.y, 1.2) * step(0.2, gd.y));\n"
+  "      float wear = smoothstep(0.22, 0.62, vnoise2(P * 1.3) * 0.7 + vnoise2(P * 7.0) * 0.3);\n"
+  "      vec3 paint = uTown == 1 ? vec3(0.80, 0.63, 0.12) : vec3(0.86, 0.86, 0.83);\n"
+  "      float pm = ln * wear * 0.85 * mfade(0.13, fp);\n"
+  "      alb = mix(alb, paint * paint, pm);\n"
+  "      rough = mix(rough, 0.62, pm);\n"
+  "    }\n"
+  // OIL ON THE REFINERY FLOOR: drips under the racks spread into slicks a
+  // few hundred nanometres thick, and a film that thin interferes — the
+  // rainbow is a function of the film's thickness AND the viewing angle, so
+  // it slides as the player walks. Dark, glossy, and a coloured F0.
+  "    if (uTown == 2) {\n"
+  "      float om = fbm4(P * 0.21 + 3.0);\n"
+  "      oil = smoothstep(0.68, 0.73, om) * (1.0 - smoothstep(0.03, 0.12, fp) * 0.5);\n"
+  "      if (oil > 0.0) {\n"
+  "        float th = fbm4(P * 0.9) * 0.7 + (om - 0.68) * 5.0;\n"
+  "        float nv2 = max(dot(n, V), 0.0);\n"
+  "        film = 0.5 + 0.5 * cos(6.2832 * (th + (1.0 - nv2) * 0.9 + vec3(0.0, 0.33, 0.67)));\n"
+  "        film = vec3(0.045) + (film - 0.5) * 0.045;\n"
+  "        alb *= mix(1.0, 0.30, oil);\n"
+  "        rough = mix(rough, 0.07, oil);\n"
+  "      }\n"
+  "    }\n"
   "  }\n"
   // Geometric specular antialiasing, now downstream of every term that touches a
   // normal. See the note above the seam block.
@@ -18232,6 +19864,7 @@ static const char *WORLD_FS =
   // therefore darker than the dry floor everywhere except along the grazing
   // corridor where Fresnel takes over, which is exactly what a puddle looks like.
   "  vec3 F0 = mix(mix(vec3(0.04), alb, metal), vec3(0.02), wet);\n"
+  "  F0 = mix(F0, film, oil);\n"
   "  vec3 diff = alb * (1.0 - metal);\n"
   "  float NoV = max(dot(n, V), 1e-4);\n"
   // Diffuse irradiance: the same sky, smoothed to a hemisphere lobe. Sun-facing
@@ -18370,6 +20003,20 @@ static const char *WORLD_FS =
   // Twice the aerial perspective. A figure at 30 m measured 4% off the wall
   // behind it, and no work on the figure buys contrast the ATMOSPHERE has to
   // provide: haze lifts and desaturates the wall, not the man in front of it.
+  "  col += emi * (1.0 - fr);\n"
+  // LAMPLIGHT: the nearest lanterns at dusk, warm, falling off with the
+  // square of the distance and aimed down (the cap shades the sky).
+  "  if (uLampOn > 0.02) {\n"
+  "    for (int i = 0; i < 8; i++) {\n"
+  "      vec3 lv = uLamp[i].xyz - vWorld;\n"
+  "      float l2 = dot(lv, lv);\n"
+  "      if (uLamp[i].w <= 0.0 || l2 > 144.0) continue;\n"
+  "      vec3 L = lv * inversesqrt(l2);\n"
+  "      float att = uLamp[i].w / (1.0 + l2 * 0.32) * (1.0 - smoothstep(64.0, 144.0, l2));\n"
+  "      float spot = 0.25 + 0.75 * smoothstep(0.05, 0.6, L.y);\n"
+  "      col += lit(n, V, L, diff, F0, rough, vec3(1.0, 0.72, 0.45) * att * spot);\n"
+  "    }\n"
+  "  }\n"
   "  col = mix(col, sky_env(-V, 0.0), 1.0 - exp(-d * d * uFog));\n"
   "  oCol = vec4(tonemap(col), 1.0);\n"
   "}\n";
@@ -18452,8 +20099,31 @@ static const char *SKY_FS =
   "      float litc = exp(-d2 * 1.9) * (1.0 - exp(-d2 * 2.0 - 0.55));\n"
   "      vec3 base = sky_env(dir, 0.0);\n"
   "      float sd = max(dot(dir, SUN_DIR), 0.0);\n"
-  "      vec3 cc = base * mix(0.92, 1.70, litc) + SUN_COL * litc * (0.20 + 0.65 * sd * sd * sd);\n"
+  // Forward scattering: a cloud between the eye and the sun lights up at its
+  // thin edges — the silver lining — which a symmetric lobe never produces.
+  // Two Henyey-Greenstein lobes, a sharp forward one and a weak back one.
+  "      float hgf = (1.0 - 0.36) / pow(1.0 + 0.36 - 1.2 * sd, 1.5);\n"
+  "      float hgb = (1.0 - 0.09) / pow(1.0 + 0.09 + 0.6 * sd, 1.5);\n"
+  "      float ph = mix(hgb, hgf, 0.72) * 0.45;\n"
+  "      float edge = dens * (1.0 - dens) * 4.0;\n"
+  "      vec3 cc = base * mix(0.92, 1.70, litc) + SUN_COL * litc * (0.20 + 0.65 * sd * sd * sd)\n"
+  "              + SUN_COL * edge * ph * 0.30;\n"
   "      c = mix(c, cc, dens * 0.92);\n"
+  "    }\n"
+  // THE SECOND LAYER: high cirrus, three times further up, stretched along
+  // the wind and much thinner. It is what puts depth into the sky — two layers
+  // sliding at different parallax read as altitude, one reads as a ceiling.
+  "    float t2 = min(3.2 / max(up, 0.05), 40.0);\n"
+  "    vec2 p2 = dir.xz * t2 * 0.35;\n"
+  "    vec2 wd = vec2(0.80, 0.60);\n"
+  "    vec2 pr = vec2(dot(p2, wd), dot(p2, vec2(-wd.y, wd.x)) * 4.0);\n"
+  "    float ci = vnoise2(pr * 0.7) * 0.6 + vnoise2(pr * 2.1 + 5.0) * 0.3 + vnoise2(pr * 6.3) * 0.1;\n"
+  "    float cd = smoothstep(0.66, 0.90, ci) * smoothstep(0.08, 0.34, up) * (0.25 + 0.75 * uCloud);\n"
+  "    if (cd > 0.002) {\n"
+  "      float sd2 = max(dot(dir, SUN_DIR), 0.0);\n"
+  "      float hg2 = (1.0 - 0.49) / pow(1.0 + 0.49 - 1.4 * sd2, 1.5);\n"
+  "      vec3 ic = sky_env(dir, 0.0) * 1.25 + SUN_COL * (0.10 + 0.22 * hg2);\n"
+  "      c = mix(c, ic, cd * 0.32);\n"
   "    }\n"
   "  }\n"
   // Two mountain ranges beyond the arena walls, hazed by distance. The near one
@@ -18497,28 +20167,326 @@ static const char *BLUR_FS =
 
 // Post stack: the tonemapped frame is already display-referred, so bloom keys on
 // what survives near the top of the range. A soft knee keeps it from popping.
-static const char *BRIGHT_FS =
+// ===========================================================================
+// THE HDR POST CHAIN. Every lit shader writes LINEAR radiance (already scaled by
+// the preset's EXPOSURE, see tonemap() in GLSL_ENV) into an RGBA16F scene
+// target, and the display transform happens exactly once, here. That is what
+// lets a muzzle flash be brighter than the sky instead of both clipping at
+// 255, lets the bloom see energy rather than an already-compressed colour, and
+// lets an eye adaptation move the exposure without re-shading the frame.
+//   METER  : centre-weighted log luminance into a mipmapped RG16F target
+//   ADAPT  : 1x1 ping-pong, exponential approach to the metered key
+//   AO     : half res — SSAO, screen-space contact shadows and convex-edge
+//            catch-lights, all from the world depth (taken before the
+//            viewmodel pass, so the gun neither occludes nor is occluded)
+//   VOL    : half res — sun in-scattering raymarched through the shadow map
+//   BLOOM  : dual-Kawase, five levels down and back up
+//   POST   : composite, motion blur, viewmodel depth of field, heat haze,
+//            chromatic aberration, ACES, grade, vignette, dither
+// ===========================================================================
+#define GLSL_DEPTH \
+  "uniform vec2 uTanXY;\n"   /* tan of the half FOV, x and y */ \
+  "uniform vec2 uNF;\n"      /* near, far */ \
+  "float lin_z(float d){ float z = d * 2.0 - 1.0;\n" \
+  "  return 2.0 * uNF.x * uNF.y / (uNF.y + uNF.x - z * (uNF.y - uNF.x)); }\n" \
+  "vec3 view_pos(vec2 uv, float d){ float z = lin_z(d);\n" \
+  "  return vec3((uv * 2.0 - 1.0) * uTanXY * z, -z); }\n" \
+  "float ign(vec2 f){ return fract(52.9829189 * fract(dot(f, vec2(0.06711056, 0.00583715)))); }\n"
+
+static const char *LUM_FS =
   "#version 330 core\n"
-  "in vec2 vUV; uniform sampler2D uTex; uniform float uThresh, uGain; out vec4 oCol;\n"
-  "void main(){ vec3 c = texture(uTex, vUV).rgb;\n"
-  "  float l = max(c.r, max(c.g, c.b));\n"
-  "  float k = smoothstep(uThresh, uThresh + 0.22, l);\n"
-  "  oCol = vec4(c * k * uGain, 1.0); }\n";
-static const char *POST_FS =
-  "#version 330 core\n"
-  "in vec2 vUV; uniform sampler2D uTex;\n"
-  "uniform float uSat, uCon, uVig; uniform vec3 uTint, uLift;\n"
-  "out vec4 oCol;\n"
+  "in vec2 vUV; uniform sampler2D uTex; uniform sampler2D uVmD; out vec4 oCol;\n"
   "void main(){\n"
   "  vec3 c = texture(uTex, vUV).rgb;\n"
   "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
-  "  c = mix(vec3(l), c, uSat) * uTint;\n"
-  "  c = mix(c, c * c * (3.0 - 2.0 * c), uCon);\n"
-  "  c += uLift * (1.0 - l) * (1.0 - l);\n"
-  "  vec2 q = vUV - 0.5;\n"
-  "  c *= 1.0 - uVig * smoothstep(0.16, 0.74, dot(q, q) * 2.0);\n"
+  // Centre-weighted, and the player's own weapon does not vote: a dark rifle
+  // filling the bottom third would otherwise brighten the whole world.
+  "  vec2 q = vUV - vec2(0.5, 0.55);\n"
+  "  float w = exp(-dot(q, q) * 5.0) * (texture(uVmD, vUV).r < 1.0 ? 0.05 : 1.0);\n"
+  "  oCol = vec4(log(max(l, 1e-4)) * w, w, 0.0, 1.0);\n"
+  "}\n";
+
+static const char *ADAPT_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uLum, uPrev; uniform float uLod, uK, uKey;\n"
+  "uniform vec2 uRange; out vec4 oCol;\n"
+  "void main(){\n"
+  "  vec2 m = textureLod(uLum, vec2(0.5), uLod).rg;\n"
+  "  float avg = exp(m.r / max(m.g, 1e-6));\n"
+  // HALF the metered error, as a camera's exposure-compensation curve does:
+  // a town at dusk is SUPPOSED to be darker than an arena at noon, and a full
+  // correction would grade every map to the same grey. Dark interiors still
+  // get a stop of help; a lit courtyard is left as authored.
+  "  float tgt = clamp(0.5 * log2(uKey / max(avg, 1e-4)), uRange.x, uRange.y);\n"
+  // A dead band around neutral: a frame that is already well exposed does
+  // not drift, so walking across one sunlit courtyard holds still.
+  "  tgt = sign(tgt) * max(abs(tgt) - 0.40, 0.0);\n"
+  "  float prev = texture(uPrev, vec2(0.5)).r;\n"
+  "  oCol = vec4(mix(prev, tgt, uK), avg, 0.0, 1.0);\n"
+  "}\n";
+
+static const char *AO_FS =
+  "#version 330 core\n"
+  GLSL_DEPTH
+  "in vec2 vUV; uniform sampler2D uDepth; uniform vec2 uPix;\n"
+  "uniform vec3 uSunV;\n"     // sun direction in VIEW space
+  "out vec4 oCol;\n"
+  // Reconstruct at the depth TEXEL's centre, never at the sample's own uv: a
+  // nearest-filtered depth paired with an off-centre position is a sawtooth on
+  // every slanted surface, and the normal built from it striped every wall.
+  "vec2 snapuv(vec2 uv){ vec2 ts = vec2(textureSize(uDepth, 0)); return (floor(uv * ts) + 0.5) / ts; }\n"
+  "vec3 P(vec2 uv){ uv = snapuv(uv); return view_pos(uv, texture(uDepth, uv).r); }\n"
+  "void main(){\n"
+  "  vec2 cuv = snapuv(vUV);\n"
+  "  float d = texture(uDepth, cuv).r;\n"
+  "  if (d >= 1.0) { oCol = vec4(1.0, 1.0, 0.0, 1.0); return; }\n"
+  "  vec3 p = view_pos(cuv, d);\n"
+  // Normal from the SMALLER of the two one-sided differences on each axis, so
+  // a pixel on a silhouette takes its own face's slope, not the gap's.
+  "  vec3 px1 = P(cuv + vec2(uPix.x, 0.0)) - p, px0 = p - P(cuv - vec2(uPix.x, 0.0));\n"
+  "  vec3 py1 = P(cuv + vec2(0.0, uPix.y)) - p, py0 = p - P(cuv - vec2(0.0, uPix.y));\n"
+  "  vec3 dx = abs(px1.z) < abs(px0.z) ? px1 : px0;\n"
+  "  vec3 dy = abs(py1.z) < abs(py0.z) ? py1 : py0;\n"
+  "  vec3 n = normalize(cross(dx, dy));\n"
+  "  float z = -p.z;\n"
+  "  float jit = ign(gl_FragCoord.xy) * 6.2831853;\n"
+  // --- SSAO: a 12-tap Alchemy estimator over a 0.55 m world-space disc.
+  "  float rad = 0.55;\n"
+  "  vec2 rs = rad / (z * uTanXY * 2.0);\n"
+  "  float occ = 0.0;\n"
+  "  for (int i = 0; i < 12; i++) {\n"
+  "    float a = jit + float(i) * 2.3999632;\n"           // golden angle
+  "    float r = sqrt((float(i) + 0.5) / 12.0);\n"
+  "    vec2 o = vec2(cos(a), sin(a)) * r * rs;\n"
+  "    vec3 v = P(cuv + o) - p;\n"
+  "    float vv = dot(v, v);\n"
+  "    occ += max(dot(v, n) - 0.012 * z, 0.0) / (vv + 0.004)\n"
+  "         * (1.0 - smoothstep(rad * rad, rad * rad * 4.0, vv));\n"
+  "  }\n"
+  "  float ao = clamp(1.0 - occ * (2.0 * 0.11 / 12.0), 0.0, 1.0);\n"
+  "  ao = ao * ao;\n"
+  // --- CONTACT SHADOWS: what the 15-30 mm shadow texel cannot hold. A short
+  // ray toward the sun in view space; any depth sample in front of the ray by
+  // less than a hand's thickness is a blocker.
+  "  float cs = 1.0;\n"
+  "  if (dot(n, uSunV) > 0.02 && z < 40.0) {\n"
+  "    float len = mix(0.10, 0.55, clamp(z / 30.0, 0.0, 1.0));\n"
+  "    vec3 q = p + n * 0.01 * z;\n"
+  "    for (int i = 1; i <= 10; i++) {\n"
+  "      float t = (float(i) + jit * 0.159) / 10.0;\n"
+  "      vec3 r = q + uSunV * (len * t * t);\n"
+  "      vec2 ruv = (r.xy / (-r.z * uTanXY)) * 0.5 + 0.5;\n"
+  "      if (ruv.x < 0.0 || ruv.y < 0.0 || ruv.x > 1.0 || ruv.y > 1.0) break;\n"
+  "      float sz = lin_z(texture(uDepth, ruv).r);\n"
+  "      float dz = -r.z - sz;\n"
+  "      if (dz > 0.015 && dz < 0.35) { cs = 1.0 - (1.0 - t) * 0.9; break; }\n"
+  "    }\n"
+  "  }\n"
+  // --- EDGE CATCH-LIGHTS: a real wall corner is never knife-sharp, and the
+  // 2-3 mm chamfer on it is where the sun glints. Convex creases are found in
+  // the depth itself: a neighbour that falls away behind this pixel's plane
+  // with a different normal is the other face of an outside corner.
+  "  float edge = 0.0;\n"
+  "  vec3 en = n;\n"
+  "  for (int i = 0; i < 4; i++) {\n"
+  "    vec2 o = (i == 0 ? vec2(1, 0) : i == 1 ? vec2(-1, 0) : i == 2 ? vec2(0, 1) : vec2(0, -1)) * uPix * 1.5;\n"
+  "    vec3 a = P(cuv + o) - p;\n"
+  "    float behind = -dot(a, n) / (length(a) + 1e-4);\n"
+  "    float e = smoothstep(0.08, 0.45, behind) * (1.0 - smoothstep(0.08, 0.30, length(a) / z));\n"
+  "    if (e > edge) { edge = e; en = normalize(n + normalize(a - n * dot(a, n))); }\n"
+  "  }\n"
+  "  edge *= max(dot(en, uSunV), 0.0) * (1.0 - smoothstep(6.0, 22.0, z));\n"
+  "  oCol = vec4(ao, cs, edge, 1.0);\n"
+  "}\n";
+
+static const char *VOL_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uDepth; uniform sampler2DShadow uSm;\n"
+  "uniform mat4 uInvVP, uLightVP; uniform vec3 uEye, uSun, uSunC; uniform float uDens, uExp;\n"
+  "out vec4 oCol;\n"
+  "float ign(vec2 f){ return fract(52.9829189 * fract(dot(f, vec2(0.06711056, 0.00583715)))); }\n"
+  "void main(){\n"
+  "  float d = texture(uDepth, vUV).r;\n"
+  "  vec4 w = uInvVP * vec4(vUV * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);\n"
+  "  vec3 wp = w.xyz / w.w;\n"
+  "  vec3 rd = wp - uEye; float L = length(rd); rd /= L;\n"
+  "  L = min(L, 70.0);\n"
+  "  float mu = dot(rd, uSun);\n"
+  // Henyey-Greenstein, g = 0.72: a dusty atmosphere scatters forward, so the
+  // shafts are a feature of looking TOWARD the sun and nearly vanish away from it.
+  "  float g = 0.72, ph = (1.0 - g * g) / (12.566 * pow(1.0 + g * g - 2.0 * g * mu, 1.5));\n"
+  "  ph += 0.02;\n"
+  "  const int N = 20;\n"
+  "  float st = L / float(N), j = ign(gl_FragCoord.xy), acc = 0.0;\n"
+  "  for (int i = 0; i < N; i++) {\n"
+  "    vec3 x = uEye + rd * ((float(i) + j) * st);\n"
+  "    vec4 l = uLightVP * vec4(x, 1.0);\n"
+  "    vec3 lp = l.xyz / l.w * 0.5 + 0.5;\n"
+  "    float lit = (lp.z >= 1.0) ? 1.0 : texture(uSm, lp);\n"
+  "    acc += lit * exp(-x.y * 0.05);\n"   // a little denser near the ground
+  "  }\n"
+  "  vec3 ins = uSunC * ph * uDens * acc * st * uExp;\n"
+  "  oCol = vec4(ins, 1.0);\n"
+  "}\n";
+
+static const char *BDOWN_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uTex; uniform vec2 uHp; uniform float uThr; out vec4 oCol;\n"
+  "vec3 S(vec2 o){ vec3 c = texture(uTex, vUV + o).rgb;\n"
+  // Soft-knee threshold on the first level only (uThr < 0 passes all). The
+  // luminance clamp keeps a single sun-glint pixel from becoming a disc.
+  "  if (uThr >= 0.0) { float l = max(c.r, max(c.g, c.b));\n"
+  "    float k = clamp(l - uThr + 0.5, 0.0, 1.0); k = k * k * 0.5;\n"
+  "    c *= max(k, l - uThr) / max(l, 1e-4); c = min(c, vec3(24.0)); }\n"
+  "  return c; }\n"
+  "void main(){\n"
+  "  vec3 c = S(vec2(0.0)) * 4.0 + S(-uHp) + S(uHp) + S(vec2(uHp.x, -uHp.y)) + S(vec2(-uHp.x, uHp.y));\n"
+  "  oCol = vec4(c * 0.125, 1.0);\n"
+  "}\n";
+static const char *BUP_FS =
+  "#version 330 core\n"
+  "in vec2 vUV; uniform sampler2D uTex; uniform vec2 uHp; out vec4 oCol;\n"
+  "vec3 S(vec2 o){ return texture(uTex, vUV + o * uHp).rgb; }\n"
+  "void main(){\n"
+  "  vec3 c = S(vec2(-2, 0)) + S(vec2(2, 0)) + S(vec2(0, -2)) + S(vec2(0, 2))\n"
+  "         + (S(vec2(-1, 1)) + S(vec2(1, 1)) + S(vec2(1, -1)) + S(vec2(-1, -1))) * 2.0;\n"
+  "  oCol = vec4(c / 12.0, 1.0);\n"
+  "}\n";
+
+// The display transform, shared by the frame and by the scope picture (which
+// is composited in the HUD pass, after this one).
+#define GLSL_DISPLAY \
+  "vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }\n" \
+  "vec3 grade(vec3 c, vec2 uv, float fx){\n" \
+  "  if (fx < 0.5) return c;\n" \
+  "  float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n" \
+  "  c = mix(vec3(l), c, uSat) * uTint;\n" \
+  "  c = mix(c, c * c * (3.0 - 2.0 * c), uCon);\n" \
+  "  c += uLift * (1.0 - l) * (1.0 - l);\n" \
+  "  vec2 q = uv - 0.5;\n" \
+  "  return c * (1.0 - uVig * smoothstep(0.16, 0.74, dot(q, q) * 2.0));\n" \
+  "}\n"
+
+static const char *POST_FS =
+  "#version 330 core\n"
+  GLSL_DEPTH
+  "in vec2 vUV;\n"
+  "uniform sampler2D uTex, uAO, uVol, uBloom, uAdapt, uDepth, uVmD;\n"
+  "uniform float uSat, uCon, uVig; uniform vec3 uTint, uLift;\n"
+  "uniform float uFx, uBloomK, uCA, uMotion, uAds, uVmOn, uTime, uAspect;\n"
+  "uniform vec4 uHeat;\n"       // screen xy, radius, strength
+  "uniform float uDbg;\n"
+  "uniform vec2 uVmVel;\n"      // the weapon's own screen motion this frame
+  "uniform vec3 uSunC;\n"
+  "uniform mat4 uInvVP, uPrevVP;\n"
+  "out vec4 oCol;\n"
+  GLSL_DISPLAY
+  "void main(){\n"
+  "  vec2 uv = vUV;\n"
+  // Heat haze over a barrel that has been working: a refractive shimmer
+  // that rises, centred on the muzzle's screen position.
+  "  if (uHeat.w > 0.001 && uFx > 0.5) {\n"
+  "    vec2 hd = (uv - uHeat.xy) * vec2(uAspect, 1.0);\n"
+  "    float hf = exp(-dot(hd, hd) / (uHeat.z * uHeat.z)) * smoothstep(-0.05, 0.10, uv.y - uHeat.y + 0.06);\n"
+  "    uv += vec2(sin(uv.y * 140.0 - uTime * 19.0), cos(uv.x * 110.0 + uTime * 13.0))\n"
+  "          * 0.0022 * uHeat.w * hf;\n"
+  "  }\n"
+  "  float zw = texture(uDepth, uv).r;\n"
+  "  float zv = texture(uVmD, uv).r;\n"
+  "  bool vm = uVmOn > 0.5 && zv < 1.0;\n"
+  "  vec2 q = uv - 0.5;\n"
+  "  float r2 = dot(q, q);\n"
+  "  vec3 c;\n"
+  "  if (uFx > 0.5) {\n"
+  // Lateral chromatic aberration: zero over the middle of the frame, where
+  // the aim point is, growing with the square of the radius.
+  "    vec2 off = q * uCA * r2;\n"
+  "    c = vec3(texture(uTex, uv - off).r, texture(uTex, uv).g, texture(uTex, uv + off).b);\n"
+  "  } else c = texture(uTex, uv).rgb;\n"
+  "  if (uFx > 0.5 && !vm && uMotion > 0.0) {\n"
+  // Camera motion blur by reprojection: where this pixel's world point sat on
+  // last frame's screen. Only the camera's motion — the world is static and a
+  // figure's own motion is too small to read at 120 Hz.
+  "    vec4 w = uInvVP * vec4(uv * 2.0 - 1.0, zw * 2.0 - 1.0, 1.0);\n"
+  "    vec4 pp = uPrevVP * vec4(w.xyz / w.w, 1.0);\n"
+  "    vec2 vel = (uv - (pp.xy / pp.w * 0.5 + 0.5)) * uMotion;\n"
+  "    float vl = length(vel);\n"
+  "    if (vl > 0.0015) {\n"
+  "      vel *= min(vl, 0.022) / vl;\n"
+  "      vec3 acc = c; float wsum = 1.0;\n"
+  "      float j = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
+  "      for (int i = 1; i <= 6; i++) {\n"
+  "        vec2 su = uv - vel * ((float(i) - j) / 6.0 - 0.5);\n"
+  "        if (uVmOn > 0.5 && texture(uVmD, su).r < 1.0) continue;\n"
+  "        acc += texture(uTex, su).rgb; wsum += 1.0;\n"
+  "      }\n"
+  "      c = acc / wsum;\n"
+  "    }\n"
+  "  }\n"
+  // WEAPON MOTION BLUR: the viewmodel smears along its own screen motion this
+  // frame (its springs, not the camera's), sampling only weapon pixels so the
+  // world never streaks into the gun. Taps are centred, so the blur has no
+  // direction bias and needs none.
+  "  if (vm && uFx > 0.5 && dot(uVmVel, uVmVel) > 1e-6) {\n"
+  "    vec2 vv = uVmVel * vec2(1.0, uAspect);\n"
+  "    float vl = length(vv); if (vl > 0.02) vv *= 0.02 / vl;\n"
+  "    vec3 acc = c; float wsum = 1.0;\n"
+  "    for (int i = 0; i < 6; i++) {\n"
+  "      vec2 su = uv + vv * ((float(i) + 0.5) / 6.0 - 0.5);\n"
+  "      if (texture(uVmD, su).r >= 1.0) continue;\n"
+  "      acc += texture(uTex, su).rgb; wsum += 1.0;\n"
+  "    }\n"
+  "    c = acc / wsum;\n"
+  "  }\n"
+  "  if (vm && uAds > 0.02 && uFx > 0.5) {\n"
+  // Depth of field on the weapon itself while aimed: the eye focuses on the
+  // front sight and the target, so the receiver and the rear of the optic —
+  // the parts nearest the face — go soft. Circle of confusion from the
+  // viewmodel's own depth; taps that land off the weapon are rejected so the
+  // world never bleeds into the gun.
+  "    float vz = 2.0 * 0.01 * 5.0 / (5.0 + 0.01 - (zv * 2.0 - 1.0) * (5.0 - 0.01));\n"
+  "    float coc = uAds * smoothstep(0.30, 0.10, vz) * 0.0045;\n"
+  "    if (coc > 0.0004) {\n"
+  "      vec3 acc = c; float wsum = 1.0;\n"
+  "      for (int i = 0; i < 10; i++) {\n"
+  "        float a = float(i) * 2.3999632, r = sqrt((float(i) + 0.5) / 10.0);\n"
+  "        vec2 su = uv + vec2(cos(a), sin(a) * uAspect) * r * coc;\n"
+  "        if (texture(uVmD, su).r >= 1.0) continue;\n"
+  "        acc += texture(uTex, su).rgb; wsum += 1.0;\n"
+  "      }\n"
+  "      c = acc / wsum;\n"
+  "    }\n"
+  "  }\n"
+  "  if (!vm && zw < 1.0 && uFx > 0.5) {\n"
+  // Depth-aware 4-tap gather of the half-res occlusion, so a wall's AO does
+  // not halo onto the sky or onto a figure standing in front of it.
+  "    vec2 hp = 1.0 / vec2(textureSize(uAO, 0));\n"
+  "    float zc = lin_z(zw);\n"
+  "    vec3 a = vec3(0.0); float ws = 0.0;\n"
+  "    for (int i = 0; i < 4; i++) {\n"
+  "      vec2 o = vec2(i & 1, i >> 1) * hp - hp * 0.5;\n"
+  "      float zz = lin_z(texture(uDepth, uv + o).r);\n"
+  "      float wt = 1.0 / (0.02 + abs(zz - zc) / zc);\n"
+  "      a += texture(uAO, uv + o).rgb * wt; ws += wt;\n"
+  "    }\n"
+  "    a /= ws;\n"
+  "    c *= mix(1.0, a.r, 0.80) * mix(1.0, a.g, 0.55);\n"
+  "    c += uSunC * a.b * 0.10 * a.g;\n"
+  "  }\n"
+  "  if (!vm && uFx > 0.5) c += texture(uVol, uv).rgb;\n"
+  "  if (uFx > 0.5) c += texture(uBloom, uv).rgb * uBloomK;\n"
+  "  if (uDbg > 0.5) {\n"     // `postdbg N` in the harness: one channel, raw
+  "    vec4 a = texture(uAO, uv);\n"
+  "    c = uDbg < 1.5 ? a.rrr : uDbg < 2.5 ? a.ggg : uDbg < 3.5 ? a.bbb\n"
+  "      : uDbg < 4.5 ? texture(uVol, uv).rgb * 4.0 : texture(uBloom, uv).rgb;\n"
+  "    oCol = vec4(c, 1.0); return;\n"
+  "  }\n"
+  "  c *= exp2(texture(uAdapt, vec2(0.5)).r);\n"
+  "  c = sqrt(aces(c));\n"
+  "  c = grade(c, vUV, uFx);\n"
   "  float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
-  "  oCol = vec4(c + (dth - 0.5) * 0.0039216, 1.0); }\n";
+  "  oCol = vec4(c + (dth - 0.5) * 0.0039216, 1.0);\n"
+  "}\n";
 
 static const char *HUD_VS =
   "#version 330 core\n"
@@ -18542,9 +20510,33 @@ static const char *HUD_FS =
   "#version 330 core\n"
   "in vec2 vUV; in vec4 vCol; in float vMode;\n"
   "uniform sampler2D uTex; uniform int uImg;\n"
+  "uniform sampler2D uAdapt;\n"
+  "uniform float uSat, uCon, uVig, uFx; uniform vec3 uTint, uLift;\n"
+  "uniform vec4 uLens;\n"            // scope centre (uv), eye misalignment, CA
   "out vec4 oCol;\n"
+  GLSL_DISPLAY
   "void main(){\n"
   "  if (uImg == 1) { oCol = vec4(texture(uTex, vUV).rgb * vCol.rgb, vCol.a); return; }\n"
+  // THE SCOPE PICTURE, which is HDR (it is a second render of the world) and so
+  // gets the same display transform as the frame, plus the optics of a real
+  // ocular: barrel distortion toward the rim, lateral colour at the field stop,
+  // and an exit pupil that only lines up when the eye is on the axis.
+  "  if (uImg == 2) {\n"
+  "    vec2 d = vUV - 0.5;\n"
+  "    float r2 = dot(d, d) * 4.0;\n"
+  "    vec2 bd = d * (1.0 - 0.10 * r2);\n"
+  "    vec2 ca = d * uLens.w * r2;\n"
+  "    vec3 c = vec3(texture(uTex, 0.5 + bd - ca).r, texture(uTex, 0.5 + bd).g,\n"
+  "                  texture(uTex, 0.5 + bd + ca).b);\n"
+  "    c *= exp2(texture(uAdapt, vec2(0.5)).r);\n"
+  "    c = grade(sqrt(aces(c)), vec2(0.5), uFx);\n"
+  // Eye-relief shadow: a crescent that sweeps in from the side the eye is off
+  // by, and closes the picture down when the eye is far off the axis.
+  "    vec2 ec = d * 2.0 - uLens.xy;\n"
+  "    float eb = 1.0 - smoothstep(0.80 - uLens.z * 0.6, 1.10 - uLens.z * 0.6, length(ec));\n"
+  "    c *= mix(0.0, 1.0, eb) * vCol.rgb;\n"
+  "    oCol = vec4(c, vCol.a); return;\n"
+  "  }\n"
   "  float v = texture(uTex, vUV).r;\n"
   "  float a;\n"
   "  if (vMode >= 2.0) a = v;\n"
@@ -18818,6 +20810,10 @@ static void font_bake(uint8_t *atlas) {
 }
 
 static float g_scope_r, g_scope_cx, g_scope_cy;  // scope disc, derived per frame
+// The AR's holographic window, projected per frame like the scope disc: its
+// centre and the screen images of its two half-axes, in HUD units. hx/hy == 0
+// means "no window this frame".
+static float g_holo_cx, g_holo_cy, g_holo_ex[2], g_holo_ey[2];
 static int g_hud_visible = 1;  // harness capture switch; menus remain visible
 // One map over the whole 48 m arena: 4096 px gives ~1.3 cm texels, which is fine
 // enough that a figure self-shadows its own arms.
@@ -18872,10 +20868,21 @@ typedef struct {
   GLuint present_fbo;               // frame destination: 0 on Windows, harness FBO on Linux
   GLuint msaa_fbo, msaa_rb[2];      // multisampled scene target, msaa_fbo 0 = MSAA off
   int    msaa_cfg, msaa_w, msaa_h;  // setting/size the MSAA target was built for
-  GLuint post_fbo, post_tex, prog_bright, prog_post;  // scene copy + post programs
-  int    post_w, post_h;
-  GLint  u_br_tex, u_br_thresh, u_br_gain, u_po_tex, u_po_sat, u_po_con,
-         u_po_vig, u_po_tint, u_po_lift;
+  // THE HDR CHAIN (see POST_FS). scene_* is the single-sample RGBA16F frame
+  // every lit pass ends in; z_*[0] is the world depth copied before the
+  // viewmodel pass, z_*[1] the viewmodel's own depth after it.
+  GLuint scene_fbo, scene_tex, scene_zrb;
+  GLuint z_fbo[2], z_tex[2];
+  GLuint ao_fbo, ao_tex, vol_fbo, vol_tex;
+  GLuint bl_fbo[5], bl_tex[5];
+  GLuint lum_fbo, lum_tex, ad_fbo[2], ad_tex[2];
+  int    ad_i, ad_frame, lum_levels, bl_w[5], bl_h[5];
+  int    post_w, post_h, frame_no, vm_drawn, have_prev;
+  mat4   prev_vp, cur_vp, inv_vp;
+  float  tan_x, tan_y, ads_now, vm_vel[2];
+  v3     cam_fwd, cam_rgt, cam_up;
+  GLuint sm_raw;                    // sampler: the shadow map WITHOUT compare (PCSS)
+  GLuint prog_post, prog_lum, prog_adapt, prog_ao, prog_vol, prog_bdown, prog_bup;
   atm_loc_t atm_loc[2];              // world, sky
   GLuint blur_fbo[2], blur_tex[2];  // quarter-res ping-pong: the frosted menu
   GLuint prog_blur;                 // dual-Kawase tap (see ui_menu_backdrop)
@@ -19175,8 +21182,20 @@ static float ground_skirt_ao(float x, float z) {
   return 1.0f - 0.34f * ground_sample(x, z).skirt;
 }
 
-#define DECOR_MAX_VERTS 49152
-static float g_mesh[(MAX_SOLIDS * 36 + GROUND_VERTS + DECOR_MAX_VERTS) * VERT_FLOATS];
+// Sized from MEASURED demand, not a guess: the handmade towns dress far more
+// than the 24 m arenas (citadel 290,250 decor verts, refinery 197,334, harbor
+// 177,864, outpost 17,196). The old 49,152 cut all three towns' tails off —
+// the dropped geometry was street rubble and scatter, built last, so it read as
+// bare ground rather than as an error. 384 Ki leaves ~35% over the citadel.
+// Decor does not cast (it lands after world_cast_verts), so the cost is the
+// main pass and ~16 MB of BSS. ci-proofs gates world_drops = 0 on every map.
+// RAISED AGAIN to the staging buffer's own size (SCENE_MAX_VERTS: decor is
+// built in the scene buffer and copied, so nothing larger could ever arrive)
+// when the town dressing (dec_town: cornices, window frames, bars, louvers,
+// flanges, cables) put the citadel at ~420k.
+#define DECOR_MAX_VERTS 524288
+#define PROPS_MAX_VERTS 262144  // detailed vehicles and lanterns (mesh_props)
+static float g_mesh[(MAX_SOLIDS * 36 + GROUND_VERTS + DECOR_MAX_VERTS + PROPS_MAX_VERTS) * VERT_FLOATS];
 static int   g_mesh_floats;
 static long  g_mesh_drops;
 
@@ -19206,6 +21225,7 @@ static void mesh_vert(v3 p, v3 n, v3 c, float rough, float metal, float ao) {
 // the static world writes it; the scene stream (figures, VFX, the viewmodel)
 // always carries material 0, and the shader decodes it only under uDetail.
 static int g_mesh_mat;
+static int g_props_verts;   // what mesh_props built (printed by `budget`)
 static void mesh_push(v3 p, v3 n, v3 c) {
   mesh_vert(p, n, c, g_mat_rough, g_mat_metal, ao_at(p.y) + 4.0f * (float)g_mesh_mat);
 }
@@ -19279,6 +21299,7 @@ static void mesh_ground_vert(int ix, int iz, v3 base) {
 // already exists as a scene_* primitive. Building a second copy of that library
 // against g_mesh so it could live up here would be two copies of a box.
 static void mesh_decor(void);
+static void mesh_props(void);
 
 static void mesh_build(void) {
   g_mesh_floats = 0;
@@ -19293,6 +21314,7 @@ static void mesh_build(void) {
   // 8% wash with nothing at the contact, which is the one place occlusion shows.
   ao_set(0.0f, WORLD_AO_RATE, WORLD_AO_MIN);
   for (int i = 0; i < g_num_solids; i++) {
+    if (g_solid_hide[i]) continue;          // a prop draws it (mesh_props)
     const solid_t *s = &g_solids[i];
     v3 mn = s->min, mx = s->max, c = s->color;
     g_mesh_mat = g_solid_mat[i] < SMAT_COUNT ? g_solid_mat[i] : SMAT_PAINT;
@@ -19306,6 +21328,7 @@ static void mesh_build(void) {
   }
   g_mesh_mat = SMAT_PAINT;
   ao_off();
+  mesh_props();   // the detailed vehicles and lanterns: they CAST, so they go here
   // EVERYTHING THAT CASTS IS NOW BEHIND US. The floor cannot: it is the lowest
   // surface in the world and there is nothing under it to shadow, so its 4608
   // triangles were being rasterised into a 4096-square depth map every frame to
@@ -19351,17 +21374,19 @@ static void renderer_init(int width, int height) {
   R.prog_hud = gl_program(HUD_VS, HUD_FS);
   R.prog_sky = gl_program(SKY_VS, SKY_FS);
   R.prog_depth = gl_program(DEPTH_VS, DEPTH_FS);
-  R.prog_bright = gl_program(BLUR_VS, BRIGHT_FS);
   R.prog_post = gl_program(BLUR_VS, POST_FS);
-  R.u_br_tex = glGetUniformLocation(R.prog_bright, "uTex");
-  R.u_br_thresh = glGetUniformLocation(R.prog_bright, "uThresh");
-  R.u_po_tex = glGetUniformLocation(R.prog_post, "uTex");
-  R.u_br_gain = glGetUniformLocation(R.prog_bright, "uGain");
-  R.u_po_sat = glGetUniformLocation(R.prog_post, "uSat");
-  R.u_po_con = glGetUniformLocation(R.prog_post, "uCon");
-  R.u_po_vig = glGetUniformLocation(R.prog_post, "uVig");
-  R.u_po_tint = glGetUniformLocation(R.prog_post, "uTint");
-  R.u_po_lift = glGetUniformLocation(R.prog_post, "uLift");
+  R.prog_lum = gl_program(BLUR_VS, LUM_FS);
+  R.prog_adapt = gl_program(BLUR_VS, ADAPT_FS);
+  R.prog_ao = gl_program(BLUR_VS, AO_FS);
+  R.prog_vol = gl_program(BLUR_VS, VOL_FS);
+  R.prog_bdown = gl_program(BLUR_VS, BDOWN_FS);
+  R.prog_bup = gl_program(BLUR_VS, BUP_FS);
+  glGenSamplers(1, &R.sm_raw);
+  glSamplerParameteri(R.sm_raw, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+  glSamplerParameteri(R.sm_raw, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glSamplerParameteri(R.sm_raw, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glSamplerParameteri(R.sm_raw, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glSamplerParameteri(R.sm_raw, GL_TEXTURE_COMPARE_MODE, GL_NONE);
   {
     GLuint pr[2] = {R.prog_world, R.prog_sky};
     for (int i = 0; i < 2; i++) {
@@ -19489,8 +21514,8 @@ static void renderer_init(int width, int height) {
   // the disc is round and the aspect must not stretch inside it.
   glGenTextures(1, &R.scope_tex);
   glBindTexture(GL_TEXTURE_2D, R.scope_tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, R.scope_size, R.scope_size, 0, GL_RGB,
-               GL_UNSIGNED_BYTE, NULL);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, R.scope_size, R.scope_size, 0, GL_RGBA,
+               GL_HALF_FLOAT, NULL);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -20880,10 +22905,15 @@ static void ui_home(int click, float cx, float cy) {
   char goal[20];
   if (gm == GM_GUN)      snprintf(goal, sizeof goal, "%d RUNGS", GG_LEVELS);
   else if (gm == GM_LMS) snprintf(goal, sizeof goal, "%d ROUNDS", g_cfg.sp_rounds);
+  else if (gm == GM_RESCUE) snprintf(goal, sizeof goal, "3 HOSTAGES");
   else                   snprintf(goal, sizeof goal, "%d FRAGS", g_cfg.sp_frag);
   // Mode, map, opponents, goal: difficulty lives on the page behind the tile,
   // because five fields no longer fit the caption's width.
   int mp = g_cfg.sp_map >= 0 && g_cfg.sp_map <= MAP_ROTATE ? g_cfg.sp_map : 0;
+  if (gm == GM_RESCUE)
+    snprintf(sub, sizeof sub, "%s / COMPOUND / %d GUARDS / %s", GM_NAMES[gm],
+             RESC_DIFF[g_cfg.sp_diff < 0 ? 0 : g_cfg.sp_diff > 2 ? 2 : g_cfg.sp_diff].guards, goal);
+  else
   snprintf(sub, sizeof sub, "%s / %s / %d BOT%s / %s", GM_NAMES[gm], MAP_PICK_NAMES[mp],
            g_cfg.sp_bots, g_cfg.sp_bots == 1 ? "" : "S", goal);
   // TWO DESTINATIONS, AND NEITHER OF THEM IS "GO BACK". The rail used to open
@@ -21566,12 +23596,23 @@ static void ui_menu(void) {
     // MAP latches the same way. ROTATE steps to the next map every match.
     ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
     y += 15;
+    // Latches at the next restart, like MODE and MAP.
+    ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
+    y += 15;
     if (!g_home && !g_online &&
         (g_cfg.sp_mode != g_match.mode || g_cfg.sp_map != g_map_pick)) {
       ui_text("APPLIES ON RESTART", px + 16, y + 1, 0.9f, C_BLAZE, 0.9f);
       y += 12;
     }
-    {
+    if (g_cfg.sp_mode == GM_RESCUE) {
+      // A mission fields its own guards (by difficulty) on its own map.
+      char gl[40];
+      snprintf(gl, sizeof gl, "%d ON COMPOUND",
+               RESC_DIFF[g_cfg.sp_diff < 0 ? 0 : g_cfg.sp_diff > 2 ? 2 : g_cfg.sp_diff].guards);
+      ui_text("GUARDS", px + 16, y + 3, 1, C_TEXT, 1);
+      ui_text(gl, px + pw - 16 - ui_text_width(gl, 1), y + 4, 1, C_HAZE, 1);
+      y += 15;
+    } else {
       float v = (float)g_cfg.sp_bots;
       y = ui_param_row(&SP_BOTS_DEF, &v, DRAG_BOTS, px, y, click, cx, cy);
       g_cfg.sp_bots = (int)v;
@@ -21586,6 +23627,11 @@ static void ui_menu(void) {
       float v = (float)g_cfg.sp_rounds;
       y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
       g_cfg.sp_rounds = (int)v;
+    } else if (g_cfg.sp_mode == GM_RESCUE) {
+      ui_text("WIN", px + 16, y + 3, 1, C_TEXT, 1);
+      const char *gw = "ALL 3 HOSTAGES TO THE LZ";
+      ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
+      y += 15;
     } else if (g_cfg.sp_mode != GM_GUN) {
       float v = (float)g_cfg.sp_frag;
       y = ui_param_row(&SP_FRAG_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
@@ -22000,7 +24046,7 @@ static void msaa_update(void) {
   glBindFramebuffer(GL_FRAMEBUFFER, R.msaa_fbo);
   glGenRenderbuffers(2, R.msaa_rb);
   glBindRenderbuffer(GL_RENDERBUFFER, R.msaa_rb[0]);
-  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_RGBA8, R.width, R.height);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_RGBA16F, R.width, R.height);
   glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, R.msaa_rb[0]);
   glBindRenderbuffer(GL_RENDERBUFFER, R.msaa_rb[1]);
   glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_DEPTH_COMPONENT24, R.width, R.height);
@@ -22059,7 +24105,7 @@ static void blur_update(void) {
 static void msaa_resolve(void) {
   if (!R.msaa_fbo) return;
   glBindFramebuffer(GL_READ_FRAMEBUFFER, R.msaa_fbo);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.present_fbo);
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.scene_fbo);
   glBlitFramebuffer(0, 0, R.width, R.height, 0, 0, R.width, R.height,
                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
 }
@@ -22074,7 +24120,8 @@ static void ui_menu_backdrop(void) {
   blur_update();
   if (!R.blur_fbo[0] || !R.blur_fbo[1]) return;
   ui_flush();
-  msaa_resolve();   // what has been drawn so far (also final-safe)
+  // The HUD draws into the present buffer AFTER the post chain, so that buffer
+  // already holds the finished, display-referred frame.
   glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.blur_fbo[0]);
   glBlitFramebuffer(0, 0, R.width, R.height, 0, 0, R.blur_w, R.blur_h,
@@ -22093,7 +24140,7 @@ static void ui_menu_backdrop(void) {
     glDrawArrays(GL_TRIANGLES, 0, 3);
     src = 1 - src;
   }
-  glBindFramebuffer(GL_FRAMEBUFFER, R.msaa_fbo ? R.msaa_fbo : R.present_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.present_fbo);
   glViewport(0, 0, R.width, R.height);
   glEnable(GL_BLEND);
   glUseProgram(R.prog_hud);
@@ -22496,6 +24543,7 @@ typedef struct { v3 pos, dir; int life, src; long t0; uint32_t seed; int fresh, 
 // bounded by their remaining life (~0.4 s worst case) and left as it is,
 // because re-probing the floor per particle per tick costs more than the defect.
 typedef struct { v3 pos, vel; float y0, sz; int life, life0, kind; } particle_t;
+static v3 g_cam_eye;   // the render camera (defined with the culling state below)
 // AN IMPACT MARK IS A CRATER IN A SURFACE, NOT A STICKER ON IT, and it used to
 // be both wrong things at once: an 84 mm disc of flat near-black — measured 4.6
 // stops under a shadowed crate and 5.8 under a sunlit wall, and that SPREAD is
@@ -22610,6 +24658,11 @@ static long       g_muzzle_fire_tick;          // its 12-tick staleness bound
 enum { HM_BODY = 0, HM_HEAD = 1, HM_KILL = 2, HM_KILL_HEAD = 3 };
 static int        g_hitmark_t, g_hitmark_kind;  // ticks left + which of the four
 static int        g_hitmark_arm, g_hitmark_pend; // the per-weapon arming delay
+// The DIRECTIONAL half: where the round actually landed (the marker is drawn
+// on that point's projection, so a hit at the edge of the spread cone marks
+// the edge), and whether it landed on the plate carrier (the armour clink).
+static v3         g_hitmark_at, g_hitmark_at_pend;
+static int        g_hitmark_plate, g_hitmark_plate_pend;
 static float      g_ch_kick;   // crosshair gap kick, in virtual px, decaying
 // HIT-STOP. The player's own KILL only, and bounded twice over.
 //
@@ -22885,6 +24938,26 @@ static v3       g_blast_p;
 static int      g_scorch_at;
 
 // Spoons in the air: presentation only, tumbling once and gone.
+// DEBRIS: masonry and concrete do not only throw dust, they spall — a few
+// solid chips of the struck surface's own colour that tumble out, bounce and
+// lie on the floor until they fade. Solid geometry (scene pass, they cast),
+// presentation only.
+typedef struct { v3 pos, prev, vel, axis, col; float a, spin, sz; int life; } chip_t;
+// SPENT MAGAZINES ON THE FLOOR. An empty reload drops the magazine free, and
+// it has to LAND somewhere: it falls from the shooter's magwell, skips once and
+// lies on its side for ~9 s before it sinks away. Every shooter's, bots too —
+// a magazine on the ground is a tell of where a fight was. Presentation only.
+typedef struct { v3 pos, prev, vel, axis; float a, spin, head; int life, delay, src, wpn, rest; } wmag_t;
+#define MAX_WMAGS 24
+static wmag_t g_wmags[MAX_WMAGS];
+static int g_wmag_at;
+#define MAX_CHIPS 48
+static chip_t g_chips[MAX_CHIPS];
+static int g_chip_at;
+static float g_wpn_heat;          // the player's barrel, 0..1.6, presentation only
+static int g_wpn_heat_tick;       // last shot
+static v3  g_fx_muzzle_vis;       // the drawn muzzle, published by the renderer
+static int g_fx_muz_live_vis;
 #define MAX_SPOONS 8
 typedef struct { v3 pos, prev, vel, axis; float a; int life; } spoon_t;
 static spoon_t g_spoons[MAX_SPOONS];
@@ -22897,11 +24970,11 @@ static spoon_t g_spoons[MAX_SPOONS];
 // the body of the hit, the sparks are its edge. Oldest-first eviction, so a long
 // burst simply recycles its own earliest clouds.
 #define MAX_DUST 96
-typedef struct { v3 pos, vel, col; float r0, r1; int life, life0; } dust_t;
+typedef struct { v3 pos, vel, col; float r0, r1; int life, life0, wisp; } dust_t;
 static dust_t g_dust[MAX_DUST];
 static int    g_dust_at;
 static void dust_add(v3 pos, v3 vel, v3 col, float r0, float r1, int life) {
-  g_dust[g_dust_at] = (dust_t){pos, vel, col, r0, r1, life, life};
+  g_dust[g_dust_at] = (dust_t){pos, vel, col, r0, r1, life, life, 0};
   g_dust_at = (g_dust_at + 1) % MAX_DUST;
 }
 
@@ -23144,6 +25217,8 @@ static void vfx_on_event(const event_t *e) {
       }
     }
     if (e->src == g_local_ent) {
+      g_wpn_heat = fminf(g_wpn_heat + (e->wpn == WPN_SR ? 0.30f : e->wpn == WPN_PT ? 0.10f : 0.075f), 1.6f);
+      g_wpn_heat_tick = (int)g_tick;
       g_muzzle_t = flash_ticks(e->wpn);
       g_muzzle_fresh = 1;             // one guaranteed bright frame, any fps
       g_muzzle_fire_tick = g_tick;
@@ -23174,7 +25249,7 @@ static void vfx_on_event(const event_t *e) {
     // theme's ground is. The spark COUNT only ever goes down from
     // IMPACT_SPARKS, so the reserve impact_free_slot keeps is unchanged.
     int sm = e->i >= 0 && e->i < g_num_solids ? g_solid_mat[e->i] : -1;
-    int metal = sm == SMAT_CLAD || sm == SMAT_CONTAINER;
+    int metal = smat_metal(sm);
     int nsp = metal ? IMPACT_SPARKS : sm == SMAT_WOOD ? IMPACT_SPARKS / 3
             : sm < 0 ? IMPACT_SPARKS / 2 : (IMPACT_SPARKS * 2) / 3;
     float heat = metal ? 1.15f : sm == SMAT_WOOD ? 0.55f : sm < 0 ? 0.70f : 0.80f;
@@ -23207,6 +25282,33 @@ static void vfx_on_event(const event_t *e) {
             : sm == SMAT_WOOD ? (v3){{0.19f, 0.14f, 0.08f}}
             : sand ? (v3){{0.22f, 0.17f, 0.10f}}
             : (v3){{0.15f, 0.15f, 0.14f}};
+      // THE CITADEL IS SANDSTONE AND LIME: a round into it raises a warm plume,
+      // bigger and longer than grey concrete's puff.
+      if (g_map_id == 4 && (sm == SMAT_STUCCO || sm == SMAT_STONE || sm == SMAT_CONCRETE || sm < 0)) {
+        dc = (v3){{0.24f, 0.18f, 0.11f}};
+        np += 2;
+        big *= 1.35f;
+      }
+      // Spall chips of the host's own colour.
+      {
+        v3 hc = e->i >= 0 && e->i < g_num_solids ? g_solids[e->i].color : g_theme.ground;
+        int nch = sm == SMAT_WOOD ? 2 : 3 + (int)(dh % 3u);
+        for (int k = 0; k < nch; k++) {
+          v3 t1, t2;
+          axis_frame(e->b, &t1, &t2);
+          chip_t *c = &g_chips[g_chip_at];
+          g_chip_at = (g_chip_at + 1) % MAX_CHIPS;
+          v3 v = v3_add(v3_scale(e->b, skid_r(&dh, 1.2f, 3.4f)),
+                 v3_add(v3_scale(t1, skid_r(&dh, -1.6f, 1.6f)), v3_scale(t2, skid_r(&dh, -1.6f, 1.6f))));
+          v3 ax = v3_norm((v3){{skid_r(&dh, -1, 1), skid_r(&dh, -1, 1), skid_r(&dh, -1, 1) + 0.01f}});
+          float tn = skid_r(&dh, 0.55f, 0.95f);
+          *c = (chip_t){.pos = v3_add(e->a, v3_scale(e->b, 0.02f)), .vel = v, .axis = ax,
+                        .col = v3_scale(hc, tn), .a = skid_r(&dh, 0.0f, F_TAU),
+                        .spin = skid_r(&dh, 9.0f, 26.0f), .sz = skid_r(&dh, 0.006f, 0.016f),
+                        .life = 360};
+          c->prev = c->pos;
+        }
+      }
       for (int k = 0; k < np; k++) {
         v3 t1, t2;
         axis_frame(e->b, &t1, &t2);
@@ -23334,6 +25436,8 @@ static void vfx_on_event(const event_t *e) {
       int arm = (int)(WPN_DEF[g_vfx_wpn].sfx_hit_t * (float)TICK_HZ + 0.5f);
       g_hitmark_arm = arm > HITMARK_ARM_MIN ? arm : HITMARK_ARM_MIN;
       g_hitmark_pend = e->type == EV_HIT_HEAD ? HM_HEAD : HM_BODY;
+      g_hitmark_at_pend = e->a;
+      g_hitmark_plate_pend = hit_on_plate(e);
     } else if (e->dst == g_local_ent) {   // taking damage: flash + direction memory
       g_dmg_t = DMG_TICKS;
       // Refresh the slot already pointing that way (same shooter keeping fire on
@@ -23432,7 +25536,30 @@ static void vfx_on_event(const event_t *e) {
   // visual has to be answered here or the build fails.
   case EV_DRYFIRE:
   case EV_RELOAD:
+    if (!e->k && (e->wpn == WPN_AR || e->wpn == WPN_SR) && e->src >= 0) {
+      // Released at 21.5% of the reload (gun_anim's release beat), from the
+      // magwell: hip height, a forearm in front of the body.
+      float yaw = ent_yaw(e->src);
+      v3 fw = {{sinf(yaw), 0.0f, -cosf(yaw)}}, rt = {{cosf(yaw), 0.0f, sinf(yaw)}};
+      uint32_t mh = fx_hash((uint32_t)g_tick * 2246822519u ^ (uint32_t)e->src);
+      wmag_t *q = &g_wmags[g_wmag_at];
+      g_wmag_at = (g_wmag_at + 1) % MAX_WMAGS;
+      *q = (wmag_t){.pos = v3_add(e->a, v3_add(v3_scale(fw, 0.34f), v3_add(v3_scale(rt, 0.06f),
+                                                (v3){{0, 1.02f, 0}}))),
+                    .vel = v3_add(v3_scale(rt, skid_r(&mh, -0.3f, 0.2f)), (v3){{0, -0.6f, 0}}),
+                    .axis = v3_norm(v3_add(rt, (v3){{0, skid_r(&mh, -0.3f, 0.3f), 0}})),
+                    .a = 0.0f, .spin = skid_r(&mh, 5.0f, 9.0f), .head = yaw + skid_r(&mh, -0.8f, 0.8f),
+                    .life = 9 * TICK_HZ, .src = e->src, .wpn = e->wpn,
+                    .delay = (int)(0.215f * (float)WPN_DEF[e->wpn].reload_ticks)};
+      q->prev = q->pos;
+    }
+    break;
   case EV_RELOAD_CANCEL:
+    // A cancelled reload before the release never dropped anything.
+    for (int i = 0; i < MAX_WMAGS; i++)
+      if (g_wmags[i].life > 0 && g_wmags[i].src == e->src && g_wmags[i].delay > 0)
+        g_wmags[i].life = 0;
+    break;
   case EV_MELEE: break;
   case EV_NADE:
     if (!e->k && g_online) nade_add(e->a, e->b, e->i, e->src);
@@ -23876,6 +26003,74 @@ static void vfx_tick(void) {
       if (q->pos.y < q->r0) q->pos.y = q->r0;
     }
   if (g_online) nade_tick(0);
+  for (int i = 0; i < MAX_WMAGS; i++)
+    if (g_wmags[i].life > 0) {
+      wmag_t *q = &g_wmags[i];
+      if (q->delay > 0) {   // still in the gun: ride along with the shooter
+        q->delay--;
+        float yaw = ent_yaw(q->src);
+        v3 fw = {{sinf(yaw), 0.0f, -cosf(yaw)}}, rt = {{cosf(yaw), 0.0f, sinf(yaw)}};
+        q->pos = v3_add(ent_pos(q->src), v3_add(v3_scale(fw, 0.34f),
+                        v3_add(v3_scale(rt, 0.06f), (v3){{0, 1.02f, 0}})));
+        q->prev = q->pos;
+        continue;
+      }
+      q->life--;
+      q->prev = q->pos;
+      if (q->rest) {        // the last two seconds: sink into the floor
+        if (q->life < 2 * TICK_HZ) q->pos.y -= 0.03f * TICK_DT;
+        continue;
+      }
+      q->vel.y -= 9.81f * TICK_DT;
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      q->a += q->spin * TICK_DT;
+      float fl = rag_support(q->pos) + 0.013f;
+      if (q->pos.y < fl && q->vel.y < 0.0f) {
+        q->pos.y = fl;
+        if (q->vel.y > -1.2f) { q->rest = 1; q->vel = (v3){{0, 0, 0}}; }
+        else {
+          q->vel = (v3){{q->vel.x * 0.35f, -q->vel.y * 0.22f, q->vel.z * 0.35f}};
+          q->spin *= 0.4f;
+          // A polymer box on concrete: a dull clack, by distance.
+          v3 dl = v3_sub(q->pos, g_cam_eye);
+          float dd = v3_len(dl);
+          float pan = dd > 1e-3f ? f_clamp(v3_dot(dl, R.cam_rgt) / dd, -1.0f, 1.0f) : 0.0f;
+          if (dd < 14.0f)
+            audio_play(SFX_NADE_BOUNCE, 0.45f / (1.0f + dd * 0.3f), 1.55f, pan, dd / 343.0f);
+        }
+      }
+    }
+  for (int i = 0; i < MAX_CHIPS; i++)
+    if (g_chips[i].life > 0) {
+      chip_t *q = &g_chips[i];
+      q->life--;
+      q->prev = q->pos;
+      if (q->spin == 0.0f) continue;            // at rest
+      q->vel.y -= 9.81f * TICK_DT;
+      q->pos = v3_add(q->pos, v3_scale(q->vel, TICK_DT));
+      q->a += q->spin * TICK_DT;
+      float fl = rag_support(q->pos) + q->sz * 0.5f;
+      if (q->pos.y < fl && q->vel.y < 0.0f) {
+        q->pos.y = fl;
+        q->vel = (v3){{q->vel.x * 0.45f, -q->vel.y * 0.30f, q->vel.z * 0.45f}};
+        q->spin *= 0.5f;
+        if (q->vel.y < 0.35f) { q->vel = (v3){{0, 0, 0}}; q->spin = 0.0f; }
+      }
+    }
+  // THE BARREL COOLS, and while it is still hot after a burst it smokes: thin
+  // wisps rising off the muzzle once the trigger is off.
+  g_wpn_heat *= expf(-0.32f * TICK_DT);
+  if (g_wpn_heat > 0.55f && g_tick - g_wpn_heat_tick > 8 && (g_tick % 6) == 0 &&
+      g_fx_muz_live_vis) {
+    uint32_t wh = fx_hash((uint32_t)g_tick * 0x9E3779B9u);
+    float k = f_clamp((g_wpn_heat - 0.55f) * 1.4f, 0.0f, 1.0f);
+    dust_add(g_fx_muzzle_vis, (v3){{skid_r(&wh, -0.05f, 0.05f), skid_r(&wh, 0.18f, 0.34f), skid_r(&wh, -0.05f, 0.05f)}},
+             v3_scale((v3){{0.20f, 0.20f, 0.21f}}, 0.6f + 0.6f * k), 0.008f, skid_r(&wh, 0.04f, 0.07f),
+             (int)skid_r(&wh, 70.0f, 120.0f));
+    // A wisp lives at the muzzle, half a metre from the lens: it opts out of
+    // the near-lens ease every other burst takes (see the dust draw).
+    g_dust[(g_dust_at + MAX_DUST - 1) % MAX_DUST].wisp = 1;
+  }
   for (int i = 0; i < MAX_SPOONS; i++)
     if (g_spoons[i].life > 0) {
       spoon_t *q = &g_spoons[i];
@@ -23961,6 +26156,13 @@ static void vfx_tick(void) {
         float fl = rag_support(q->pos) + 0.012f;
         if (q->pos.y < fl) {
           q->pos.y = fl;
+          if (q->vel.y < -0.6f) {   // a real landing, not the settling chatter
+            v3 dl = v3_sub(q->pos, g_cam_eye);
+            float dd = v3_len(dl);
+            float pan = dd > 1e-3f ? f_clamp(v3_dot(dl, R.cam_rgt) / dd, -1.0f, 1.0f) : 0.0f;
+            float gn = f_clamp(-q->vel.y * 0.28f, 0.15f, 1.0f) / (1.0f + dd * 0.35f);
+            audio_play(SFX_BRASS, gn * 0.85f, 0.92f + 0.16f * q->sz - 0.08f, pan, 0.0f);
+          }
           q->vel.y *= -0.34f;
           q->vel.x *= 0.55f;
           q->vel.z *= 0.55f;
@@ -24059,6 +26261,8 @@ static void vfx_tick(void) {
   if (g_muzzle_t > 0) g_muzzle_t--;
   if (g_hitmark_arm > 0 && --g_hitmark_arm == 0) {
     g_hitmark_kind = g_hitmark_pend;
+    g_hitmark_at = g_hitmark_at_pend;
+    g_hitmark_plate = g_hitmark_plate_pend && g_hitmark_pend < HM_KILL;
     g_hitmark_t = g_hitmark_kind >= HM_KILL ? KILLMARK_TICKS : HITMARK_TICKS;
     // A hit KICKS the crosshair open and it springs back — the reaction lands
     // on the one element the player is already staring at, and it costs one
@@ -24179,6 +26383,10 @@ static void scene_drop_note(void) {
     fprintf(stderr, "scene: SCENE_MAX_VERTS exhausted — geometry dropped\n");
 }
 
+// The static-world material a SCENE vertex carries (0 = none): only set
+// while props and decor are built into the world mesh, where uDetail decodes
+// it from the AO channel exactly as mesh_push's g_mesh_mat.
+static int g_scene_smat;
 static inline void scene_push(v3 p, v3 n, v3 c) {
   // The peak tracks DEMAND, not what fitted. Peaking on g_scene_floats made the
   // one case the number exists for — an actual overflow — the one case it could
@@ -24196,7 +26404,7 @@ static inline void scene_push(v3 p, v3 n, v3 c) {
   v[0] = p.x; v[1] = p.y; v[2] = p.z;
   v[3] = n.x; v[4] = n.y; v[5] = n.z;
   v[6] = c.x; v[7] = c.y; v[8] = c.z;
-  v[9] = g_mat_rough; v[10] = g_mat_metal; v[11] = ao_at(p.y) * g_ao_mul;
+  v[9] = g_mat_rough; v[10] = g_mat_metal; v[11] = ao_at(p.y) * g_ao_mul + 4.0f * (float)g_scene_smat;
   g_scene_floats += VERT_FLOATS;
 }
 
@@ -24664,6 +26872,1405 @@ static void dec_clump(v3 at, v3 o, v3 wind, const theme_t *th, v3 host,
   }
 }
 
+// ===========================================================================
+// TOWN DRESSING — the architectural detail a block-out never has, generated
+// from the solids that are already there. Same rules as the rest of the
+// decor: render-only, never a solid, and never anything that could hide a
+// player a round would pass through. Everything below either sits on a face
+// that is already solid (a frame in a window recess, a flange on a pipe, a
+// moulding on a facade above head height) or is too thin to hide anything
+// (a cable 4 m up).
+// ===========================================================================
+static int dec_inside(v3 p) {
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *s = &g_solids[i];
+    if (p.x > s->min.x && p.x < s->max.x && p.y > s->min.y && p.y < s->max.y &&
+        p.z > s->min.z && p.z < s->max.z) return 1;
+  }
+  return 0;
+}
+static int dec_same(v3 a, v3 b) {
+  return fabsf(a.x - b.x) + fabsf(a.y - b.y) + fabsf(a.z - b.z) < 1e-4f;
+}
+// An axis-aligned box from two corners, through the scene primitive.
+static void dec_box(v3 a, v3 b, v3 col) {
+  v3 c = v3_scale(v3_add(a, b), 0.5f);
+  v3 h = v3_scale(v3_sub(b, a), 0.5f);
+  scene_box(c, (v3){{fabsf(h.x), 0, 0}}, (v3){{0, fabsf(h.y), 0}}, (v3){{0, 0, fabsf(h.z)}}, col);
+}
+// A box on a face: `ax` is the axis the face's normal lies on (0 = x, 2 = z),
+// `sg` the normal's sign, `pl` the face plane; u is along the face, y up, and
+// t0..t1 how far OUT of the face it stands.
+static void dec_fbox(int ax, float sg, float pl, float u0, float u1, float y0, float y1,
+                     float t0, float t1, v3 col) {
+  float d0 = pl + sg * t0, d1 = pl + sg * t1;
+  if (ax == 0) dec_box((v3){{fminf(d0, d1), y0, u0}}, (v3){{fmaxf(d0, d1), y1, u1}}, col);
+  else         dec_box((v3){{u0, y0, fminf(d0, d1)}}, (v3){{u1, y1, fmaxf(d0, d1)}}, col);
+}
+// A thin bar between two points (a cable segment, a handwheel spoke).
+static void dec_bar(v3 a, v3 b, float r, v3 col) {
+  v3 d = v3_sub(b, a);
+  float l = v3_len(d);
+  if (l < 1e-4f) return;
+  v3 z = v3_scale(d, 1.0f / l);
+  v3 up = fabsf(z.y) > 0.9f ? (v3){{1, 0, 0}} : (v3){{0, 1, 0}};
+  v3 x = v3_norm(v3_cross(up, z)), y = v3_cross(z, x);
+  scene_box(v3_scale(v3_add(a, b), 0.5f), v3_scale(x, r), v3_scale(y, r), v3_scale(z, l * 0.5f), col);
+}
+// Which side of a thin slab is the street: a probe a little past each big
+// face, below the slab's own top (where a house's interior is its solid core).
+static int dec_out_side(const solid_t *s, int ax, float probe_y) {
+  float c = ax == 0 ? (s->min.z + s->max.z) * 0.5f : (s->min.x + s->max.x) * 0.5f;
+  v3 pp = ax == 0 ? (v3){{s->max.x + 0.45f, probe_y, c}} : (v3){{c, probe_y, s->max.z + 0.45f}};
+  v3 pn = ax == 0 ? (v3){{s->min.x - 0.45f, probe_y, c}} : (v3){{c, probe_y, s->min.z - 0.45f}};
+  int ip = dec_inside(pp), in = dec_inside(pn);
+  if (ip == in) return 0;
+  return ip ? -1 : 1;
+}
+
+// The cable sag: a real catenary y = a(cosh(x/a) - 1), with `a` solved by
+// bisection for the requested sag, so a long span droops more than a parabola
+// would in the middle and less near the anchors.
+static float catenary_a(float span, float sag) {
+  float lo = 0.05f, hi = 1e4f;
+  for (int i = 0; i < 48; i++) {
+    float a = 0.5f * (lo + hi);
+    float s_ = a * (coshf(span * 0.5f / a) - 1.0f);
+    if (s_ > sag) lo = a; else hi = a;
+  }
+  return 0.5f * (lo + hi);
+}
+static void dec_cable(v3 p0, v3 p1, v3 col) {
+  v3 d = v3_sub(p1, p0);
+  float span = sqrtf(d.x * d.x + d.z * d.z);
+  float sag = 0.03f * span + 0.12f;
+  float a = catenary_a(span, sag);
+  const int N = 14;
+  v3 prev = p0;
+  for (int i = 1; i <= N; i++) {
+    float t = (float)i / (float)N;
+    float x = (t - 0.5f) * span;
+    float y = a * (coshf(x / a) - coshf(span * 0.5f / a));   // 0 at both ends
+    v3 q = v3_add(v3_lerp(p0, p1, t), (v3){{0, y, 0}});
+    dec_bar(prev, q, 0.011f, col);
+    prev = q;
+  }
+}
+
+static void pbox_v(v3 c, v3 ex, v3 ey, v3 ez, v3 col);
+static void pcyl(v3 c, v3 ax, float r, float hl, int segs, v3 col);
+// A 5x7 dot font for the signs and stencils: each glyph is seven rows of five
+// bits, MSB on the left. Only the characters the towns actually spell.
+static const struct { char c; uint8_t r[7]; } DOT_FONT[] = {
+  {'A', {14, 17, 17, 31, 17, 17, 17}}, {'B', {30, 17, 17, 30, 17, 17, 30}},
+  {'C', {14, 17, 16, 16, 16, 17, 14}}, {'D', {30, 17, 17, 17, 17, 17, 30}},
+  {'E', {31, 16, 16, 30, 16, 16, 31}}, {'F', {31, 16, 16, 30, 16, 16, 16}},
+  {'G', {14, 17, 16, 23, 17, 17, 15}}, {'H', {17, 17, 17, 31, 17, 17, 17}},
+  {'I', {14, 4, 4, 4, 4, 4, 14}},      {'K', {17, 18, 20, 24, 20, 18, 17}},
+  {'L', {16, 16, 16, 16, 16, 16, 31}}, {'M', {17, 27, 21, 21, 17, 17, 17}},
+  {'N', {17, 25, 21, 19, 17, 17, 17}}, {'O', {14, 17, 17, 17, 17, 17, 14}},
+  {'P', {30, 17, 17, 30, 16, 16, 16}}, {'R', {30, 17, 17, 30, 20, 18, 17}},
+  {'S', {15, 16, 16, 14, 1, 1, 30}},   {'T', {31, 4, 4, 4, 4, 4, 4}},
+  {'U', {17, 17, 17, 17, 17, 17, 14}}, {'V', {17, 17, 17, 17, 17, 10, 4}},
+  {'W', {17, 17, 17, 21, 21, 27, 17}}, {'X', {17, 17, 10, 4, 10, 17, 17}},
+  {'Y', {17, 17, 10, 4, 4, 4, 4}},     {'Z', {31, 1, 2, 4, 8, 16, 31}},
+  {'0', {14, 17, 19, 21, 25, 17, 14}}, {'1', {4, 12, 4, 4, 4, 4, 14}},
+  {'2', {14, 17, 1, 2, 4, 8, 31}},     {'3', {30, 1, 1, 14, 1, 1, 30}},
+  {'4', {2, 6, 10, 18, 31, 2, 2}},     {'5', {31, 16, 30, 1, 1, 17, 14}},
+  {'6', {6, 8, 16, 30, 17, 17, 14}},   {'7', {31, 1, 2, 4, 8, 8, 8}},
+  {'8', {14, 17, 17, 14, 17, 17, 14}}, {'9', {14, 17, 17, 15, 1, 2, 12}},
+  {'-', {0, 0, 0, 31, 0, 0, 0}},       {'.', {0, 0, 0, 0, 0, 12, 12}},
+};
+static const uint8_t *dot_glyph(char c) {
+  for (size_t i = 0; i < sizeof DOT_FONT / sizeof DOT_FONT[0]; i++)
+    if (DOT_FONT[i].c == c) return DOT_FONT[i].r;
+  return NULL;
+}
+// Lay text on a face: `o` the text's top-left on the face, `u` one dot pitch
+// along the line, `v` one dot pitch DOWN, `nrm` the face normal. Each lit dot
+// is a quad `dot` pitches across; `lift` stands it off the face.
+static void dot_text(const char *t, v3 o, v3 u, v3 v, v3 nrm, float dot, float lift, v3 col) {
+  v3 base = v3_add(o, v3_scale(nrm, lift));
+  for (int ci = 0; t[ci]; ci++) {
+    const uint8_t *g = dot_glyph(t[ci]);
+    if (g)
+      for (int r = 0; r < 7; r++)
+        for (int k = 0; k < 5; k++) {
+          if (!(g[r] & (16 >> k))) continue;
+          v3 p = v3_add(base, v3_add(v3_scale(u, (float)(ci * 6 + k)), v3_scale(v, (float)r)));
+          v3 du = v3_scale(u, dot), dv = v3_scale(v, dot);
+          v3 a = p, b = v3_add(p, du), c = v3_add(p, v3_add(du, dv)), d = v3_add(p, dv);
+          if (v3_dot(v3_cross(v3_sub(b, a), v3_sub(d, a)), nrm) > 0.0f) scene_quad(a, b, c, d, nrm, col);
+          else scene_quad(a, d, c, b, nrm, col);
+        }
+  }
+}
+static int dot_len(const char *t) { return (int)strlen(t) * 6 - 1; }
+
+// A SHIPPING CONTAINER, dressed: the eight ISO corner castings, the door end's
+// four locking bars with their handles, and the owner code stencilled on the
+// side. The box is a solid; all of this sits within 3 cm of its faces.
+static void dec_container(const solid_t *s, int idx) {
+  v3 mn = s->min, mx = s->max;
+  int alx = (mx.x - mn.x) > (mx.z - mn.z);           // long axis along x?
+  v3 cast = v3_scale(s->color, 0.55f);
+  mat_set(0.6f, 0.3f);
+  for (int k = 0; k < 8; k++) {
+    float x = k & 1 ? mx.x : mn.x, y = k & 2 ? mx.y : mn.y, z = k & 4 ? mx.z : mn.z;
+    float sx = k & 1 ? -1.0f : 1.0f, sy = k & 2 ? -1.0f : 1.0f, sz = k & 4 ? -1.0f : 1.0f;
+    dec_box((v3){{fminf(x, x + sx * 0.17f) - 0.006f, fminf(y, y + sy * 0.12f) - 0.006f, fminf(z, z + sz * 0.17f) - 0.006f}},
+            (v3){{fmaxf(x, x + sx * 0.17f) + 0.006f, fmaxf(y, y + sy * 0.12f) + 0.006f, fmaxf(z, z + sz * 0.17f) + 0.006f}}, cast);
+  }
+  // Door end: the +long-axis face.
+  float H0 = mn.y + 0.12f, H1 = mx.y - 0.12f;
+  mat_set(0.45f, 0.7f);
+  v3 rod = rgb(0.22f, 0.23f, 0.24f);
+  float wid = alx ? (mx.z - mn.z) : (mx.x - mn.x);
+  for (int r = 0; r < 4; r++) {
+    float u = (alx ? mn.z : mn.x) + wid * (0.16f + 0.225f * (float)r);
+    v3 c0 = alx ? (v3){{mx.x + 0.035f, (H0 + H1) * 0.5f, u}} : (v3){{u, (H0 + H1) * 0.5f, mx.z + 0.035f}};
+    pcyl(c0, (v3){{0, 1, 0}}, 0.017f, (H1 - H0) * 0.5f, 6, rod);
+    // Handle, a third of the way up, and the cam keepers top and bottom.
+    v3 hd = alx ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}};
+    v3 hc = v3_add(c0, v3_add((v3){{0, -(H1 - H0) * 0.18f, 0}}, v3_scale(hd, 0.09f)));
+    dec_bar(v3_add(c0, (v3){{0, -(H1 - H0) * 0.18f, 0}}), v3_add(hc, v3_scale(hd, 0.09f)), 0.012f, rod);
+  }
+  // The door seam down the middle of the end.
+  float um = (alx ? mn.z + mx.z : mn.x + mx.x) * 0.5f;
+  if (alx) dec_box((v3){{mx.x, mn.y + 0.1f, um - 0.008f}}, (v3){{mx.x + 0.012f, mx.y - 0.1f, um + 0.008f}}, v3_scale(s->color, 0.4f));
+  else     dec_box((v3){{um - 0.008f, mn.y + 0.1f, mx.z}}, (v3){{um + 0.008f, mx.y - 0.1f, mx.z + 0.012f}}, v3_scale(s->color, 0.4f));
+  // THE OWNER CODE: four letters, U, a six-digit serial — stencilled in white
+  // near the top of one long side, as every real box carries it.
+  static const char *PFX[] = {"BDXU", "MSKU", "TGHU", "CAIU", "HLXU", "OOLU"};
+  char code[16];
+  uint32_t hsh = (uint32_t)idx * 2654435761u ^ 0x5EEDu;
+  snprintf(code, sizeof code, "%s %06u", PFX[hsh % 6u], (unsigned)((hsh >> 4) % 1000000u));
+  float pitch = 0.024f;
+  float len = (float)dot_len(code) * pitch;
+  mat_set(0.7f, 0.0f);
+  v3 wht = rgb(0.86f, 0.86f, 0.84f);
+  if (alx) {
+    float x0 = mx.x - 0.5f - len;
+    dot_text(code, (v3){{x0, mx.y - 0.32f, mx.z}}, (v3){{pitch, 0, 0}}, (v3){{0, -pitch, 0}},
+             (v3){{0, 0, 1}}, 0.8f, 0.004f, wht);
+  } else {
+    float z0 = mx.z - 0.5f - len;
+    dot_text(code, (v3){{mn.x, mx.y - 0.32f, z0}}, (v3){{0, 0, pitch}}, (v3){{0, -pitch, 0}},
+             (v3){{-1, 0, 0}}, 0.8f, 0.004f, wht);
+  }
+}
+
+// AN LED SIGN on a facade: a dark backing board, a thin frame, and the text
+// as lit dots (SMAT_LED — always on, and it blooms). `o` is the sign's
+// centre on the face, `u` along the face, `nrm` out of it.
+static void dec_sign(const char *text, v3 o, v3 u, v3 nrm, v3 led) {
+  float pitch = 0.050f;
+  float len = (float)dot_len(text) * pitch, hgt = 7.0f * pitch;
+  float bw = len * 0.5f + 0.14f, bh = hgt * 0.5f + 0.10f;
+  mat_set(0.5f, 0.2f);
+  pbox_v(v3_add(o, v3_scale(nrm, 0.04f)), v3_scale(u, bw), (v3){{0, bh, 0}}, v3_scale(nrm, 0.04f),
+         rgb(0.05f, 0.05f, 0.055f));
+  mat_set(0.3f, 0.8f);
+  pbox_v(v3_add(o, v3_add(v3_scale(nrm, 0.045f), (v3){{0, bh, 0}})), v3_scale(u, bw + 0.02f),
+         (v3){{0, 0.02f, 0}}, v3_scale(nrm, 0.045f), rgb(0.35f, 0.36f, 0.37f));
+  pbox_v(v3_add(o, v3_add(v3_scale(nrm, 0.045f), (v3){{0, -bh, 0}})), v3_scale(u, bw + 0.02f),
+         (v3){{0, 0.02f, 0}}, v3_scale(nrm, 0.045f), rgb(0.35f, 0.36f, 0.37f));
+  g_scene_smat = SMAT_LED;
+  mat_set(0.3f, 0.0f);
+  v3 tl = v3_add(o, v3_add(v3_scale(u, -len * 0.5f), (v3){{0, hgt * 0.5f, 0}}));
+  dot_text(text, tl, v3_scale(u, pitch), (v3){{0, -pitch, 0}}, nrm, 0.62f, 0.082f, led);
+  g_scene_smat = 0;
+}
+
+static void dec_town(int town) {
+  const town_style_t *ts = &g_town;
+  uint64_t save = g_rng_dec;
+  g_rng_dec = (uint64_t)(g_map_seed ^ 0x70A7u) * 2654435761u + 7;
+  float save_cham = g_cham;
+  g_cham = 0.0f;
+  ao_set(0.0f, 1.0f, 1.0f);
+  v3 iron = rgb(0.10f, 0.10f, 0.11f), timber = v3_scale(ts->door, 0.85f);
+  v3 trim_l = v3_scale(ts->trim, 1.06f);
+  enum { MAX_ANCH = 512 };
+  static v3 anch[MAX_ANCH];
+  static int anch_s[MAX_ANCH];
+  int na = 0;
+  int n0 = g_num_solids;
+  int n_signs = 0;
+  for (int i = 0; i < n0; i++) {
+    const solid_t *s = &g_solids[i];
+    v3 mn = s->min, mx = s->max;
+    float sx = mx.x - mn.x, sy = mx.y - mn.y, sz = mx.z - mn.z;
+    // --- PARAPETS: a crown moulding under the coping, outside only -----------
+    if (dec_same(s->color, ts->trim) && fabsf(sy - 0.70f) < 0.02f && mn.y > 2.9f &&
+        (fabsf(sx - 0.25f) < 0.02f || fabsf(sz - 0.25f) < 0.02f)) {
+      int ax = fabsf(sx - 0.25f) < 0.02f ? 0 : 2;
+      int o = dec_out_side(s, ax, mn.y - 0.6f);
+      if (o) {
+        float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+        float u0 = ax == 0 ? mn.z : mn.x, u1 = ax == 0 ? mx.z : mx.x;
+        float Hb = mn.y, Ht = mx.y;
+        // Citadel: a three-step lime cornice. The ports: a single steel coping.
+        if (town == 0) {
+          dec_fbox(ax, (float)o, pl, u0, u1, Hb - 0.093f, Hb + 0.013f, 0.0f, 0.105f, trim_l);
+          dec_fbox(ax, (float)o, pl, u0, u1, Hb - 0.177f, Hb - 0.093f, 0.0f, 0.067f, ts->trim);
+          dec_fbox(ax, (float)o, pl, u0, u1, Hb - 0.243f, Hb - 0.177f, 0.0f, 0.033f, trim_l);
+        } else {
+          dec_fbox(ax, (float)o, pl, u0, u1, Hb - 0.063f, Hb - 0.011f, 0.0f, 0.045f,
+                   rgb(0.30f, 0.31f, 0.33f));
+        }
+        dec_fbox(ax, (float)o, pl, u0 - 0.017f, u1 + 0.017f, Ht - 0.047f, Ht - 0.003f, 0.0f, 0.037f,
+                 town == 0 ? trim_l : rgb(0.34f, 0.35f, 0.37f));       // drip edge
+        // Cable anchors at both ends of the run, just under the coping.
+        for (int e = 0; e < 2 && na < MAX_ANCH; e++) {
+          float u = e ? u1 - 0.2f : u0 + 0.2f;
+          float d = pl + (float)o * 0.06f;
+          anch[na] = ax == 0 ? (v3){{d, Hb - 0.35f, u}} : (v3){{u, Hb - 0.35f, d}};
+          anch_s[na++] = i;
+        }
+      }
+      continue;
+    }
+    // --- WINDOWS: a frame in the reveal, and bars or louvers in front --------
+    if (dec_same(s->color, ts->glass) && sy > 1.0f && sy < 1.5f &&
+        (sx < 0.32f || sz < 0.32f)) {
+      int ax = sx < sz ? 0 : 2;
+      int o = dec_out_side(s, ax, (mn.y + mx.y) * 0.5f);
+      if (!o) continue;
+      float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+      float u0 = ax == 0 ? mn.z : mn.x, u1 = ax == 0 ? mx.z : mx.x;
+      float y0 = mn.y, y1 = mx.y, fw = 0.055f;
+      int ground = y0 < 1.5f;
+      float deep = ground ? 0.0f : 0.11f;      // how much recess there is to use
+      v3 fc = v3_scale(ts->trim, 0.92f);
+      dec_fbox(ax, (float)o, pl, u0, u1, y1 - fw, y1, 0.0f, 0.03f, fc);         // head
+      dec_fbox(ax, (float)o, pl, u0, u1, y0, y0 + fw, 0.0f, 0.03f, fc);         // sill
+      dec_fbox(ax, (float)o, pl, u0, u0 + fw, y0 + fw, y1 - fw, 0.0f, 0.03f, fc);
+      dec_fbox(ax, (float)o, pl, u1 - fw, u1, y0 + fw, y1 - fw, 0.0f, 0.03f, fc);
+      if ((u1 - u0) > 1.4f)                                                        // mullion
+        dec_fbox(ax, (float)o, pl, (u0 + u1) * 0.5f - 0.025f, (u0 + u1) * 0.5f + 0.025f,
+                 y0 + fw, y1 - fw, 0.0f, 0.022f, fc);
+      uint32_t r = (uint32_t)(dr(0.0f, 1.0f) * 1000.0f);
+      if (town == 0 && ground && r % 2 == 0) {
+        // SECURITY BARS on a street-level window: square iron at 12 cm, two
+        // flat rails, set 5 cm proud of the glass.
+        for (float u = u0 + 0.11f; u < u1 - 0.07f; u += 0.15f)
+          dec_fbox(ax, (float)o, pl, u - 0.008f, u + 0.008f, y0 + fw, y1 - fw, 0.035f, 0.051f, iron);
+        dec_fbox(ax, (float)o, pl, u0 + fw, u1 - fw, y0 + 0.28f, y0 + 0.31f, 0.031f, 0.055f, iron);
+        dec_fbox(ax, (float)o, pl, u0 + fw, u1 - fw, y1 - 0.31f, y1 - 0.28f, 0.031f, 0.055f, iron);
+      } else if (town == 0 && deep > 0.0f && r % 4 == 1) {
+        // WOODEN LOUVERS, inside the 12 cm reveal: tilted slats, closed half
+        // way, so the window reads as shuttered against the sun.
+        v3 tl = tint(timber, 0.85f, 1.1f);
+        for (float y = y0 + fw + 0.05f; y < y1 - fw - 0.03f; y += 0.09f) {
+          float c = 0.045f;
+          v3 a, b;
+          if (ax == 0) { a = (v3){{pl + (float)o * 0.012f, y - 0.03f, u0 + fw}}; b = (v3){{pl + (float)o * 0.012f + (float)o * c, y + 0.012f, u1 - fw}}; }
+          else         { a = (v3){{u0 + fw, y - 0.03f, pl + (float)o * 0.012f}}; b = (v3){{u1 - fw, y + 0.012f, pl + (float)o * 0.012f + (float)o * c}}; }
+          // A slat is a tilted board: a box sheared by its basis.
+          v3 cen = v3_scale(v3_add(a, b), 0.5f);
+          v3 along = ax == 0 ? (v3){{0, 0, (u1 - u0 - 2 * fw) * 0.5f}} : (v3){{(u1 - u0 - 2 * fw) * 0.5f, 0, 0}};
+          v3 nrm = ax == 0 ? (v3){{(float)o, 0, 0}} : (v3){{0, 0, (float)o}};
+          v3 wv = v3_add(v3_scale(nrm, 0.024f * 0.8f), (v3){{0, -0.024f * 0.6f, 0}});
+          v3 tv = v3_add(v3_scale(nrm, 0.006f * 0.6f), (v3){{0, 0.006f * 0.8f, 0}});
+          v3 X = along, Y = tv, Z = wv;
+          if (v3_dot(v3_cross(X, Y), Z) < 0.0f) Z = v3_scale(Z, -1.0f);
+          scene_box(cen, X, Y, Z, tl);
+        }
+      }
+      continue;
+    }
+    // --- PIPES: flanges every 3 m and the odd handwheel valve ----------------
+    if (town == 2 && mn.y > 4.0f && sz > 20.0f && sx < 0.7f && sy < 0.7f) {
+      for (float z = mn.z + 1.5f; z < mx.z - 1.0f; z += 3.0f) {
+        dec_box((v3){{mn.x - 0.033f, mn.y - 0.033f, z - 0.035f}},
+                (v3){{mx.x + 0.033f, mx.y + 0.033f, z + 0.035f}}, v3_scale(s->color, 0.8f));
+        // Bolt heads on the flange faces.
+        for (int b = 0; b < 4; b++) {
+          float bx_ = b & 1 ? mx.x + 0.02f : mn.x - 0.02f, by_ = b & 2 ? mx.y : mn.y;
+          dec_box((v3){{bx_ - 0.014f, by_ - 0.014f, z - 0.048f}}, (v3){{bx_ + 0.014f, by_ + 0.014f, z + 0.048f}},
+                  rgb(0.20f, 0.20f, 0.21f));
+        }
+      }
+      for (float z = mn.z + 7.5f; z < mx.z - 3.0f; z += 15.0f) {
+        float cx = (mn.x + mx.x) * 0.5f, top = mx.y;
+        dec_box((v3){{cx - 0.06f, top, z - 0.06f}}, (v3){{cx + 0.06f, top + 0.10f, z + 0.06f}},
+                rgb(0.24f, 0.25f, 0.26f));                              // bonnet
+        dec_bar((v3){{cx, top + 0.10f, z}}, (v3){{cx, top + 0.26f, z}}, 0.012f, rgb(0.24f, 0.25f, 0.26f));
+        v3 wc = rgb(0.62f, 0.12f, 0.08f);                                 // red handwheel
+        for (int k = 0; k < 10; k++) {
+          float a0 = (float)k * F_TAU / 10.0f, a1 = (float)(k + 1) * F_TAU / 10.0f;
+          dec_bar((v3){{cx + cosf(a0) * 0.14f, top + 0.26f, z + sinf(a0) * 0.14f}},
+                  (v3){{cx + cosf(a1) * 0.14f, top + 0.26f, z + sinf(a1) * 0.14f}}, 0.011f, wc);
+        }
+        for (int k = 0; k < 3; k++) {
+          float a0 = (float)k * F_TAU / 3.0f;
+          dec_bar((v3){{cx, top + 0.26f, z}}, (v3){{cx + cosf(a0) * 0.14f, top + 0.26f, z + sinf(a0) * 0.14f}},
+                  0.008f, wc);
+        }
+      }
+      continue;
+    }
+    // --- VENT GRATES high on the walls of the ports -------------------------
+    if (town >= 1 && sy > 3.4f && mn.y < 0.05f && (fabsf(sx - PF_SKIN) < 0.01f || fabsf(sz - PF_SKIN) < 0.01f) &&
+        fmaxf(sx, sz) > 1.6f && dr(0.0f, 1.0f) < 0.16f) {
+      int ax = fabsf(sx - PF_SKIN) < 0.01f ? 0 : 2;
+      int o = dec_out_side(s, ax, 1.5f);
+      if (!o) continue;
+      float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+      float uc = ax == 0 ? (mn.z + mx.z) * 0.5f : (mn.x + mx.x) * 0.5f;
+      float w = 0.34f, y0 = 2.55f, y1 = 2.95f;
+      v3 gc = rgb(0.30f, 0.31f, 0.32f);
+      dec_fbox(ax, (float)o, pl, uc - w, uc + w, y0, y0 + 0.04f, 0.0f, 0.035f, gc);
+      dec_fbox(ax, (float)o, pl, uc - w, uc + w, y1 - 0.04f, y1, 0.0f, 0.035f, gc);
+      dec_fbox(ax, (float)o, pl, uc - w, uc - w + 0.04f, y0, y1, 0.0f, 0.035f, gc);
+      dec_fbox(ax, (float)o, pl, uc + w - 0.04f, uc + w, y0, y1, 0.0f, 0.035f, gc);
+      dec_fbox(ax, (float)o, pl, uc - w + 0.04f, uc + w - 0.04f, y0 + 0.04f, y1 - 0.04f, 0.0f, 0.004f,
+               rgb(0.04f, 0.04f, 0.045f));                                // the dark duct behind
+      for (float y = y0 + 0.07f; y < y1 - 0.05f; y += 0.045f)
+        dec_fbox(ax, (float)o, pl, uc - w + 0.04f, uc + w - 0.04f, y, y + 0.012f, 0.004f, 0.028f, gc);
+      continue;
+    }
+    // --- LED SIGNS over the street: shop names in the citadel, berths and
+    // units in the ports. A handful per town, above head height on a
+    // street-facing wall.
+    if (n_signs < 14 && mn.y < 0.05f && sy > 3.6f &&
+        (fabsf(sx - PF_SKIN) < 0.01f || fabsf(sz - PF_SKIN) < 0.01f) &&
+        fmaxf(sx, sz) > 2.6f && dr(0.0f, 1.0f) < 0.07f) {
+      int ax = fabsf(sx - PF_SKIN) < 0.01f ? 0 : 2;
+      int o = dec_out_side(s, ax, 1.5f);
+      if (o) {
+        static const char *TXT[3][7] = {
+          {"CAFE", "SOUK", "HOTEL", "BAZAR", "TEA", "PHARMA", "BAKERY"},
+          {"BERTH 7", "CUSTOMS", "PORT 12", "DOCK B", "CARGO", "BAR", "MARINE"},
+          {"UNIT 4", "GATE B", "DANGER", "PUMP 3", "NO FIRE", "LAB 2", "EXIT"}};
+        static const v3 LEDC[3] = {{{1.0f, 0.38f, 0.10f}}, {{0.20f, 0.75f, 1.0f}}, {{1.0f, 0.15f, 0.08f}}};
+        const char *t = TXT[town][n_signs % 7];
+        float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+        float uc = ax == 0 ? (mn.z + mx.z) * 0.5f : (mn.x + mx.x) * 0.5f;
+        float half = ((float)dot_len(t) * 0.05f) * 0.5f + 0.16f;
+        if (half * 2.0f < fmaxf(sx, sz) - 0.2f) {
+          v3 nrm = ax == 0 ? (v3){{(float)o, 0, 0}} : (v3){{0, 0, (float)o}};
+          v3 u = ax == 0 ? (v3){{0, 0, (float)-o}} : (v3){{(float)o, 0, 0}};
+          v3 c = ax == 0 ? (v3){{pl, 3.05f, uc}} : (v3){{uc, 3.05f, pl}};
+          dec_sign(t, c, u, nrm, v3_scale(LEDC[town], 0.92f));
+          n_signs++;
+          continue;
+        }
+      }
+    }
+    // --- RUBBLE at the foot of the citadel's render walls --------------------
+    if (town == 0 && mn.y < 0.05f && sy > 2.5f && (fabsf(sx - PF_SKIN) < 0.01f || fabsf(sz - PF_SKIN) < 0.01f) &&
+        fmaxf(sx, sz) > 1.0f && dr(0.0f, 1.0f) < 0.10f) {
+      int ax = fabsf(sx - PF_SKIN) < 0.01f ? 0 : 2;
+      int o = dec_out_side(s, ax, 1.5f);
+      if (!o) continue;
+      float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+      float uc = ax == 0 ? dr(mn.z + 0.3f, mx.z - 0.3f) : dr(mn.x + 0.3f, mx.x - 0.3f);
+      // Fallen render and the mud brick under it: the wall's own colour,
+      // in a fan against its foot.
+      int nst = 5 + (int)dr(0.0f, 6.0f);
+      for (int k = 0; k < nst; k++) {
+        float uo = dr(-0.45f, 0.45f), to = dr(0.04f, 0.38f) * (1.0f - fabsf(uo));
+        float d = pl + (float)o * to;
+        v3 at = ax == 0 ? (v3){{d, 0.0f, uc + uo}} : (v3){{uc + uo, 0.0f, d}};
+        float rr = dr(0.025f, 0.075f);
+        at.y = rr * 0.6f;
+        v3 col = k & 1 ? tint(s->color, 0.85f, 1.05f) : tint(rgb(0.46f, 0.32f, 0.22f), 0.8f, 1.1f);
+        dec_stone(at, rr * dr(0.9f, 1.6f), rr * 0.6f, rr, dr(0.0f, F_TAU), dr(-0.4f, 0.4f), col, 1.0f);
+      }
+      continue;
+    }
+  }
+  // --- CABLES between the rooftops ----------------------------------------
+  // Each anchor takes at most one cable, and a span has to cross open air
+  // (sampled along its sag) between two DIFFERENT buildings.
+  static unsigned char used[MAX_ANCH];
+  memset(used, 0, sizeof used);
+  int cables = 0;
+  v3 cc = rgb(0.06f, 0.06f, 0.065f);
+  for (int i = 0; i < na && cables < 48; i++) {
+    if (used[i] || dr(0.0f, 1.0f) > 0.55f) continue;
+    int best = -1; float bd = 1e9f;
+    for (int j = 0; j < na; j++) {
+      if (j == i || used[j] || anch_s[j] == anch_s[i]) continue;
+      v3 d = v3_sub(anch[j], anch[i]);
+      float h = sqrtf(d.x * d.x + d.z * d.z);
+      if (h < 6.0f || h > 19.0f || fabsf(d.y) > 3.5f) continue;
+      float score = fabsf(h - 11.0f) + dr(0.0f, 4.0f);
+      if (score >= bd) continue;
+      int clear = 1;
+      float span = h, sag = 0.03f * span + 0.12f;
+      for (int k = 1; k < 10 && clear; k++) {
+        float t = (float)k / 10.0f;
+        v3 q = v3_lerp(anch[i], anch[j], t);
+        q.y -= sag * 4.0f * t * (1.0f - t);
+        if (dec_inside(q) || q.y < 3.0f) clear = 0;
+      }
+      if (clear) { bd = score; best = j; }
+    }
+    if (best < 0) continue;
+    used[i] = used[best] = 1;
+    dec_cable(anch[i], anch[best], cc);
+    cables++;
+  }
+  g_cham = save_cham;
+  g_rng_dec = save;
+}
+
+// ===========================================================================
+// PROPS — the detailed vehicles and lanterns, built in the footprint of the
+// collision boxes their builders hid (see prop_add). Built through the scene
+// primitives like the decor and copied into the CAST range of the world mesh:
+// a truck has a shadow. Every dimension below is inside the original hull
+// except mirror arms and an exhaust stack, which are thinner than any cover.
+// ===========================================================================
+typedef struct { v3 o, F, L; } pfr_t;   // prop frame: origin, forward, lateral
+static v3 PF(const pfr_t *f, float a, float b, float y) {
+  return v3_add(f->o, v3_add(v3_scale(f->F, a), v3_add(v3_scale(f->L, b), (v3){{0, y, 0}})));
+}
+// A box from its centre and three half-extent vectors, made right-handed.
+static void pbox_v(v3 c, v3 ex, v3 ey, v3 ez, v3 col) {
+  if (v3_dot(v3_cross(ex, ey), ez) < 0.0f) ez = v3_scale(ez, -1.0f);
+  scene_box(c, ex, ey, ez, col);
+}
+static void pbox(const pfr_t *f, float a0, float a1, float b0, float b1, float y0, float y1, v3 col) {
+  v3 c = PF(f, (a0 + a1) * 0.5f, (b0 + b1) * 0.5f, (y0 + y1) * 0.5f);
+  pbox_v(c, v3_scale(f->F, fabsf(a1 - a0) * 0.5f), (v3){{0, fabsf(y1 - y0) * 0.5f, 0}},
+         v3_scale(f->L, fabsf(b1 - b0) * 0.5f), col);
+}
+// A double-sided quad (glass, slanted panels): the culled side never shows,
+// and neither winding can be wrong.
+static void dquad(v3 a, v3 b, v3 c, v3 d, v3 col) {
+  v3 n = v3_norm(v3_cross(v3_sub(b, a), v3_sub(d, a)));
+  scene_quad(a, b, c, d, n, col);
+  scene_quad(a, d, c, b, v3_scale(n, -1.0f), col);
+}
+// A capped cylinder about `ax` (unit), radius r, half-length hl.
+static void pcyl(v3 c, v3 ax, float r, float hl, int segs, v3 col) {
+  v3 t1, t2;
+  axis_frame(ax, &t1, &t2);
+  v3 e0 = v3_scale(ax, -hl), e1 = v3_scale(ax, hl);
+  for (int i = 0; i < segs; i++) {
+    float a0 = (float)i * F_TAU / (float)segs, a1 = (float)(i + 1) * F_TAU / (float)segs;
+    v3 r0 = v3_add(v3_scale(t1, cosf(a0) * r), v3_scale(t2, sinf(a0) * r));
+    v3 r1 = v3_add(v3_scale(t1, cosf(a1) * r), v3_scale(t2, sinf(a1) * r));
+    v3 p0 = v3_add(c, v3_add(r0, e0)), p1 = v3_add(c, v3_add(r1, e0));
+    v3 p2 = v3_add(c, v3_add(r1, e1)), p3 = v3_add(c, v3_add(r0, e1));
+    v3 nm = v3_norm(v3_add(r0, r1));
+    // Outward winding by test rather than by argument.
+    if (v3_dot(v3_cross(v3_sub(p1, p0), v3_sub(p3, p0)), nm) > 0.0f) scene_quad(p0, p1, p2, p3, nm, col);
+    else scene_quad(p0, p3, p2, p1, nm, col);
+    for (int e = 0; e < 2; e++) {      // caps
+      v3 cc = v3_add(c, e ? e1 : e0), nn = e ? ax : v3_scale(ax, -1.0f);
+      v3 q0 = v3_add(cc, r0), q1 = v3_add(cc, r1);
+      if (v3_dot(v3_cross(v3_sub(q0, cc), v3_sub(q1, cc)), nn) > 0.0f) {
+        scene_push(cc, nn, col); scene_push(q0, nn, col); scene_push(q1, nn, col);
+      } else {
+        scene_push(cc, nn, col); scene_push(q1, nn, col); scene_push(q0, nn, col);
+      }
+    }
+  }
+}
+// A road wheel: tyre with a rounded shoulder, steel rim, hub and lug nuts.
+// `out` is the lateral direction the wheel's face looks toward.
+static void pwheel(v3 c, v3 out, float r, float w, int duals) {
+  v3 rub = rgb(0.045f, 0.045f, 0.05f), rim = rgb(0.52f, 0.53f, 0.55f), hub = rgb(0.30f, 0.30f, 0.32f);
+  mat_set(0.92f, 0.0f);
+  pcyl(c, out, r, w * 0.5f, 20, rub);
+  pcyl(v3_add(c, v3_scale(out, w * 0.5f)), out, r * 0.86f, 0.006f, 20, rgb(0.06f, 0.06f, 0.065f)); // sidewall
+  mat_set(0.30f, 0.85f);
+  pcyl(v3_add(c, v3_scale(out, w * 0.5f + 0.004f)), out, r * 0.58f, 0.010f, 18, rim);
+  mat_set(0.40f, 0.75f);
+  pcyl(v3_add(c, v3_scale(out, w * 0.5f + 0.016f)), out, r * 0.22f, 0.012f, 12, hub);
+  v3 t1, t2;
+  axis_frame(out, &t1, &t2);
+  int nl = duals ? 8 : 5;
+  for (int k = 0; k < nl; k++) {
+    float a = (float)k * F_TAU / (float)nl;
+    v3 lp = v3_add(c, v3_add(v3_scale(out, w * 0.5f + 0.022f),
+                   v3_add(v3_scale(t1, cosf(a) * r * 0.33f), v3_scale(t2, sinf(a) * r * 0.33f))));
+    pcyl(lp, out, 0.014f, 0.010f, 6, hub);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// THE LOFT: a smooth body swept through a row of rounded cross-sections.
+// Every section is a superellipse (exponent p: 2 an ellipse, 8 a box with
+// soft corners) of half-sizes hu x hv, centred (cu, cv) off the loft axis at
+// distance t along it; `tw` narrows the upper half (a car's tumblehome). The
+// ends can be ROUNDED (rnd): the first and last sections are replaced by a
+// quarter-circle run of shrinking copies, so a nose or a roof edge turns over
+// instead of ending on a flat cap. Normals are taken from the surface itself
+// (central differences), so the body shades as one smooth skin, and every
+// quad asks a colour function what it is — paint, glass, a lamp lens, a grille
+// — from where it sits on the body and which way it faces. That is how the
+// windows, lights and seams are part of the shape rather than boxes on it.
+// ---------------------------------------------------------------------------
+typedef struct { float t, cu, cv, hu, hv, p, tw; } lsec_t;
+typedef struct { v3 A, U, V; } lfr_t;     // loft axis and the section's two axes
+typedef struct { v3 col; float rough, metal; int smat; } lmat_t;
+// q and n arrive in the PROP frame: x = along F, y = up, z = along L.
+typedef lmat_t (*lcol_fn)(const void *ctx, v3 q, v3 n);
+#define LOFT_MAXS 64
+#define LOFT_MAXR 48
+#define LOFT_RND 5
+static float sgnpow(float x, float e) { return copysignf(powf(fabsf(x), e), x); }
+static v3 loft_local(const pfr_t *f, v3 p) {
+  v3 d = v3_sub(p, f->o);
+  return (v3){{v3_dot(d, f->F), d.y, v3_dot(d, f->L)}};
+}
+static v3 loft_dir(const pfr_t *f, v3 n) {
+  return (v3){{v3_dot(n, f->F), n.y, v3_dot(n, f->L)}};
+}
+static void loft_tri(v3 a, v3 b, v3 c, v3 na, v3 nb, v3 nc, v3 col) {
+  v3 fn = v3_cross(v3_sub(b, a), v3_sub(c, a));
+  if (v3_dot(fn, v3_add(na, v3_add(nb, nc))) >= 0.0f) {
+    scene_push(a, na, col); scene_push(b, nb, col); scene_push(c, nc, col);
+  } else {
+    scene_push(a, na, col); scene_push(c, nc, col); scene_push(b, nb, col);
+  }
+}
+static void loft(const pfr_t *f, const lfr_t *lf, const lsec_t *in, int ns, int ring,
+                 float rnd, lcol_fn fn, const void *ctx) {
+  static lsec_t S[LOFT_MAXS];
+  static v3 P[LOFT_MAXS][LOFT_MAXR], N[LOFT_MAXS][LOFT_MAXR], C[LOFT_MAXS];
+  if (ring > LOFT_MAXR) ring = LOFT_MAXR;
+  int n = 0;
+  for (int i = 0; i < ns && n < LOFT_MAXS - 2 * LOFT_RND; i++) {
+    int end = i == 0 ? -1 : i == ns - 1 ? 1 : 0;
+    if (rnd > 0.0f && end) {
+      for (int k = 0; k < LOFT_RND; k++) {
+        // phi 0 = the tip, pi/2 = full size; the run sits INSIDE the length
+        int kk = end < 0 ? k : LOFT_RND - 1 - k;
+        float phi = (float)kk / (float)(LOFT_RND - 1) * F_PI * 0.5f;
+        // A BLUNT end that still closes: the section scales by sin(phi)^0.4,
+        // so it turns over over `rnd` of length and ends on a point — no flat
+        // cap, whose fan of triangles could only ever take one colour badly.
+        lsec_t s = in[i];
+        float sc = powf(fmaxf(sinf(phi), 0.0f), 0.4f);
+        if (end < 0) s.t = in[i].t + rnd * (1.0f - cosf(phi));
+        else         s.t = in[i].t - rnd * (1.0f - cosf(phi));
+        s.hu = fmaxf(s.hu * sc, 0.002f);
+        s.hv = fmaxf(s.hv * sc, 0.002f);
+        S[n++] = s;
+      }
+    } else {
+      S[n++] = in[i];
+    }
+  }
+  for (int i = 0; i < n; i++) {
+    const lsec_t *s = &S[i];
+    float e = 2.0f / s->p;
+    C[i] = v3_add(f->o, v3_add(v3_scale(lf->A, s->t), v3_add(v3_scale(lf->U, s->cu), v3_scale(lf->V, s->cv))));
+    for (int j = 0; j < ring; j++) {
+      float th = (float)j * F_TAU / (float)ring;
+      float x = sgnpow(cosf(th), e) * s->hu, y = sgnpow(sinf(th), e) * s->hv;
+      if (y > 0.0f) x *= 1.0f + (s->tw - 1.0f) * (y / s->hv);
+      P[i][j] = v3_add(C[i], v3_add(v3_scale(lf->U, x), v3_scale(lf->V, y)));
+    }
+  }
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < ring; j++) {
+      v3 dt = v3_sub(P[i < n - 1 ? i + 1 : i][j], P[i > 0 ? i - 1 : i][j]);
+      v3 dr = v3_sub(P[i][(j + 1) % ring], P[i][(j + ring - 1) % ring]);
+      v3 nn = v3_cross(dr, dt);
+      v3 rad = v3_sub(P[i][j], C[i]);
+      if (v3_dot(nn, nn) < 1e-12f) nn = v3_dot(rad, rad) > 1e-10f ? rad : lf->A;
+      nn = v3_norm(nn);
+      if (v3_dot(nn, rad) < 0.0f) nn = v3_scale(nn, -1.0f);
+      // A tip ring is a point: its normal is the axis, outward.
+      if (S[i].hu < 0.01f && S[i].hv < 0.01f) nn = i == 0 ? v3_scale(lf->A, -1.0f) : lf->A;
+      N[i][j] = nn;
+    }
+  for (int i = 0; i + 1 < n; i++)
+    for (int j = 0; j < ring; j++) {
+      int j1 = (j + 1) % ring;
+      v3 a = P[i][j], b = P[i + 1][j], c = P[i + 1][j1], d = P[i][j1];
+      v3 q = v3_scale(v3_add(v3_add(a, b), v3_add(c, d)), 0.25f);
+      v3 nq = v3_norm(v3_add(v3_add(N[i][j], N[i + 1][j]), v3_add(N[i + 1][j1], N[i][j1])));
+      lmat_t m = fn(ctx, loft_local(f, q), loft_dir(f, nq));
+      mat_set(m.rough, m.metal);
+      g_scene_smat = m.smat;
+      loft_tri(a, b, c, N[i][j], N[i + 1][j], N[i + 1][j1], m.col);
+      loft_tri(a, c, d, N[i][j], N[i + 1][j1], N[i][j1], m.col);
+    }
+  for (int e = 0; e < 2; e++) {           // caps, where an end is not a point
+    int i = e ? n - 1 : 0;
+    if (S[i].hu < 0.012f && S[i].hv < 0.012f) continue;
+    v3 an = e ? lf->A : v3_scale(lf->A, -1.0f);
+    // Each fan triangle asks for itself: a cap can span a grille AND paint.
+    for (int j = 0; j < ring; j++) {
+      v3 p1 = P[i][j], p2 = P[i][(j + 1) % ring];
+      v3 qc = v3_add(v3_scale(C[i], 0.2f), v3_scale(v3_add(p1, p2), 0.4f));
+      lmat_t m = fn(ctx, loft_local(f, qc), loft_dir(f, an));
+      mat_set(m.rough, m.metal);
+      g_scene_smat = m.smat;
+      loft_tri(C[i], p1, p2, an, an, an, m.col);
+    }
+  }
+  g_scene_smat = 0;
+}
+// A cone frustum a -> b (radii r0, r1), open ends unless `caps`.
+static void ptaper(v3 a, v3 b, float r0, float r1, int segs, v3 col, int caps) {
+  v3 ax = v3_sub(b, a);
+  float l = v3_len(ax);
+  if (l < 1e-5f) return;
+  ax = v3_scale(ax, 1.0f / l);
+  v3 t1, t2;
+  axis_frame(ax, &t1, &t2);
+  float slope = (r0 - r1) / l;
+  for (int i = 0; i < segs; i++) {
+    float a0 = (float)i * F_TAU / (float)segs, a1 = (float)(i + 1) * F_TAU / (float)segs;
+    v3 d0 = v3_add(v3_scale(t1, cosf(a0)), v3_scale(t2, sinf(a0)));
+    v3 d1 = v3_add(v3_scale(t1, cosf(a1)), v3_scale(t2, sinf(a1)));
+    v3 n0 = v3_norm(v3_add(d0, v3_scale(ax, slope))), n1 = v3_norm(v3_add(d1, v3_scale(ax, slope)));
+    v3 p0 = v3_add(a, v3_scale(d0, r0)), p1 = v3_add(a, v3_scale(d1, r0));
+    v3 p2 = v3_add(b, v3_scale(d1, r1)), p3 = v3_add(b, v3_scale(d0, r1));
+    loft_tri(p0, p1, p2, n0, n1, n1, col);
+    loft_tri(p0, p2, p3, n0, n1, n0, col);
+    if (caps) {
+      v3 mx = v3_scale(ax, -1.0f);
+      loft_tri(a, p0, p1, mx, mx, mx, col);
+      loft_tri(b, p3, p2, ax, ax, ax, col);
+    }
+  }
+}
+// A small UV sphere.
+static void pball(v3 c, float r, v3 col) {
+  enum { LA = 4, LO = 7 };
+  for (int i = 0; i < LA; i++)
+    for (int j = 0; j < LO; j++) {
+      float t0 = F_PI * (float)i / LA - F_PI_2, t1 = F_PI * (float)(i + 1) / LA - F_PI_2;
+      float p0 = F_TAU * (float)j / LO, p1 = F_TAU * (float)(j + 1) / LO;
+      v3 n00 = {{cosf(t0) * cosf(p0), sinf(t0), cosf(t0) * sinf(p0)}};
+      v3 n01 = {{cosf(t0) * cosf(p1), sinf(t0), cosf(t0) * sinf(p1)}};
+      v3 n10 = {{cosf(t1) * cosf(p0), sinf(t1), cosf(t1) * sinf(p0)}};
+      v3 n11 = {{cosf(t1) * cosf(p1), sinf(t1), cosf(t1) * sinf(p1)}};
+      v3 a = v3_add(c, v3_scale(n00, r)), b = v3_add(c, v3_scale(n01, r));
+      v3 d = v3_add(c, v3_scale(n10, r)), e = v3_add(c, v3_scale(n11, r));
+      loft_tri(a, d, e, n00, n10, n11, col);
+      loft_tri(a, e, b, n00, n11, n01, col);
+    }
+}
+static lmat_t LM(v3 col, float rough, float metal, int smat) {
+  return (lmat_t){col, rough, metal, smat};
+}
+#define LGLASS(c) LM(c, 0.04f, 0.0f, SMAT_VGLASS)
+// A section for a loft along F: from floor-height y0 to y1, half-width hw.
+#define BSEC(a, y0, y1, hw, p, tw) ((lsec_t){(a), 0.0f, ((y0) + (y1)) * 0.5f, (hw), ((y1) - (y0)) * 0.5f, (p), (tw)})
+
+// Alloy spokes over a pwheel: five twin spokes from the hub to the rim.
+static void pspokes(v3 c, v3 out, float r, float w) {
+  v3 t1, t2;
+  axis_frame(out, &t1, &t2);
+  mat_set(0.25f, 0.85f);
+  v3 al = rgb(0.62f, 0.63f, 0.65f);
+  for (int k = 0; k < 5; k++)
+    for (int s = -1; s <= 1; s += 2) {
+      float a = (float)k * F_TAU / 5.0f + (float)s * 0.09f;
+      v3 d = v3_add(v3_scale(t1, cosf(a)), v3_scale(t2, sinf(a)));
+      v3 q = v3_cross(out, d);
+      pbox_v(v3_add(c, v3_add(v3_scale(out, w * 0.5f + 0.012f), v3_scale(d, r * 0.38f))),
+             v3_scale(d, r * 0.17f), v3_scale(q, 0.018f), v3_scale(out, 0.008f), al);
+    }
+}
+
+// THE TRUCK: a cab-over carrying a container. The cab is lofted UP (sections
+// are horizontal slices), so its front, sides and the raked windscreen are all
+// one rounded pressing; the glass and grille are coloured onto it. Fenders
+// wrap the wheels, the chassis shows behind the cab.
+typedef struct { v3 paint; } truck_ctx_t;
+static lmat_t truck_cab_col(const void *ctx, v3 q, v3 n) {
+  const truck_ctx_t *c = ctx;
+  float a = q.x, y = q.y, b = fabsf(q.z);
+  v3 gl = rgb(0.06f, 0.08f, 0.09f), rub = rgb(0.03f, 0.03f, 0.035f);
+  if (n.y > 0.75f) return LM(c->paint, 0.25f, 0.0f, 0);
+  if (n.x > 0.45f) {                                       // the face
+    if (y > 1.93f && y < 2.73f && b < 0.99f) return LGLASS(gl);
+    if (y > 1.88f && y < 2.78f && b < 1.04f) return LM(rub, 0.6f, 0.0f, 0);   // its rubber
+    if (y > 1.18f && y < 1.76f && b < 0.76f) return LM(rgb(0.04f, 0.04f, 0.045f), 0.5f, 0.3f, 0);
+  }
+  if (b > 1.0f && fabsf(n.z) > 0.55f) {                    // the doors
+    if (a > 4.40f && a < 5.10f && y > 1.98f && y < 2.68f) return LGLASS(gl);
+    if (a > 4.36f && a < 5.14f && y > 1.94f && y < 2.72f) return LM(rub, 0.6f, 0.0f, 0);
+  }
+  if (y < 1.10f) return LM(v3_scale(c->paint, 0.5f), 0.4f, 0.0f, 0);
+  return LM(c->paint, 0.25f, 0.0f, 0);
+}
+static void fender(const pfr_t *f, float a, float side, float r, float w, v3 col) {
+  // An arc of short plates over a wheel, from the front round to the back.
+  for (int k = 0; k < 9; k++) {
+    float t0 = F_PI * (0.06f + 0.88f * (float)k / 9.0f), t1 = F_PI * (0.06f + 0.88f * (float)(k + 1) / 9.0f);
+    float tm = (t0 + t1) * 0.5f;
+    v3 c = PF(f, a + cosf(tm) * r, side * (1.03f), 0.48f + sinf(tm) * r);
+    v3 tg = v3_add(v3_scale(f->F, -sinf(tm)), (v3){{0, cosf(tm), 0}});
+    v3 rd = v3_add(v3_scale(f->F, cosf(tm)), (v3){{0, sinf(tm), 0}});
+    pbox_v(c, v3_scale(tg, r * (t1 - t0) * 0.55f), v3_scale(rd, 0.02f), v3_scale(f->L, w * 0.5f), col);
+  }
+}
+static void prop_truck(const prop_t *pr) {
+  pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
+             pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
+  v3 cab = pr->col, dk = rgb(0.07f, 0.07f, 0.075f), steel = rgb(0.24f, 0.25f, 0.26f);
+  v3 chrome = rgb(0.70f, 0.71f, 0.72f);
+  // CHASSIS: two ladder rails and cross members, under where the box sat.
+  mat_set(0.55f, 0.6f);
+  for (int sd = -1; sd <= 1; sd += 2)
+    pbox(&f, -3.6f, 3.6f, (float)sd * 0.52f - 0.06f, (float)sd * 0.52f + 0.06f, 0.70f, 1.00f, steel);
+  for (float a = -3.2f; a < 3.4f; a += 1.1f) pbox(&f, a, a + 0.10f, -0.52f, 0.52f, 0.78f, 0.94f, steel);
+  pbox(&f, -3.6f, 3.38f, -1.10f, 1.10f, 1.04f, 1.20f, rgb(0.18f, 0.19f, 0.20f));   // the bed
+  mat_set(0.35f, 0.0f);
+  pbox(&f, -3.60f, 3.38f, -1.105f, -1.095f, 1.06f, 1.10f, rgb(0.85f, 0.70f, 0.15f));
+  pbox(&f, -3.60f, 3.38f, 1.095f, 1.105f, 1.06f, 1.10f, rgb(0.85f, 0.70f, 0.15f));
+  // Fuel tank, air tanks, battery box, side guards.
+  mat_set(0.18f, 0.95f);
+  pcyl(PF(&f, 2.15f, -0.86f, 0.80f), f.F, 0.24f, 0.55f, 18, chrome);
+  for (int k = 0; k < 2; k++) pcyl(PF(&f, 2.15f + (float)k * 0.42f - 0.42f, -0.86f, 0.80f), f.F, 0.245f, 0.015f, 18, steel);
+  mat_set(0.5f, 0.4f);
+  pcyl(PF(&f, 0.6f, 0.80f, 0.78f), f.F, 0.13f, 0.40f, 12, rgb(0.30f, 0.31f, 0.33f));
+  pcyl(PF(&f, -0.4f, 0.80f, 0.78f), f.F, 0.13f, 0.40f, 12, rgb(0.30f, 0.31f, 0.33f));
+  mat_set(0.6f, 0.0f);
+  pbox(&f, 1.0f, 1.5f, 0.70f, 1.05f, 0.62f, 0.98f, dk);
+  for (int sd = -1; sd <= 1; sd += 2) {
+    mat_set(0.5f, 0.5f);
+    pbox(&f, -1.40f, 1.60f, (float)sd * 1.02f, (float)sd * 1.06f, 0.48f, 0.52f, steel);
+    pbox(&f, -1.40f, 1.60f, (float)sd * 1.02f, (float)sd * 1.06f, 0.74f, 0.78f, steel);
+  }
+  // THE CAB.
+  {
+    lfr_t lf = {{{0, 1, 0}}, f.L, f.F};
+    truck_ctx_t tc = {cab};
+    static const lsec_t CAB[] = {
+      {1.00f, 0.0f, 4.36f, 1.12f, 0.94f, 9.0f, 1.0f},
+      {1.85f, 0.0f, 4.38f, 1.14f, 0.97f, 9.0f, 1.0f},
+      {2.00f, 0.0f, 4.37f, 1.14f, 0.95f, 9.0f, 1.0f},
+      {2.45f, 0.0f, 4.35f, 1.13f, 0.91f, 9.0f, 1.0f},
+      {2.80f, 0.0f, 4.32f, 1.11f, 0.87f, 8.0f, 1.0f},
+      {3.00f, 0.0f, 4.30f, 1.08f, 0.84f, 7.0f, 1.0f},
+    };
+    loft(&f, &lf, CAB, (int)(sizeof CAB / sizeof CAB[0]), 44, 0.14f, truck_cab_col, &tc);
+  }
+  // A roof visor with marker lamps, a sun visor over the glass, wipers.
+  mat_set(0.3f, 0.0f);
+  pbox(&f, 3.70f, 4.90f, -0.95f, 0.95f, 2.96f, 3.26f, v3_scale(cab, 0.85f));
+  g_scene_smat = SMAT_LED;
+  for (int k = -2; k <= 2; k++)
+    pbox(&f, 5.13f, 5.17f, (float)k * 0.22f - 0.04f, (float)k * 0.22f + 0.04f, 2.82f, 2.86f, rgb(0.95f, 0.55f, 0.10f));
+  g_scene_smat = 0;
+  mat_set(0.5f, 0.2f);
+  pbox(&f, 5.05f, 5.30f, -1.02f, 1.02f, 2.76f, 2.80f, dk);
+  for (int sd = -1; sd <= 1; sd += 2)
+    pbox(&f, 5.30f, 5.33f, (float)sd * 0.45f - 0.40f, (float)sd * 0.45f + 0.10f, 1.96f, 1.98f, dk);
+  // Door handles, steps, mirrors.
+  for (int sd = -1; sd <= 1; sd += 2) {
+    float bs = (float)sd * 1.14f;
+    mat_set(0.25f, 0.9f);
+    pbox(&f, 4.42f, 4.62f, bs - 0.02f, bs + 0.02f, 1.78f, 1.82f, chrome);
+    mat_set(0.6f, 0.5f);
+    pbox(&f, 4.30f, 5.05f, (float)sd * 0.92f, (float)sd * 1.10f, 0.72f, 0.76f, steel);
+    pbox(&f, 4.30f, 5.05f, (float)sd * 0.92f, (float)sd * 1.10f, 0.98f, 1.02f, steel);
+    mat_set(0.4f, 0.6f);
+    pbox(&f, 5.20f, 5.24f, (float)sd * 1.12f, (float)sd * 1.34f, 2.42f, 2.45f, dk);
+    pbox(&f, 5.20f, 5.24f, (float)sd * 1.12f, (float)sd * 1.34f, 1.98f, 2.01f, dk);
+    pbox(&f, 5.12f, 5.22f, (float)sd * 1.30f, (float)sd * 1.38f, 1.95f, 2.55f, dk);
+    g_scene_smat = SMAT_VGLASS;
+    mat_set(0.03f, 0.0f);
+    pbox(&f, 5.11f, 5.115f, (float)sd * 1.305f, (float)sd * 1.375f, 1.98f, 2.52f, rgb(0.5f, 0.55f, 0.6f));
+    g_scene_smat = 0;
+  }
+  // FRONT: grille slats, badge, headlamps, bumper, fog lamps, plate.
+  mat_set(0.55f, 0.3f);
+  for (float y = 1.24f; y < 1.72f; y += 0.08f) pbox(&f, 5.30f, 5.35f, -0.72f, 0.72f, y, y + 0.03f, steel);
+  mat_set(0.2f, 0.9f);
+  pbox(&f, 5.31f, 5.36f, -0.18f, 0.18f, 1.78f, 1.83f, chrome);
+  for (int sd = -1; sd <= 1; sd += 2) {
+    g_scene_smat = 0;
+    mat_set(0.10f, 0.7f);
+    pbox(&f, 5.28f, 5.33f, (float)sd * 0.78f, (float)sd * 1.04f, 1.22f, 1.42f, rgb(0.80f, 0.80f, 0.76f));
+    pbox(&f, 5.28f, 5.33f, (float)sd * 0.78f, (float)sd * 1.04f, 1.44f, 1.50f, rgb(0.95f, 0.55f, 0.10f));
+    pbox(&f, 5.43f, 5.46f, (float)sd * 0.70f, (float)sd * 0.90f, 0.74f, 0.84f, rgb(0.92f, 0.90f, 0.80f));
+    g_scene_smat = 0;
+  }
+  mat_set(0.45f, 0.4f);
+  pbox(&f, 5.26f, 5.44f, -1.14f, 1.14f, 0.62f, 0.96f, rgb(0.16f, 0.17f, 0.18f));
+  mat_set(0.4f, 0.0f);
+  pbox(&f, 5.44f, 5.445f, -0.26f, 0.26f, 0.66f, 0.80f, rgb(0.92f, 0.82f, 0.20f));
+  // WHEELS under their fenders.
+  for (int sd = -1; sd <= 1; sd += 2) {
+    v3 out = v3_scale(f.L, (float)sd);
+    pwheel(PF(&f, 4.40f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 0);
+    pwheel(PF(&f, -2.00f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 1);
+    pwheel(PF(&f, -3.05f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 1);
+    mat_set(0.6f, 0.0f);
+    fender(&f, 4.40f, (float)sd, 0.58f, 0.34f, v3_scale(cab, 0.7f));
+    fender(&f, -2.00f, (float)sd, 0.58f, 0.34f, dk);
+    fender(&f, -3.05f, (float)sd, 0.58f, 0.34f, dk);
+    pbox(&f, -3.62f, -3.58f, (float)sd * 0.80f, (float)sd * 1.16f, 0.18f, 0.82f, dk);     // mud flap
+    g_scene_smat = SMAT_VGLASS;
+    mat_set(0.04f, 0.0f);
+    pbox(&f, -3.62f, -3.60f, (float)sd * 0.70f, (float)sd * 1.00f, 0.86f, 0.98f, rgb(0.85f, 0.08f, 0.05f));
+    pbox(&f, -3.62f, -3.60f, (float)sd * 0.55f, (float)sd * 0.68f, 0.86f, 0.98f, rgb(0.95f, 0.55f, 0.10f));
+    g_scene_smat = 0;
+  }
+  // Exhaust stack behind the cab, its heat shield and rain cap; air horns.
+  mat_set(0.2f, 0.95f);
+  pcyl(PF(&f, 3.30f, 0.92f, 2.20f), (v3){{0, 1, 0}}, 0.065f, 1.10f, 12, chrome);
+  mat_set(0.5f, 0.6f);
+  pcyl(PF(&f, 3.30f, 0.92f, 2.00f), (v3){{0, 1, 0}}, 0.085f, 0.45f, 12, steel);
+  mat_set(0.2f, 0.95f);
+  for (int k = 0; k < 2; k++)
+    ptaper(PF(&f, 4.2f + (float)k * 0.3f, 0.35f, 3.30f), PF(&f, 4.6f + (float)k * 0.3f, 0.35f, 3.30f), 0.025f, 0.05f, 8, chrome, 1);
+}
+
+// ---------------------------------------------------------------------------
+// THE PROFILE EXTRUSION: a side silhouette (a, y) pushed across the width with
+// ROUNDED shoulders. Every profile vertex grows a strip that runs from the
+// left side face, over a quarter-round of radius r, flat across the top of
+// that edge, and down the other quarter-round to the right face; neighbouring
+// strips make the rim (roof, bonnet, nose, sills, and — the point of it — the
+// liners of wheel arches cut INTO the silhouette). The two side faces are the
+// silhouette itself, ear-clipped, so a concave outline (arches) is a real cut.
+// The rim asks its colour function per quad with the profile SEGMENT and
+// whether the quad is on a shoulder (arc) or the flat between them.
+// ---------------------------------------------------------------------------
+typedef lmat_t (*pext_fn)(const void *ctx, int seg, int arc, v3 q, v3 n);
+#define PEXT_MAX 96
+#define PEXT_K 4
+static int poly_ccw(const float (*p)[2], int n) {
+  float a = 0.0f;
+  for (int i = 0; i < n; i++) {
+    int j = (i + 1) % n;
+    a += p[i][0] * p[j][1] - p[j][0] * p[i][1];
+  }
+  return a > 0.0f;
+}
+// Ear clipping of a simple CCW polygon; emits triangles through `emit`.
+static void poly_fill(const pfr_t *f, const float (*p)[2], int n, float b, v3 nrm, v3 col) {
+  int idx[PEXT_MAX], m = n;
+  for (int i = 0; i < n; i++) idx[i] = i;
+  int guard = 0;
+  while (m > 2 && guard++ < 4 * PEXT_MAX * PEXT_MAX) {
+    int found = 0;
+    for (int i = 0; i < m; i++) {
+      int i0 = idx[(i + m - 1) % m], i1 = idx[i], i2 = idx[(i + 1) % m];
+      float ax = p[i0][0], ay = p[i0][1], bx_ = p[i1][0], by = p[i1][1], cx = p[i2][0], cy = p[i2][1];
+      float cr = (bx_ - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      if (cr <= 1e-7f) continue;                       // reflex: not an ear
+      int inside = 0;
+      for (int k = 0; k < m && !inside; k++) {
+        int q = idx[k];
+        if (q == i0 || q == i1 || q == i2) continue;
+        float px = p[q][0], py = p[q][1];
+        float d1 = (bx_ - ax) * (py - ay) - (by - ay) * (px - ax);
+        float d2 = (cx - bx_) * (py - by) - (cy - by) * (px - bx_);
+        float d3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
+        inside = d1 > 0.0f && d2 > 0.0f && d3 > 0.0f;
+      }
+      if (inside) continue;
+      loft_tri(PF(f, ax, b, ay), PF(f, bx_, b, by), PF(f, cx, b, cy), nrm, nrm, nrm, col);
+      for (int k = i; k < m - 1; k++) idx[k] = idx[k + 1];
+      m--;
+      found = 1;
+      break;
+    }
+    if (!found) break;
+  }
+}
+static void pext(const pfr_t *f, const float (*in)[2], int n, float hw, float r, pext_fn fn,
+                 const void *ctx, v3 side_col, float side_rough) {
+  float p[PEXT_MAX][2];
+  int ccw = poly_ccw(in, n);
+  for (int i = 0; i < n; i++) {                        // CCW in (a, y)
+    int s = ccw ? i : n - 1 - i;
+    p[i][0] = in[s][0]; p[i][1] = in[s][1];
+  }
+  // Vertex normals (outward) and the inset the shoulders roll from.
+  float nv[PEXT_MAX][2], inner[PEXT_MAX][2];
+  for (int i = 0; i < n; i++) {
+    int a = (i + n - 1) % n, c = (i + 1) % n;
+    float e0x = p[i][0] - p[a][0], e0y = p[i][1] - p[a][1];
+    float e1x = p[c][0] - p[i][0], e1y = p[c][1] - p[i][1];
+    float l0 = sqrtf(e0x * e0x + e0y * e0y) + 1e-9f, l1 = sqrtf(e1x * e1x + e1y * e1y) + 1e-9f;
+    float n0x = e0y / l0, n0y = -e0x / l0, n1x = e1y / l1, n1y = -e1x / l1;
+    float mx = n0x + n1x, my = n0y + n1y, ml = sqrtf(mx * mx + my * my) + 1e-9f;
+    mx /= ml; my /= ml;
+    float cs = fmaxf(mx * n1x + my * n1y, 0.55f);
+    nv[i][0] = mx; nv[i][1] = my;
+    inner[i][0] = p[i][0] - mx * r / cs;
+    inner[i][1] = p[i][1] - my * r / cs;
+  }
+  enum { COLS = 2 * (PEXT_K + 1) };
+  static v3 P[PEXT_MAX][COLS], N[PEXT_MAX][COLS];
+  for (int i = 0; i < n; i++)
+    for (int j = 0; j < COLS; j++) {
+      int right = j > PEXT_K;
+      int k = right ? j - (PEXT_K + 1) : j;
+      float s = right ? F_PI_2 * (1.0f - (float)k / PEXT_K) : F_PI_2 * (float)k / PEXT_K;
+      float sg = right ? 1.0f : -1.0f;
+      float a2 = inner[i][0] + nv[i][0] * r * sinf(s), y2 = inner[i][1] + nv[i][1] * r * sinf(s);
+      float b = sg * ((hw - r) + r * cosf(s));
+      P[i][j] = PF(f, a2, b, y2);
+      v3 n2 = v3_add(v3_add(v3_scale(f->F, nv[i][0] * sinf(s)), (v3){{0, nv[i][1] * sinf(s), 0}}),
+                     v3_scale(f->L, sg * cosf(s)));
+      N[i][j] = v3_norm(n2);
+    }
+  for (int i = 0; i < n; i++) {
+    int i1 = (i + 1) % n;
+    int seg = ccw ? i : (n - 2 - i + n) % n;           // the caller's segment index
+    for (int j = 0; j + 1 < COLS; j++) {
+      v3 a = P[i][j], b = P[i1][j], c = P[i1][j + 1], d = P[i][j + 1];
+      v3 q = v3_scale(v3_add(v3_add(a, b), v3_add(c, d)), 0.25f);
+      v3 nq = v3_norm(v3_add(v3_add(N[i][j], N[i1][j]), v3_add(N[i1][j + 1], N[i][j + 1])));
+      int arc = j != PEXT_K;                           // PEXT_K..PEXT_K+1 is the flat
+      lmat_t m = fn(ctx, seg, arc, loft_local(f, q), loft_dir(f, nq));
+      mat_set(m.rough, m.metal);
+      g_scene_smat = m.smat;
+      loft_tri(a, b, c, N[i][j], N[i1][j], N[i1][j + 1], m.col);
+      loft_tri(a, c, d, N[i][j], N[i1][j + 1], N[i][j + 1], m.col);
+    }
+  }
+  g_scene_smat = 0;
+  mat_set(side_rough, 0.0f);
+  poly_fill(f, (const float (*)[2])inner, n, hw, f->L, side_col);
+  poly_fill(f, (const float (*)[2])inner, n, -hw, v3_scale(f->L, -1.0f), side_col);
+}
+// A flat convex polygon on a side face (a window, a seal), both sides of the car.
+static void pside(const pfr_t *f, const float (*p)[2], int n, float b, v3 col) {
+  for (int sd = -1; sd <= 1; sd += 2) {
+    v3 nn = v3_scale(f->L, (float)sd);
+    for (int i = 1; i + 1 < n; i++)
+      loft_tri(PF(f, p[0][0], (float)sd * b, p[0][1]), PF(f, p[i][0], (float)sd * b, p[i][1]),
+               PF(f, p[i + 1][0], (float)sd * b, p[i + 1][1]), nn, nn, nn, col);
+  }
+}
+
+// THE CAR: a four-door saloon, built the way a car model is: its side
+// silhouette, wheel arches cut into it, extruded across the width with rounded
+// shoulders; the glasshouse the same way above it, the side glass flush panels
+// in their seals, real A- and C-pillars where the glasshouse turns.
+typedef struct { v3 paint; int arch0, arch1, arch2, arch3; } car_ctx_t;
+#define CAR_ARCH_N 9
+static lmat_t car_rim_col(const void *ctx, int seg, int arc, v3 q, v3 n) {
+  const car_ctx_t *c = ctx;
+  int in_arch = (seg >= c->arch0 && seg < c->arch1) || (seg >= c->arch2 && seg < c->arch3);
+  if (in_arch) return arc ? LM(c->paint, 0.22f, 0.0f, 0) : LM(rgb(0.03f, 0.03f, 0.03f), 0.95f, 0.0f, 0);
+  if (n.y < -0.6f) return LM(rgb(0.05f, 0.05f, 0.05f), 0.9f, 0.0f, 0);           // the floor pan
+  if (q.y < 0.40f && fabsf(q.x) > 1.80f) return LM(rgb(0.07f, 0.07f, 0.075f), 0.7f, 0.0f, 0);   // bumpers
+  if (q.y < 0.27f) return LM(rgb(0.07f, 0.07f, 0.075f), 0.7f, 0.0f, 0);         // sills
+  return LM(c->paint, 0.22f, 0.0f, 0);
+}
+static lmat_t car_cabin_col(const void *ctx, int seg, int arc, v3 q, v3 n) {
+  const car_ctx_t *c = ctx;
+  (void)q; (void)n;
+  // seg 1 = windscreen, seg 5 = rear screen (see CABIN below); their
+  // shoulders are the pillars.
+  if ((seg == 1 || seg == 5) && !arc) return LGLASS(rgb(0.07f, 0.09f, 0.10f));
+  return LM(c->paint, 0.22f, 0.0f, 0);
+}
+static void prop_car(const prop_t *pr) {
+  pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
+             pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
+  v3 paint = pr->col, dk = rgb(0.05f, 0.05f, 0.055f), chrome = rgb(0.70f, 0.71f, 0.72f);
+  // The silhouette, from the rear bumper's foot forward along the sills (the
+  // two arches cut up into it), round the nose, back along the bonnet, the
+  // belt and the boot.
+  float B[PEXT_MAX][2];
+  int nb = 0;
+  car_ctx_t cc = {paint, 0, 0, 0, 0};
+#define BP(x, y) (B[nb][0] = (x), B[nb][1] = (y), nb++)
+  BP(-2.10f, 0.42f); BP(-2.05f, 0.30f); BP(-1.85f, 0.23f);
+  for (int w = 0; w < 2; w++) {
+    float wa = w ? 1.27f : -1.25f, R0 = 0.385f, cy = 0.33f;
+    float t0 = F_PI + asinf((cy - 0.23f) / R0), t1 = -asinf((cy - 0.23f) / R0);
+    if (w) cc.arch2 = nb; else cc.arch0 = nb;
+    for (int k = 0; k < CAR_ARCH_N; k++) {
+      float t = t0 + (t1 - t0) * (float)k / (CAR_ARCH_N - 1);
+      BP(wa + R0 * cosf(t), cy + R0 * sinf(t));
+    }
+    if (w) cc.arch3 = nb - 1; else cc.arch1 = nb - 1;
+    if (!w) { BP(-0.40f, 0.23f); BP(0.50f, 0.23f); }
+  }
+  BP(1.85f, 0.23f); BP(2.04f, 0.30f); BP(2.11f, 0.42f); BP(2.13f, 0.56f); BP(2.10f, 0.67f);
+  BP(1.90f, 0.75f); BP(1.40f, 0.83f); BP(0.95f, 0.88f); BP(-0.20f, 0.91f); BP(-1.25f, 0.92f);
+  BP(-1.80f, 0.93f); BP(-2.02f, 0.90f); BP(-2.11f, 0.80f); BP(-2.13f, 0.62f);
+#undef BP
+  pext(&f, (const float (*)[2])B, nb, 0.93f, 0.075f, car_rim_col, &cc, paint, 0.22f);
+  // The glasshouse: seg 0 the base, 1 windscreen, 2-4 roof, 5 rear screen.
+  static const float CABIN[][2] = {
+    {1.00f, 0.86f}, {0.93f, 0.90f}, {0.38f, 1.38f}, {0.10f, 1.45f}, {-0.62f, 1.46f},
+    {-0.88f, 1.40f}, {-1.32f, 0.93f}, {-1.36f, 0.86f},
+  };
+  pext(&f, CABIN, (int)(sizeof CABIN / sizeof CABIN[0]), 0.85f, 0.13f, car_cabin_col, &cc, paint, 0.22f);
+  // Side glass in its seals; the black B-pillar between the doors.
+  static const float SEAL_F[][2] = {{0.88f, 0.92f}, {0.38f, 1.335f}, {0.14f, 1.385f}, {-0.10f, 1.385f}, {-0.10f, 0.92f}};
+  static const float GLASS_F[][2] = {{0.83f, 0.95f}, {0.37f, 1.31f}, {0.14f, 1.355f}, {-0.07f, 1.355f}, {-0.07f, 0.95f}};
+  static const float SEAL_R[][2] = {{-0.22f, 0.92f}, {-0.22f, 1.385f}, {-0.60f, 1.39f}, {-0.84f, 1.33f}, {-1.16f, 0.98f}, {-1.20f, 0.92f}};
+  static const float GLASS_R[][2] = {{-0.25f, 0.95f}, {-0.25f, 1.355f}, {-0.60f, 1.36f}, {-0.82f, 1.31f}, {-1.12f, 0.98f}, {-1.14f, 0.95f}};
+  static const float BPIL[][2] = {{-0.10f, 0.92f}, {-0.10f, 1.40f}, {-0.22f, 1.40f}, {-0.22f, 0.92f}};
+  mat_set(0.7f, 0.0f);
+  pside(&f, SEAL_F, 5, 0.853f, rgb(0.02f, 0.02f, 0.025f));
+  pside(&f, SEAL_R, 6, 0.853f, rgb(0.02f, 0.02f, 0.025f));
+  pside(&f, BPIL, 4, 0.854f, rgb(0.02f, 0.02f, 0.025f));
+  g_scene_smat = SMAT_VGLASS;
+  mat_set(0.04f, 0.0f);
+  pside(&f, GLASS_F, 5, 0.856f, rgb(0.07f, 0.09f, 0.10f));
+  pside(&f, GLASS_R, 6, 0.856f, rgb(0.07f, 0.09f, 0.10f));
+  g_scene_smat = 0;
+  // Wheels in the arches.
+  for (int sd = -1; sd <= 1; sd += 2)
+    for (int w = 0; w < 2; w++) {
+      v3 out = v3_scale(f.L, (float)sd), wc = PF(&f, w ? 1.27f : -1.25f, (float)sd * 0.80f, 0.32f);
+      pwheel(wc, out, 0.32f, 0.22f, 0);
+      pspokes(wc, out, 0.32f, 0.22f);
+    }
+  for (int sd = -1; sd <= 1; sd += 2) {
+    float bs = (float)sd;
+    // Shut lines (fine), handles, mirrors, a side repeater.
+    mat_set(0.6f, 0.0f);
+    v3 shut = v3_scale(paint, 0.30f);
+    pbox(&f, 0.865f, 0.872f, bs * 0.930f, bs * 0.933f, 0.30f, 0.86f, shut);
+    pbox(&f, -0.165f, -0.158f, bs * 0.930f, bs * 0.933f, 0.27f, 0.90f, shut);
+    pbox(&f, -1.10f, -1.093f, bs * 0.930f, bs * 0.933f, 0.40f, 0.90f, shut);
+    mat_set(0.25f, 0.9f);
+    pbox(&f, 0.36f, 0.50f, bs * 0.930f, bs * 0.945f, 0.79f, 0.81f, chrome);
+    pbox(&f, -0.66f, -0.52f, bs * 0.930f, bs * 0.945f, 0.79f, 0.81f, chrome);
+    mat_set(0.22f, 0.0f);
+    pbox(&f, 0.72f, 0.80f, bs * 0.85f, bs * 0.92f, 0.95f, 0.99f, dk);
+    pbox(&f, 0.66f, 0.80f, bs * 0.91f, bs * 1.04f, 0.94f, 1.08f, paint);
+    g_scene_smat = SMAT_VGLASS;
+    mat_set(0.04f, 0.0f);
+    pbox(&f, 0.655f, 0.66f, bs * 0.92f, bs * 1.03f, 0.95f, 1.07f, rgb(0.5f, 0.55f, 0.6f));
+    g_scene_smat = 0;
+    mat_set(0.2f, 0.0f);
+    pbox(&f, 1.55f, 1.62f, bs * 0.930f, bs * 0.936f, 0.72f, 0.75f, rgb(0.95f, 0.55f, 0.10f));
+    // Lamps: headlamp clusters in the nose, tail lamps in the tail.
+    mat_set(0.6f, 0.0f);
+    pbox(&f, 2.03f, 2.125f, bs * 0.42f, bs * 0.80f, 0.575f, 0.700f, rgb(0.03f, 0.03f, 0.035f));
+    mat_set(0.10f, 0.75f);
+    pbox(&f, 2.04f, 2.13f, bs * 0.45f, bs * 0.62f, 0.59f, 0.685f, rgb(0.82f, 0.82f, 0.78f));
+    pbox(&f, 2.03f, 2.122f, bs * 0.64f, bs * 0.76f, 0.60f, 0.675f, rgb(0.82f, 0.82f, 0.78f));
+    mat_set(0.2f, 0.0f);
+    pbox(&f, 2.02f, 2.11f, bs * 0.76f, bs * 0.80f, 0.58f, 0.63f, rgb(0.95f, 0.55f, 0.10f));
+    mat_set(0.6f, 0.0f);
+    pbox(&f, -2.150f, -2.05f, bs * 0.44f, bs * 0.86f, 0.645f, 0.815f, rgb(0.02f, 0.02f, 0.02f));
+    mat_set(0.08f, 0.0f);
+    pbox(&f, -2.158f, -2.05f, bs * 0.47f, bs * 0.83f, 0.665f, 0.795f, rgb(0.42f, 0.015f, 0.01f));
+    pbox(&f, -2.162f, -2.05f, bs * 0.58f, bs * 0.68f, 0.69f, 0.73f, rgb(0.90f, 0.88f, 0.84f));
+    pbox(&f, -2.162f, -2.05f, bs * 0.74f, bs * 0.82f, 0.69f, 0.73f, rgb(0.95f, 0.50f, 0.08f));
+  }
+  // Grille and badge, plates, wipers, an exhaust tip, an aerial.
+  mat_set(0.6f, 0.3f);
+  pbox(&f, 2.07f, 2.135f, -0.38f, 0.38f, 0.42f, 0.555f, rgb(0.03f, 0.03f, 0.035f));
+  for (float yy = 0.445f; yy < 0.55f; yy += 0.035f)
+    pbox(&f, 2.135f, 2.142f, -0.36f, 0.36f, yy, yy + 0.012f, rgb(0.35f, 0.36f, 0.38f));
+  mat_set(0.2f, 0.9f);
+  pbox(&f, 2.12f, 2.145f, -0.07f, 0.07f, 0.57f, 0.61f, chrome);
+  mat_set(0.5f, 0.0f);
+  pbox(&f, 2.13f, 2.145f, -0.24f, 0.24f, 0.30f, 0.41f, rgb(0.90f, 0.90f, 0.86f));
+  pbox(&f, -2.15f, -2.13f, -0.24f, 0.24f, 0.46f, 0.57f, rgb(0.90f, 0.90f, 0.86f));
+  mat_set(0.6f, 0.0f);
+  pbox(&f, 0.90f, 0.94f, -0.55f, -0.05f, 0.885f, 0.90f, dk);
+  pbox(&f, 0.90f, 0.94f, 0.10f, 0.60f, 0.885f, 0.90f, dk);
+  mat_set(0.3f, 0.9f);
+  pcyl(PF(&f, -2.04f, 0.55f, 0.29f), f.F, 0.032f, 0.06f, 10, chrome);
+  mat_set(0.5f, 0.3f);
+  ptaper(PF(&f, -0.95f, 0.0f, 1.43f), PF(&f, -1.15f, 0.0f, 1.62f), 0.008f, 0.004f, 5, dk, 0);
+}
+
+// THE HELICOPTER: a twin-engine utility type in olive drab. The fuselage is one
+// loft from the rounded nose through the cabin into the tapering tail boom;
+// the cockpit glazing (windscreen, chin bubbles, door windows), the open
+// cabin door and the anti-glare panel are coloured onto it. The engine
+// cowling, exhausts, fin, stabiliser, skids and lights are their own parts.
+// The rotors turn, so they are drawn live (rescue_scene), not here.
+typedef struct { v3 paint; } heli_ctx_t;
+static lmat_t heli_body_col(const void *ctx, v3 q, v3 n) {
+  const heli_ctx_t *c = ctx;
+  float a = q.x, y = q.y, b = fabsf(q.z);
+  v3 gl = rgb(0.15f, 0.19f, 0.21f), fr = rgb(0.09f, 0.10f, 0.08f), in = rgb(0.035f, 0.037f, 0.035f);
+  v3 pt = c->paint;
+  if (n.y < -0.55f) pt = v3_scale(pt, 0.78f);                   // the belly
+  if (a > 2.80f && n.x > 0.12f) {                                // the cockpit glazing
+    if (y > 1.52f && y < 2.46f && n.y < 0.90f) {
+      if (b < 0.045f) return LM(fr, 0.6f, 0.0f, 0);             // centre post
+      if (fabsf(b - 0.66f) < 0.035f) return LM(fr, 0.6f, 0.0f, 0);   // corner posts
+      if (fabsf(y - 2.05f) < 0.02f && b > 0.66f) return LM(fr, 0.6f, 0.0f, 0);
+      return LGLASS(gl);
+    }
+    if (a > 3.70f && y > 0.86f && y < 1.40f && b > 0.10f && b < 0.72f) return LGLASS(gl);   // chin
+    if (y >= 1.40f && y <= 1.52f) return LM(rgb(0.05f, 0.05f, 0.05f), 0.8f, 0.0f, 0);       // anti-glare lip
+  }
+  if (fabsf(n.z) > 0.55f && b > 0.6f) {
+    if (a > 2.05f && a < 2.90f && y > 1.58f && y < 2.38f && fabsf(a - 2.48f) > 0.02f) return LGLASS(gl);
+    if (a > 1.98f && a < 2.97f && y > 0.80f && y < 2.45f && (y < 1.0f || fabsf(a - 2.0f) < 0.03f))
+      return LM(fr, 0.6f, 0.0f, 0);                                            // door seams
+    if (a > -1.50f && a < 0.95f && y > 0.80f && y < 2.36f) {                 // the open cabin door
+      if (a > -1.45f && a < 0.90f && y > 0.85f && y < 2.31f) return LM(in, 0.95f, 0.0f, 0);
+      return LM(fr, 0.6f, 0.0f, 0);
+    }
+    if (a > -2.35f && a < -1.70f && y > 1.66f && y < 2.24f) return LGLASS(gl);  // aft window
+  }
+  if (a < -9.7f && a > -10.0f) return LM(rgb(0.80f, 0.74f, 0.20f), 0.5f, 0.0f, 0);  // boom band
+  return LM(pt, 0.62f, 0.0f, 0);
+}
+static lmat_t heli_plain_col(const void *ctx, v3 q, v3 n) {
+  const heli_ctx_t *c = ctx;
+  (void)q;
+  return LM(n.y < -0.55f ? v3_scale(c->paint, 0.8f) : c->paint, 0.62f, 0.0f, 0);
+}
+static lmat_t heli_cowl_col(const void *ctx, v3 q, v3 n) {
+  const heli_ctx_t *c = ctx;
+  if (fabsf(n.z) > 0.55f && q.x > 0.45f && q.x < 1.10f && q.y > 2.70f)
+    return LM(rgb(0.03f, 0.03f, 0.03f), 0.9f, 0.2f, 0);     // intake screens
+  if (fabsf(n.z) > 0.55f && q.x > -2.1f && q.x < -0.3f && q.y > 2.68f && q.y < 2.98f &&
+      fmodf(q.x + 3.0f, 0.36f) < 0.05f)
+    return LM(rgb(0.08f, 0.09f, 0.07f), 0.8f, 0.0f, 0);     // access panel seams
+  return LM(v3_scale(c->paint, 0.94f), 0.6f, 0.0f, 0);
+}
+static void prop_heli(const prop_t *pr) {
+  pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
+             pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
+  lfr_t lf = {f.F, f.L, {{0, 1, 0}}};
+  heli_ctx_t hc = {pr->col};
+  v3 stl = rgb(0.20f, 0.21f, 0.22f), dk = rgb(0.06f, 0.065f, 0.06f), soot = rgb(0.07f, 0.06f, 0.05f);
+  static const lsec_t BODY[] = {
+    BSEC(4.58f, 1.02f, 1.50f, 0.28f, 2.6f, 0.90f),  BSEC(4.32f, 0.84f, 1.78f, 0.68f, 2.8f, 0.85f),
+    BSEC(3.92f, 0.72f, 2.06f, 0.94f, 3.0f, 0.82f),  BSEC(3.40f, 0.66f, 2.36f, 1.10f, 3.4f, 0.84f),
+    BSEC(2.85f, 0.63f, 2.58f, 1.18f, 4.0f, 0.88f),
+    BSEC(2.20f, 0.63f, 2.64f, 1.20f, 4.2f, 0.90f),  BSEC(0.00f, 0.62f, 2.66f, 1.22f, 4.6f, 0.90f),
+    BSEC(-1.80f, 0.64f, 2.66f, 1.20f, 4.6f, 0.90f), BSEC(-2.60f, 0.88f, 2.60f, 1.04f, 4.0f, 0.90f),
+    BSEC(-3.20f, 1.32f, 2.52f, 0.70f, 3.4f, 0.92f), BSEC(-3.75f, 1.74f, 2.44f, 0.40f, 3.0f, 0.95f),
+    BSEC(-4.40f, 1.90f, 2.40f, 0.29f, 2.6f, 1.00f), BSEC(-7.00f, 2.00f, 2.36f, 0.20f, 2.4f, 1.00f),
+    BSEC(-10.20f, 2.08f, 2.33f, 0.13f, 2.2f, 1.00f), BSEC(-10.60f, 2.10f, 2.32f, 0.11f, 2.2f, 1.00f),
+  };
+  loft(&f, &lf, BODY, (int)(sizeof BODY / sizeof BODY[0]), 36, 0.22f, heli_body_col, &hc);
+  // The engine cowling and transmission fairing on the cabin roof.
+  static const lsec_t COWL[] = {
+    BSEC(1.50f, 2.50f, 2.86f, 0.40f, 3.0f, 0.80f), BSEC(1.00f, 2.50f, 3.12f, 0.60f, 4.0f, 0.80f),
+    BSEC(-0.60f, 2.50f, 3.18f, 0.64f, 4.5f, 0.82f), BSEC(-2.10f, 2.50f, 3.08f, 0.56f, 4.0f, 0.82f),
+    BSEC(-3.00f, 2.45f, 2.80f, 0.34f, 3.0f, 0.85f),
+  };
+  loft(&f, &lf, COWL, (int)(sizeof COWL / sizeof COWL[0]), 28, 0.18f, heli_cowl_col, &hc);
+  // Exhausts, angled up and out of the cowling's tail.
+  mat_set(0.85f, 0.3f);
+  for (int sd = -1; sd <= 1; sd += 2) {
+    v3 a = PF(&f, -2.30f, (float)sd * 0.30f, 2.92f), b = PF(&f, -2.95f, (float)sd * 0.46f, 3.12f);
+    ptaper(a, b, 0.12f, 0.15f, 12, soot, 0);
+    pcyl(b, v3_norm(v3_sub(b, a)), 0.105f, 0.01f, 12, rgb(0.02f, 0.02f, 0.02f));
+  }
+  // The mast, the swashplate, the hub and the tail gearbox (the blades turn).
+  mat_set(0.35f, 0.8f);
+  pcyl(PF(&f, 0.0f, 0.0f, 3.32f), (v3){{0, 1, 0}}, 0.12f, 0.16f, 14, stl);
+  pcyl(PF(&f, 0.0f, 0.0f, 3.24f), (v3){{0, 1, 0}}, 0.30f, 0.035f, 18, stl);
+  pcyl(PF(&f, 0.0f, 0.0f, 3.52f), (v3){{0, 1, 0}}, 0.20f, 0.06f, 14, dk);
+  pball(PF(&f, -10.72f, 0.0f, 3.42f), 0.16f, pr->col);
+  // The FIN, swept and tapering, lofted upward; the stabiliser across the boom.
+  {
+    lfr_t vf = {{{0, 1, 0}}, f.L, f.F};
+    static const lsec_t FIN[] = {
+      {2.22f, 0.0f, -10.15f, 0.07f, 0.62f, 2.4f, 1.0f}, {3.10f, 0.0f, -10.55f, 0.06f, 0.46f, 2.4f, 1.0f},
+      {4.25f, 0.0f, -11.00f, 0.045f, 0.30f, 2.4f, 1.0f},
+    };
+    loft(&f, &vf, FIN, 3, 16, 0.05f, heli_plain_col, &hc);
+    static const lsec_t STAB[] = {
+      {-1.45f, 0.0f, 2.20f, 0.30f, 0.035f, 2.4f, 1.0f}, {1.45f, 0.0f, 2.20f, 0.30f, 0.035f, 2.4f, 1.0f},
+    };
+    lfr_t sf = {f.L, f.F, {{0, 1, 0}}};
+    pfr_t sfr = f;
+    sfr.o = PF(&f, -7.70f, 0.0f, 0.0f);
+    loft(&sfr, &sf, STAB, 2, 14, 0.06f, heli_plain_col, &hc);
+  }
+  // SKIDS: two tubes with upturned toes, on two bowed cross tubes.
+  mat_set(0.4f, 0.7f);
+  for (int sd = -1; sd <= 1; sd += 2) {
+    float bs = (float)sd * 1.34f;
+    ptaper(PF(&f, -2.80f, bs, 0.07f), PF(&f, 2.55f, bs, 0.07f), 0.05f, 0.05f, 10, stl, 1);
+    ptaper(PF(&f, 2.55f, bs, 0.07f), PF(&f, 3.00f, bs, 0.30f), 0.05f, 0.045f, 10, stl, 1);
+    for (int k = 0; k < 2; k++) {
+      float a = k ? 1.55f : -1.45f;
+      ptaper(PF(&f, a, bs, 0.07f), PF(&f, a, (float)sd * 1.22f, 0.50f), 0.05f, 0.05f, 10, stl, 1);
+      ptaper(PF(&f, a, (float)sd * 1.22f, 0.50f), PF(&f, a, (float)sd * 0.70f, 0.64f), 0.05f, 0.05f, 10, stl, 1);
+    }
+    pbox(&f, -0.20f, 0.25f, (float)sd * 1.30f, (float)sd * 1.42f, 0.30f, 0.33f, stl);   // boarding step
+    // The cabin door rail and handle, the cockpit door handle.
+    mat_set(0.5f, 0.6f);
+    pbox(&f, -1.60f, 1.30f, (float)sd * 1.185f, (float)sd * 1.215f, 2.40f, 2.44f, dk);
+    pbox(&f, 2.30f, 2.42f, (float)sd * 1.18f, (float)sd * 1.215f, 1.48f, 1.52f, dk);
+    mat_set(0.4f, 0.7f);
+  }
+  // Lights: red to port, green to starboard, anti-collision beacons, a
+  // landing light under the chin. Always lit (SMAT_LED).
+  g_scene_smat = SMAT_LED;
+  mat_set(0.3f, 0.0f);
+  pbox(&f, 0.80f, 0.95f, -1.19f, -1.15f, 2.56f, 2.62f, rgb(0.95f, 0.10f, 0.06f));
+  pbox(&f, 0.80f, 0.95f, 1.15f, 1.19f, 2.56f, 2.62f, rgb(0.10f, 0.95f, 0.25f));
+  pbox(&f, -1.10f, -0.90f, -0.08f, 0.08f, 3.13f, 3.20f, rgb(0.95f, 0.12f, 0.06f));
+  pbox(&f, -11.08f, -10.95f, -0.05f, 0.05f, 4.25f, 4.32f, rgb(0.95f, 0.12f, 0.06f));
+  pbox(&f, -10.62f, -10.58f, -0.05f, 0.05f, 2.18f, 2.26f, rgb(0.92f, 0.92f, 0.88f));
+  g_scene_smat = SMAT_VGLASS;
+  pbox(&f, 3.20f, 3.45f, -0.14f, 0.14f, 0.66f, 0.70f, rgb(0.90f, 0.90f, 0.85f));
+  g_scene_smat = 0;
+  // Aerials and the pitot probe.
+  mat_set(0.5f, 0.4f);
+  pbox(&f, -1.70f, -1.20f, -0.02f, 0.02f, 2.66f, 2.92f, dk);
+  pbox(&f, -0.60f, -0.40f, -0.02f, 0.02f, 0.42f, 0.63f, dk);
+  ptaper(PF(&f, 4.40f, 0.30f, 1.40f), PF(&f, 4.95f, 0.30f, 1.40f), 0.018f, 0.010f, 6, stl, 1);
+}
+
+// A DATE PALM: a trunk that leans and curves, ringed with old leaf bases and
+// flaring at the foot; a crown of arching fronds, each a midrib with leaflets
+// along both sides, the oldest hanging brown under the green; a fruit cluster.
+// col2 carries the palm's height, lean and a seed (it has no other numbers).
+static void prop_palm(const prop_t *pr) {
+  float h = pr->col2.x, lean = pr->col2.y;
+  uint32_t sd = (uint32_t)(int32_t)(pr->x * 131.0f + pr->z * 977.0f) * 2654435761u;
+  v3 base = {{pr->x, 0.0f, pr->z}};
+  v3 bark0 = rgb(0.36f, 0.27f, 0.19f), bark1 = rgb(0.27f, 0.20f, 0.14f);
+  // The trunk centreline: the lean grows toward the top (x, as the boxes had it).
+  enum { TS = 16 };
+  v3 tp[TS + 1];
+  for (int i = 0; i <= TS; i++) {
+    float t = (float)i / TS;
+    tp[i] = (v3){{base.x + lean * 2.0f * powf(t, 1.6f), h * t, base.z + 0.06f * sinf(t * 3.0f)}};
+  }
+  mat_set(0.95f, 0.0f);
+  for (int i = 0; i < TS; i++) {
+    float t0 = (float)i / TS, t1 = (float)(i + 1) / TS;
+    float r0 = 0.15f + 0.05f * (1.0f - t0) + (i == 0 ? 0.08f : 0.0f), r1 = 0.15f + 0.05f * (1.0f - t1);
+    ptaper(tp[i], tp[i + 1], r0, r1, 8, (i & 1) ? bark1 : bark0, 0);
+    // the knob of an old leaf base at every other ring
+    if (i & 1) ptaper(tp[i + 1], v3_lerp(tp[i + 1], tp[i], 0.35f), r1 + 0.014f, r1, 8, bark1, 0);
+  }
+  v3 top = tp[TS];
+  ptaper(v3_sub(top, (v3){{0, 0.25f, 0}}), v3_add(top, (v3){{0, 0.25f, 0}}), 0.21f, 0.12f, 10, rgb(0.30f, 0.26f, 0.16f), 1);
+  // Dates: a few hanging bunches under the crown.
+  mat_set(0.6f, 0.0f);
+  for (int k = 0; k < 3; k++) {
+    float a = (float)k * 2.1f + (float)(sd & 7);
+    for (int d = 0; d < 3; d++)
+      pball((v3){{top.x + cosf(a) * (0.24f + 0.05f * (float)d), top.y - 0.30f - 0.09f * (float)d,
+                  top.z + sinf(a) * (0.24f + 0.05f * (float)d)}}, 0.06f, rgb(0.55f, 0.30f, 0.08f));
+  }
+  // The fronds.
+  int nf = 13;
+  for (int k = 0; k < nf; k++) {
+    sd = sd * 1664525u + 1013904223u;
+    float jit = (float)(sd >> 8) / 16777216.0f;
+    int dead = k >= nf - 3;                      // the lowest hang brown and dry
+    float az = (float)k * 2.39996f + jit * 0.4f;
+    float elev = dead ? -0.9f : 0.65f - 0.55f * (float)(k % 5) / 4.0f;
+    float L = (dead ? 2.0f : 2.6f + 0.6f * jit);
+    v3 dir = {{cosf(az) * cosf(elev), sinf(elev), sinf(az) * cosf(elev)}};
+    v3 side = v3_norm((v3){{-sinf(az), 0.0f, cosf(az)}});
+    v3 green = dead ? rgb(0.42f, 0.32f, 0.18f) : v3_lerp(rgb(0.16f, 0.30f, 0.11f), rgb(0.24f, 0.38f, 0.14f), jit);
+    enum { FS = 10 };
+    v3 p = v3_add(top, (v3){{0, 0.15f, 0}}), d = dir;
+    float seg = L / FS;
+    for (int i = 0; i < FS; i++) {
+      float u = (float)i / FS, u1 = (float)(i + 1) / FS;
+      // gravity bends the midrib down along its length
+      d = v3_norm(v3_add(d, (v3){{0, dead ? -0.10f : -0.16f, 0}}));
+      v3 q = v3_add(p, v3_scale(d, seg));
+      mat_set(0.8f, 0.0f);
+      ptaper(p, q, 0.028f * (1.0f - u) + 0.008f, 0.028f * (1.0f - u1) + 0.008f, 4, v3_scale(green, 0.8f), 0);
+      if (i > 0) {
+        // LEAFLETS: two pairs per segment, narrow pointed blades angled
+        // forward along the midrib and folded up into a V, longest mid-frond.
+        float len = (dead ? 0.40f : 0.70f) * sinf(F_PI * (0.12f + 0.88f * u)) + 0.06f;
+        for (int h2 = 0; h2 < 2; h2++) {
+          v3 root = v3_lerp(p, q, 0.25f + 0.5f * (float)h2);
+          for (int s2 = -1; s2 <= 1; s2 += 2) {
+            v3 out = v3_norm(v3_add(v3_add(v3_scale(side, (float)s2), v3_scale(d, 0.75f)),
+                                    (v3){{0, dead ? -0.9f : 0.22f - 0.55f * u, 0}}));
+            v3 tip = v3_add(root, v3_scale(out, len));
+            v3 wid = v3_scale(d, 0.045f);
+            v3 mid = v3_add(v3_lerp(root, tip, 0.45f), (v3){{0, -0.05f * len, 0}});
+            mat_set(0.65f, 0.0f);
+            v3 lc = s2 > 0 ? green : v3_scale(green, 0.86f);
+            dquad(v3_sub(root, wid), v3_add(root, wid), v3_add(tip, v3_scale(wid, 0.15f)),
+                  v3_sub(tip, v3_scale(wid, 0.15f)), lc);
+            (void)mid;
+          }
+        }
+      }
+      p = q;
+    }
+  }
+}
+
+// A 200-LITRE DRUM: ribbed steel, two rolling hoops, rolled chimes at the top
+// and bottom, a lid with its two bungs; a little rust at the foot.
+static void prop_barrel(const prop_t *pr) {
+  v3 c = pr->col, base = {{pr->x, 0.0f, pr->z}}, up = {{0, 1, 0}};
+  v3 dark = v3_scale(c, 0.62f), rust = rgb(0.30f, 0.17f, 0.09f);
+  mat_set(0.45f, 0.35f);
+  ptaper(v3_add(base, (v3){{0, 0.03f, 0}}), v3_add(base, (v3){{0, 0.10f, 0}}), 0.282f, 0.285f, 22, v3_lerp(c, rust, 0.6f), 0);
+  ptaper(v3_add(base, (v3){{0, 0.10f, 0}}), v3_add(base, (v3){{0, 0.86f, 0}}), 0.285f, 0.285f, 22, c, 0);
+  for (int k = 0; k < 2; k++)
+    pcyl(v3_add(base, (v3){{0, k ? 0.60f : 0.30f, 0}}), up, 0.298f, 0.018f, 22, dark);
+  pcyl(v3_add(base, (v3){{0, 0.885f, 0}}), up, 0.292f, 0.022f, 22, dark);          // top chime
+  pcyl(v3_add(base, (v3){{0, 0.02f, 0}}), up, 0.29f, 0.02f, 22, v3_lerp(dark, rust, 0.5f));
+  pcyl(v3_add(base, (v3){{0, 0.87f, 0}}), up, 0.278f, 0.008f, 22, v3_scale(c, 0.85f));   // the lid
+  mat_set(0.35f, 0.7f);
+  pcyl(v3_add(base, (v3){{0.15f, 0.89f, 0.04f}}), up, 0.035f, 0.012f, 10, rgb(0.55f, 0.55f, 0.56f));
+  pcyl(v3_add(base, (v3){{-0.17f, 0.885f, -0.02f}}), up, 0.022f, 0.01f, 10, rgb(0.55f, 0.55f, 0.56f));
+}
+
+// A LANTERN: a glass box in a cast frame with a cap, hung from the arm. The
+// glass is SMAT_LAMP and lights up at dusk (see the shader's uLampOn).
+static void prop_lamp(const prop_t *pr) {
+  v3 c = {{pr->x, 3.85f, pr->z}}, m = pr->col2;
+  mat_set(0.5f, 0.7f);
+  dec_box((v3){{c.x - 0.20f, 3.96f, c.z - 0.20f}}, (v3){{c.x + 0.20f, 4.02f, c.z + 0.20f}}, m);   // cap
+  dec_box((v3){{c.x - 0.12f, 4.02f, c.z - 0.12f}}, (v3){{c.x + 0.12f, 4.08f, c.z + 0.12f}}, m);
+  dec_box((v3){{c.x - 0.16f, 3.70f, c.z - 0.16f}}, (v3){{c.x + 0.16f, 3.74f, c.z + 0.16f}}, m);   // base ring
+  for (int k = 0; k < 4; k++) {                                                                    // corner posts
+    float sx = k & 1 ? 0.15f : -0.15f, sz = k & 2 ? 0.15f : -0.15f;
+    dec_box((v3){{c.x + sx - 0.012f, 3.74f, c.z + sz - 0.012f}}, (v3){{c.x + sx + 0.012f, 3.96f, c.z + sz + 0.012f}}, m);
+  }
+  g_scene_smat = SMAT_LAMP;
+  mat_set(0.05f, 0.0f);
+  dec_box((v3){{c.x - 0.14f, 3.74f, c.z - 0.14f}}, (v3){{c.x + 0.14f, 3.96f, c.z + 0.14f}}, pr->col);
+  g_scene_smat = 0;
+}
+
+static void mesh_props(void) {
+  int save_floats = g_scene_floats, save_want = g_scene_want;
+  int save_peak = g_scene_peak;
+  long save_drops = g_scene_drops;
+  g_scene_floats = 0;
+  g_scene_drops = 0;
+  float save_cham = g_cham;
+  g_cham = 0.0f;
+  g_ao_mul = 1.0f;
+  ao_set(0.0f, 1.0f / 0.30f, 0.70f);   // the underside of a chassis is dark
+  for (int i = 0; i < g_nprops; i++) {
+    const prop_t *pr = &g_props[i];
+    if (pr->kind == PROP_TRUCK) prop_truck(pr);
+    else if (pr->kind == PROP_CAR) prop_car(pr);
+    else if (pr->kind == PROP_LAMP) prop_lamp(pr);
+    else if (pr->kind == PROP_HELI) prop_heli(pr);
+    else if (pr->kind == PROP_PALM) prop_palm(pr);
+    else if (pr->kind == PROP_BARREL) prop_barrel(pr);
+  }
+  g_scene_smat = 0;
+  g_cham = save_cham;
+  ao_off();
+  int n = g_scene_floats;
+  int cap = (int)(sizeof g_mesh / sizeof g_mesh[0]);
+  if (n > PROPS_MAX_VERTS * VERT_FLOATS) n = PROPS_MAX_VERTS * VERT_FLOATS;
+  if (g_mesh_floats + n > cap) n = cap - g_mesh_floats;
+  if ((n < g_scene_floats || g_scene_drops) && !g_mesh_drops++)
+    fprintf(stderr, "mesh: props budget exhausted — geometry dropped\n");
+  memcpy(g_mesh + g_mesh_floats, g_scene, (size_t)n * sizeof(float));
+  g_mesh_floats += n;
+  g_props_verts = n / VERT_FLOATS;
+  g_scene_floats = save_floats; g_scene_want = save_want;
+  g_scene_peak = save_peak; g_scene_drops = save_drops;
+  g_scene_dirty = 1;
+}
+
 static void mesh_decor(void) {
   // Its OWN stream, seeded off the map seed. g_rng belongs to the sim's map
   // generation and a single draw from it here would re-roll the layout of every
@@ -24673,6 +28280,7 @@ static void mesh_decor(void) {
   int save_peak = g_scene_peak;
   long save_drops = g_scene_drops;
   g_scene_floats = 0;
+  g_scene_drops = 0;   // a STAGING overflow is a decor drop too (see below)
 
   const theme_t *th = &g_theme;
   int grass = th->surf != SURF_WET;   // nothing dry grows in standing water
@@ -24743,13 +28351,28 @@ static void mesh_decor(void) {
       }
     }
   }
+  {
+    float save_cham = g_cham;
+    g_cham = 0.0f;
+    ao_set(0.0f, 1.0f, 1.0f);
+    for (int i = 0; i < g_num_solids; i++)
+      if (g_solid_mat[i] == SMAT_CONTAINER && !g_solid_hide[i]) {
+        const solid_t *cs = &g_solids[i];
+        float lx = cs->max.x - cs->min.x, lz = cs->max.z - cs->min.z, ly = cs->max.y - cs->min.y;
+        if (ly > 2.3f && ly < 2.9f && fmaxf(lx, lz) > 5.5f && fminf(lx, lz) > 2.0f)
+          dec_container(cs, i);
+      }
+    g_cham = save_cham;
+  }
+  if (g_map_id >= 4 && g_map_id <= 6) dec_town(g_map_id - 4);
+  else if (g_map_id == MAP_COMPOUND_ID) dec_town(0);
   ao_off();
 
   int n = g_scene_floats;
   int cap = (int)(sizeof g_mesh / sizeof g_mesh[0]);
   if (n > DECOR_MAX_VERTS * VERT_FLOATS) n = DECOR_MAX_VERTS * VERT_FLOATS;
   if (g_mesh_floats + n > cap) n = cap - g_mesh_floats;
-  if (n < g_scene_floats && !g_mesh_drops++)
+  if ((n < g_scene_floats || g_scene_drops) && !g_mesh_drops++)
     fprintf(stderr, "mesh: decor budget exhausted — geometry dropped\n");
   memcpy(g_mesh + g_mesh_floats, g_scene, (size_t)n * sizeof(float));
   g_mesh_floats += n;
@@ -24887,7 +28510,7 @@ static float fig_rmax(int k, float rx, float rz) {
 }
 
 static float g_fig_y;  // ground height of the figure currently being built
-static v3    g_cam_eye;      // where the frame is being viewed from
+static v3    g_cam_eye;      // where the frame is being viewed from (declared early)
 
 // Quad band a -> b (b is the later ring along the sweep). Normals come from
 // the real quad diagonals, so a tapered or sheared band still shades flat and
@@ -26601,6 +30224,49 @@ static const float GUN_MAG_TRAVEL[WPN_COUNT][2] = {
   [WPN_SR] = {0.056f, 0.032f},
   [WPN_PT] = {0.082f, 0.0f},
 };
+// Where the support hand's magazine goes on its way to the belt pouch and back,
+// in the gun's own frame per unit of `pouch`: well below the weapon, back
+// toward the body, and a little toward the camera side.
+static v3 gun_pouch_ofs(v3 gx, v3 gy, v3 gz, float pouch) {
+  return v3_add(v3_scale(gy, -0.30f * pouch),
+         v3_add(v3_scale(gz, -0.12f * pouch), v3_scale(gx, -0.05f * pouch)));
+}
+// THE POUCH IS ON THE BODY, NOT ON THE GUN. Its position is fixed in the
+// shooter's own (camera) frame — the chest rig, low and a little left of the
+// centre line, below the frame — and a hand-held magazine travels to it from
+// wherever the well is, along an ARC that swings out and back from the
+// weapon rather than a straight line through it. `wc` is the magazine's
+// centre at the well; the return is the displacement to add.
+static v3 vm_pouch_disp(v3 wc, v3 eye, v3 rgt, v3 upv, v3 fwd, float t) {
+  v3 P = v3_add(eye, v3_add(v3_scale(rgt, -0.12f),
+                     v3_add(v3_scale(upv, -0.50f), v3_scale(fwd, 0.20f))));
+  v3 arc = v3_scale(v3_add(v3_scale(rgt, -0.09f), v3_scale(fwd, -0.06f)), sinf(F_PI * t));
+  return v3_add(v3_scale(v3_sub(P, wc), t), arc);
+}
+// The magazine's own centre in the baked model (its bounds' middle).
+static v3 vm_mag_centre(int cur) {
+  return cur == WPN_SR ? (v3){{0.0f, -0.066f, 0.053f}} : (v3){{0.0f, -0.097f, 0.127f}};
+}
+// The second magazine held in the same hand during a tactical reload: beside
+// the first, forward along the bore and a little toward the camera.
+static v3 gun_pair_ofs(v3 gx, v3 gz) {
+  return v3_add(v3_scale(gz, 0.046f), v3_scale(gx, -0.016f));
+}
+// The spent magazine's free fall, for `t` seconds after release: gravity, a
+// small push out of the well, and a forward tumble about its own centre.
+// Returns the model origin to draw the magazine group at, and its basis.
+static v3 gun_drop_pose(int cur, v3 org, v3 gx, v3 *gy, v3 *gz, float t) {
+  v3 L = cur == WPN_SR ? (v3){{0.0f, -0.066f, 0.053f}} : (v3){{0.0f, -0.097f, 0.127f}};
+  v3 c = v3_add(org, v3_add(v3_scale(*gy, L.y), v3_scale(*gz, L.z)));
+  v3 fall = {{0.0f, -(0.5f * 9.81f * t * t + 0.35f * t), 0.0f}};
+  fall = v3_add(fall, v3_scale(gx, -0.18f * t));
+  float a = 2.2f * t;
+  float ca = cosf(a), sa = sinf(a);
+  v3 ny = v3_add(v3_scale(*gy, ca), v3_scale(*gz, sa));
+  v3 nz = v3_sub(v3_scale(*gz, ca), v3_scale(*gy, sa));
+  *gy = ny; *gz = nz;
+  return v3_sub(v3_add(c, fall), v3_add(v3_scale(ny, L.y), v3_scale(nz, L.z)));
+}
 // Third-person rifle stylisation: at 20 m the true-scale barrel is 1-2 px
 // and the class-defining prop vanishes; the genre oversizes weapons x1.2-1.5.
 // The FIGURE draws the same model UNIFORMLY scaled about the gun origin —
@@ -28824,7 +32490,10 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
                               const death_t *dth, float alpha,
                               float flash01, v3 flash_col, int palette, int wpn,
                               gunanim_t gs) {
-  float mag01 = gs.mag, trig01 = gs.trig;
+  // The pouch trip rides the same travel scalar here (the third-person rifle
+  // has one magazine axis): 5 x the 60 mm travel is the pouch's 0.30 m drop. A
+  // magazine that is not in the hand at all is sent below the floor.
+  float mag01 = gs.maghide ? 60.0f : gs.mag + gs.pouch3 * 5.0f, trig01 = gs.trig;
   // Both consumers of `pos` below are asking where this figure's GROUND is, and
   // an air crouch folds 0.60 m of leg tuck into the entity origin in one tick
   // (see anim_t.root_off). Left raw, the AO ramp — which is every band on the
@@ -29672,6 +33341,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       gun_hold(wpn, GH_RELD, g_org, g_rt, g_up, g_fw, &rc, &ra, &rr);
       rc = v3_add(rc, v3_add(v3_scale(g_up, -gs.mag * GUN_MAG_TRAVEL[wpn][0] * GUN_GIRTH_3P),
                              v3_scale(g_rt, -gs.mag * GUN_MAG_TRAVEL[wpn][1] * GUN_GIRTH_3P)));
+      rc = v3_add(rc, v3_scale(gun_pouch_ofs(g_rt, g_up, g_fw, gs.pouch), GUN_GIRTH_3P));
       // The wrist stands off the magazine on the side the arm comes from, the
       // same construction the viewmodel uses — the hand is a fixed size and it
       // is the CYLINDER that has to be reachable, not the palm that stretches.
@@ -29796,6 +33466,14 @@ static void scene_mark(const mark_t *m) {
   col[3] = m->surf;                       // ring 3 IS the host: no edge at all
   float a0 = (float)(m->seed & 1023u) * (F_TAU / 1024.0f);
   v3 prev[4] = {{{0, 0, 0}}, {{0, 0, 0}}, {{0, 0, 0}}, {{0, 0, 0}}};
+  // PARALLAX RIM SHADING. A hole is a crater, not a sticker: its inner wall
+  // faces back toward the axis and its spall lip leans outward, so the sun
+  // lights one side of the bore and leaves the other in shadow — the cue that
+  // reads as DEPTH on a decal that is in fact a few hundred microns thick.
+  // The band normals carry that tilt; the centre and the outermost ring stay
+  // on the host's normal, so the decal still has no edge.
+  v3 pn[4], cn[4];
+  for (int j = 0; j < 4; j++) pn[j] = cn[j] = m->nrm;
   int prev_live = 0;
   for (int i = 0; i <= MARK_K; i++) {
     float a = a0 + (float)i * (F_TAU / MARK_K);
@@ -29820,6 +33498,13 @@ static void scene_mark(const mark_t *m) {
       if (r > lim) r = lim;
       cur[j] = v3_add(m->pos, v3_add(v3_scale(t1, cu * r), v3_scale(t2, cv * r)));
     }
+    {
+      v3 rd = v3_add(v3_scale(t1, cu), v3_scale(t2, cv));
+      cn[0] = m->nrm;
+      cn[1] = v3_norm(v3_sub(v3_scale(m->nrm, 0.70f), v3_scale(rd, 0.72f)));   // the bore's wall
+      cn[2] = v3_norm(v3_add(m->nrm, v3_scale(rd, 0.30f)));                    // the spall lip
+      cn[3] = m->nrm;
+    }
     if (i && (live || prev_live)) {
       // Ring 0 has radius 0, so the innermost band is a FAN, not a degenerate
       // strip. Winding: (t1, t2, nrm) is right-handed and the angle runs
@@ -29833,20 +33518,20 @@ static void scene_mark(const mark_t *m) {
       // while running past it — which would put a silhouette back on the one
       // ring whose whole job is not to have one.
       mat_set(MARK_ROUGH, 0.0f);
-      scene_push(prev[0], m->nrm, col[0]);
-      scene_push(prev[1], m->nrm, col[1]);
-      scene_push(cur[1],  m->nrm, col[1]);
+      scene_push(prev[0], pn[0], col[0]);
+      scene_push(prev[1], pn[1], col[1]);
+      scene_push(cur[1],  cn[1], col[1]);
       for (int j = 1; j < 3; j++) {
         mat_set(MARK_ROUGH + (m->rough - MARK_ROUGH) * (float)j * 0.5f, 0.0f);
-        scene_push(prev[j],     m->nrm, col[j]);
-        scene_push(prev[j + 1], m->nrm, col[j + 1]);
-        scene_push(cur[j + 1],  m->nrm, col[j + 1]);
-        scene_push(prev[j],     m->nrm, col[j]);
-        scene_push(cur[j + 1],  m->nrm, col[j + 1]);
-        scene_push(cur[j],      m->nrm, col[j]);
+        scene_push(prev[j],     pn[j],     col[j]);
+        scene_push(prev[j + 1], pn[j + 1], col[j + 1]);
+        scene_push(cur[j + 1],  cn[j + 1], col[j + 1]);
+        scene_push(prev[j],     pn[j],     col[j]);
+        scene_push(cur[j + 1],  cn[j + 1], col[j + 1]);
+        scene_push(cur[j],      cn[j],     col[j]);
       }
     }
-    for (int j = 0; j < 4; j++) prev[j] = cur[j];
+    for (int j = 0; j < 4; j++) { prev[j] = cur[j]; pn[j] = cn[j]; }
     prev_live = live;
   }
 }
@@ -30090,7 +33775,163 @@ static void fx_flash(v3 pos, v3 fw, v3 t1, v3 t2, v3 eye, float s, float f,
            eye, s * 0.14f, s * 0.14f, v3_scale(hot, 1.35f), v3_scale(hot, 1.35f));
     fx_disc(v3_add(pos, v3_scale(fw, s * 0.25f)), eye, s * 0.70f, v3_scale(mid, 0.30f), K, 12);
   }
+  // THE VOLUME: a stack of soft glow slices down the bore, each smaller and
+  // cooler than the last. One disc is a sprite; five overlapping ones are a
+  // body of hot gas with depth, and from the side they read as a cone.
+  for (int k = 0; k < 5; k++) {
+    float t = (float)k / 4.0f;
+    fx_disc(v3_add(pos, v3_scale(fw, s * (0.10f + 0.55f * t))), eye,
+            s * (0.42f - 0.24f * t) * (0.85f + 0.3f * FH01(k + 60)),
+            v3_scale(v3_add(v3_scale(hot, 1.0f - t), v3_scale(mid, t)), 0.10f), K, 10);
+  }
   #undef FH01
+}
+
+
+// ---------------------------------------------------------------------------
+// HOSTAGE RESCUE in the world: the hostages (a civilian figure of soft
+// ellipsoids — kneeling, hooded and tied while captive; walking, hunched, once
+// freed) and the helicopter's rotor, which spins up as the evacuation starts.
+// ---------------------------------------------------------------------------
+static void hfig_limb(v3 a, v3 b, float r, v3 col, v3 hint) {
+  v3 ax = v3_sub(b, a);
+  float l = v3_len(ax);
+  if (l < 1e-4f) return;
+  fig_ball(v3_lerp(a, b, 0.5f), r, l * 0.5f + r * 0.35f, r, ax, hint, 10, col);
+}
+typedef struct { v3 o, R, Y, F; float topple; } hframe_t;
+static v3 hfp(const hframe_t *f, float x, float y, float z) {
+  if (f->topple > 0.0f) {   // the executed: fallen on their side
+    float c = cosf(f->topple), s = sinf(f->topple);
+    float x2 = x * c - y * s, y2 = x * s + y * c;
+    x = x2; y = fmaxf(y2 + 0.16f, 0.06f);
+  }
+  return v3_add(f->o, v3_add(v3_scale(f->R, x), v3_add(v3_scale(f->Y, y), v3_scale(f->F, z))));
+}
+static void hostage_draw(const hostage_t *h, int i, float alpha) {
+  static const v3 SHIRT[RESC_HOSTAGES] = {{{0.80f, 0.78f, 0.72f}}, {{0.36f, 0.48f, 0.64f}},
+                                          {{0.60f, 0.52f, 0.36f}}};
+  static const v3 PANTS[RESC_HOSTAGES] = {{{0.20f, 0.22f, 0.28f}}, {{0.32f, 0.28f, 0.22f}},
+                                          {{0.16f, 0.17f, 0.18f}}};
+  v3 skin = rgb(0.60f, 0.43f, 0.32f), hood = rgb(0.47f, 0.39f, 0.27f),
+     shoe = rgb(0.10f, 0.09f, 0.08f), hair = rgb(0.09f, 0.07f, 0.06f);
+  v3 pos = v3_lerp(h->prev, h->pos, alpha);
+  float yaw = h->prev_yaw + wrap_pi(h->yaw - h->prev_yaw) * alpha;
+  float pose = h->prev_pose + (h->pose - h->prev_pose) * alpha;
+  float m = h->prev_move + (h->move - h->prev_move) * alpha;
+  float g = h->prev_gait + (h->gait - h->prev_gait) * alpha;
+  float st = smooth01(pose);
+  hframe_t f = {pos, {{cosf(yaw), 0, sinf(yaw)}}, {{0, 1, 0}}, {{sinf(yaw), 0, -cosf(yaw)}},
+                h->state == HS_DEAD ? 1.45f : 0.0f};
+  float breath = 0.006f * sinf((float)g_tick * TICK_DT * 1.7f + (float)i);
+  // Kneeling (st 0) and walking (st 1) joints, blended.
+  float hy = 0.42f + st * (0.92f - 0.10f * m - 0.42f);
+  float lean = 0.07f + st * (0.05f + 0.16f * m);   // slumped kneeling, hunched running
+  v3 pel = hfp(&f, 0.0f, hy, -0.02f);
+  v3 neck = hfp(&f, 0.0f, hy + 0.61f + breath, 0.0f + lean * 1.2f);
+  float bow = h->state == HS_CAPTIVE ? 0.07f : 0.03f;
+  v3 head = hfp(&f, 0.0f, hy + 0.73f + breath - bow * 0.4f, lean * 1.3f + bow);
+  mat_set(0.85f, 0.0f);
+  ao_off();
+  // Legs.
+  for (int s = -1; s <= 1; s += 2) {
+    float ph = g + (s > 0 ? 0.0f : F_PI);
+    float a = 0.55f * m * sinf(ph);                       // thigh swing
+    float kb = 0.25f + 0.85f * m * fmaxf(0.0f, sinf(ph + 1.3f));   // knee bend
+    // walking
+    v3 hipw = {{(float)s * 0.10f, hy, -0.02f - 0.10f * (1.0f - st)}};
+    v3 knw = {{(float)s * 0.11f, hy - 0.44f * cosf(a), -0.02f + 0.44f * sinf(a)}};
+    float a2 = a - kb;
+    v3 anw = {{(float)s * 0.11f, knw.y - 0.43f * cosf(a2), knw.z + 0.43f * sinf(a2)}};
+    if (anw.y < 0.08f) anw.y = 0.08f;
+    // kneeling
+    v3 knk = {{(float)s * 0.13f, 0.10f, 0.28f}}, ank = {{(float)s * 0.09f, 0.08f, -0.20f}};
+    v3 kn = v3_lerp(knk, knw, st), an = v3_lerp(ank, anw, st), hp = hipw;
+    v3 HP = hfp(&f, hp.x, hp.y, hp.z), KN = hfp(&f, kn.x, kn.y, kn.z), AN = hfp(&f, an.x, an.y, an.z);
+    hfig_limb(HP, KN, 0.078f, PANTS[i], f.R);
+    hfig_limb(KN, AN, 0.058f, PANTS[i], f.R);
+    // the foot: flat behind a kneeler (sole up), forward under a walker
+    v3 toe = st > 0.5f ? hfp(&f, an.x, fmaxf(an.y - 0.05f, 0.04f), an.z + 0.17f)
+                       : hfp(&f, an.x, 0.05f, an.z - 0.16f);
+    hfig_limb(AN, toe, 0.048f, shoe, f.Y);
+  }
+  // Torso, a little wider than deep.
+  {
+    v3 ax = v3_sub(neck, pel);
+    float l = v3_len(ax);
+    fig_ball(v3_lerp(pel, neck, 0.52f), 0.175f, l * 0.55f, 0.115f, ax, f.R, 12, SHIRT[i]);
+    fig_ball(v3_add(pel, (v3){{0, 0.03f, 0}}), 0.165f, 0.11f, 0.12f, f.Y, f.R, 10, PANTS[i]);
+  }
+  hfig_limb(neck, head, 0.05f, skin, f.R);
+  // Arms: tied behind the back while captive; swinging once free.
+  for (int s = -1; s <= 1; s += 2) {
+    float ph = g + (s > 0 ? F_PI : 0.0f);
+    float b = 0.45f * m * sinf(ph);
+    v3 sh = {{(float)s * 0.20f, hy + 0.54f + breath, -0.02f + lean}};
+    v3 elw = {{(float)s * 0.22f, sh.y - 0.27f * cosf(b), sh.z + 0.27f * sinf(b)}};
+    v3 wrw = {{(float)s * 0.21f, elw.y - 0.24f * cosf(b + 0.5f + 0.4f * m), elw.z + 0.24f * sinf(b + 0.5f + 0.4f * m)}};
+    v3 elk = {{(float)s * 0.19f, hy + 0.32f, -0.12f}}, wrk = {{(float)s * 0.045f, hy + 0.17f, -0.17f}};
+    v3 el = v3_lerp(elk, elw, st), wr = v3_lerp(wrk, wrw, st);
+    v3 SH = hfp(&f, sh.x, sh.y, sh.z), EL = hfp(&f, el.x, el.y, el.z), WR = hfp(&f, wr.x, wr.y, wr.z);
+    hfig_limb(SH, EL, 0.052f, SHIRT[i], f.F);
+    hfig_limb(EL, WR, 0.043f, st > 0.5f ? skin : SHIRT[i], f.F);
+    fig_ball(WR, 0.045f, 0.05f, 0.035f, v3_sub(WR, EL), f.F, 8, skin);
+  }
+  if (h->state == HS_CAPTIVE) {   // the cable tie at the wrists, the sack over the head
+    scene_box(hfp(&f, 0.0f, hy + 0.17f, -0.18f), v3_scale(f.R, 0.075f), v3_scale(f.Y, 0.012f),
+              v3_scale(f.F, 0.014f), rgb(0.05f, 0.05f, 0.05f));
+    fig_ball(head, 0.112f, 0.13f, 0.118f, f.Y, f.R, 12, hood);
+    fig_ball(hfp(&f, 0.0f, hy + 0.62f, lean * 1.2f + 0.02f), 0.085f, 0.03f, 0.08f, f.Y, f.R, 10,
+             tint(hood, 0.8f, 0.85f));   // the drawstring gather
+  } else {
+    fig_ball(head, 0.092f, 0.112f, 0.102f, f.Y, f.R, 12, skin);
+    fig_ball(v3_add(head, v3_add(v3_scale(f.Y, 0.035f), v3_scale(f.F, -0.02f))), 0.097f, 0.085f,
+             0.10f, f.Y, f.R, 10, hair);
+  }
+}
+
+static void rescue_scene(float alpha) {
+  if (g_map_id != MAP_COMPOUND_ID) return;
+  if (g_resc.on) {
+    g_fig_k = 12;
+    for (int i = 0; i < RESC_HOSTAGES; i++) hostage_draw(&g_resc.h[i], i, alpha);
+  }
+  // The helicopter's rotors (prop_heli is the airframe): two broad main
+  // blades on the hub, drooping a little at rest and flat at speed, and the
+  // two-bladed tail rotor on the fin's left.
+  float a = g_resc.prev_rotor + (g_resc.rotor - g_resc.prev_rotor) * alpha;
+  float spin = f_clamp(g_resc.rotor_w / 30.0f, 0.0f, 1.0f);
+  mat_set(0.55f, 0.2f);
+  v3 rc = rgb(0.09f, 0.10f, 0.09f), tipc = rgb(0.80f, 0.74f, 0.20f);
+  v3 c = {{22.0f, 3.58f, -45.0f}};
+  for (int k = 0; k < 2; k++) {
+    float b = a + (float)k * F_PI;
+    v3 d = {{cosf(b), 0, sinf(b)}}, q = {{-sinf(b), 0, cosf(b)}};
+    float droop = 0.035f * (1.0f - spin);
+    for (int s = 0; s < 6; s++) {            // six spans, each lower toward the tip
+      float r0 = 0.35f + (float)s * 0.95f, r1 = r0 + 0.95f;
+      v3 m = v3_add(c, v3_add(v3_scale(d, (r0 + r1) * 0.5f), (v3){{0, -droop * (r0 + r1) * 0.5f, 0}}));
+      v3 ex = v3_add(v3_scale(d, 0.475f), (v3){{0, -droop * 0.475f, 0}});
+      scene_box(m, ex, (v3){{0, 0.022f, 0}}, v3_scale(q, 0.27f), s == 5 ? tipc : rc);
+    }
+    scene_box(v3_add(c, v3_scale(d, 0.22f)), v3_scale(d, 0.22f), (v3){{0, 0.05f, 0}}, v3_scale(q, 0.09f),
+              rgb(0.20f, 0.21f, 0.22f));   // the grip
+  }
+  // The flybar across the hub, ninety degrees round, as the type has.
+  {
+    float b = a + F_PI * 0.5f;
+    v3 d = {{cosf(b), 0, sinf(b)}};
+    scene_box(v3_add(c, (v3){{0, 0.10f, 0}}), v3_scale(d, 1.1f), (v3){{0, 0.012f, 0}},
+              (v3){{-sinf(b) * 0.02f, 0, cosf(b) * 0.02f}}, rgb(0.12f, 0.12f, 0.12f));
+  }
+  v3 tc = {{22.0f - 10.72f, 3.42f, -45.0f - 0.24f}};
+  float tb = a * 3.1f;
+  for (int k = 0; k < 2; k++) {
+    float t2 = tb + (float)k * F_PI;
+    scene_box(v3_add(tc, (v3){{cosf(t2) * 0.62f, sinf(t2) * 0.62f, 0}}),
+              (v3){{cosf(t2) * 0.62f, sinf(t2) * 0.62f, 0}}, (v3){{-sinf(t2) * 0.09f, cosf(t2) * 0.09f, 0}},
+              (v3){{0, 0, 0.015f}}, rc);
+  }
 }
 
 static void scene_build(const player_t *p, float alpha, int show_player) {
@@ -30117,6 +33958,40 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
       v3 gz = v3_cross(gx, gy);
       v3 ofs = v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f));
       model_draw(GRENADE_V, GRENADE_P, GRENADE_NP, 2, v3_sub(at, ofs), gx, gy, gz);
+    }
+  mat_set(0.92f, 0.0f);
+  for (int i = 0; i < MAX_CHIPS; i++)
+    if (g_chips[i].life > 0) {
+      const chip_t *q = &g_chips[i];
+      v3 at = v3_lerp(q->prev, q->pos, alpha);
+      float fo = f_clamp((float)q->life / 60.0f, 0.0f, 1.0f);   // shrink away at the end
+      float r = q->sz * fo;
+      if (r < 0.001f) continue;
+      v3 gx = v3_rot_axis((v3){{1, 0, 0}}, q->axis, q->a), gy = v3_rot_axis((v3){{0, 1, 0}}, q->axis, q->a);
+      v3 gz = v3_cross(gx, gy);
+      scene_box(at, v3_scale(gx, r * 1.3f), v3_scale(gy, r * 0.7f), v3_scale(gz, r), q->col);
+    }
+  for (int i = 0; i < MAX_WMAGS; i++)
+    if (g_wmags[i].life > 0 && g_wmags[i].delay <= 0) {
+      const wmag_t *q = &g_wmags[i];
+      // The player's own, in first person, is the viewmodel's falling magazine
+      // for its first 0.35 s — two copies of one object would be on screen.
+      int age = 9 * TICK_HZ - q->life;
+      if (q->src == g_local_ent && !show_player && age < (int)(0.35f * TICK_HZ)) continue;
+      v3 at = v3_lerp(q->prev, q->pos, alpha);
+      v3 gx, gy, gz;
+      if (q->rest) {        // on its side: the broad face down, along its heading
+        gx = (v3){{0, 1, 0}};
+        gy = (v3){{cosf(q->head), 0, sinf(q->head)}};
+      } else {
+        gx = v3_rot_axis((v3){{1, 0, 0}}, q->axis, q->a);
+        gy = v3_rot_axis((v3){{0, 1, 0}}, q->axis, q->a);
+      }
+      gz = v3_cross(gx, gy);
+      v3 L = q->wpn == WPN_SR ? (v3){{0.0f, -0.066f, 0.053f}} : (v3){{0.0f, -0.097f, 0.127f}};
+      v3 o = v3_sub(at, v3_add(v3_scale(gy, L.y), v3_scale(gz, L.z)));
+      if (q->wpn == WPN_SR) model_draw(SNIPER_V, SNIPER_P, SNIPER_NP, 1, o, gx, gy, gz);
+      else                  model_draw(RIFLE_V, RIFLE_P, RIFLE_NP, 1, o, gx, gy, gz);
     }
   // Every human body (P1-58): the LOCAL one only when the camera is not
   // first-person; the other seven ALWAYS — unseen here they also cast no
@@ -30161,6 +34036,7 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
   }
   g_fig_diss = 0.0f;
   g_fig_kcap = 0;
+  rescue_scene(alpha);
   for (int i = 0; i < MAX_MARKS; i++)
     if (g_marks[i].used) {
       // Rate 0 makes ao_at return the floor for every vertex, i.e. exactly the
@@ -30398,6 +34274,38 @@ static void fx_build(v3 eye) {
   if (g_blast_light > 0.01f)
     fx_disc(g_blast_p, eye, 15.0f, v3_scale((v3){{0.75f, 0.52f, 0.30f}}, g_blast_light),
             (v3){{0, 0, 0}}, 24);
+  {
+    // AIRBORNE DUST: motes hanging in a 12 m cube that tiles around the eye,
+    // each drifting on the wind and bobbing, so the field is fixed in the
+    // WORLD and the player walks through it. They are only seen by forward
+    // scatter — bright looking toward the sun, nearly gone away from it —
+    // which is how dust in a sunbeam actually shows.
+    v3 sn = atm_sun();
+    const atm_t *am = atm_now();
+    float tt = g_ui_time;
+    v3 wd = wind_dir();
+    for (int i = 0; i < 140; i++) {
+      uint32_t hh = fx_hash((uint32_t)i * 0x9E3779B9u + 0x51u);
+      float rx = (float)(hh & 1023) / 1023.0f, ry = (float)((hh >> 10) & 1023) / 1023.0f;
+      float rz = (float)((hh >> 20) & 1023) / 1023.0f;
+      v3 q = {{rx * 12.0f + wd.x * tt * 0.25f, ry * 4.0f + 0.15f * sinf(tt * 0.6f + rx * 9.0f),
+               rz * 12.0f + wd.z * tt * 0.25f}};
+      q.x = eye.x - 6.0f + fmodf(fmodf(q.x - (eye.x - 6.0f), 12.0f) + 12.0f, 12.0f);
+      q.z = eye.z - 6.0f + fmodf(fmodf(q.z - (eye.z - 6.0f), 12.0f) + 12.0f, 12.0f);
+      q.y = eye.y - 2.0f + fmodf(fmodf(q.y - (eye.y - 2.0f), 4.0f) + 4.0f, 4.0f);
+      if (q.y < 0.05f) continue;
+      v3 dv = v3_sub(q, eye);
+      float dl = v3_len(dv);
+      if (dl < 0.6f || dl > 7.0f) continue;
+      float mu = v3_dot(v3_scale(dv, 1.0f / dl), sn);
+      float ph = mu > 0.0f ? mu * mu * mu * mu : 0.0f;
+      float k = (0.04f + 0.55f * ph) * (1.0f - dl / 7.0f) * (0.5f + 0.5f * (float)((hh >> 30) & 1));
+      if (k < 0.01f) continue;
+      fx_disc(q, eye, 0.004f + 0.003f * rx,
+              v3_scale((v3){{am->sun_col[0], am->sun_col[1], am->sun_col[2]}}, k * 0.10f),
+              (v3){{0, 0, 0}}, 6);
+    }
+  }
   for (int i = 0; i < MAX_DUST; i++)
     if (g_dust[i].life > 0) {
       const dust_t *q = &g_dust[i];
@@ -30405,8 +34313,11 @@ static void fx_build(v3 eye) {
       float r = q->r0 + (q->r1 - q->r0) * sqrtf(a1);
       // In fast, out slow; and eased out near the lens like every burst.
       float k = f_clamp(a1 * 10.0f, 0.0f, 1.0f) * (1.0f - a1) * (1.0f - a1);
-      float nf;
-      if (!fx_near_ease(q->pos, eye, &nf)) continue;
+      float nf = 1.0f;
+      if (q->wisp) {
+        v3 dq = v3_sub(q->pos, eye);
+        if (v3_dot(dq, dq) < 0.12f * 0.12f) continue;
+      } else if (!fx_near_ease(q->pos, eye, &nf)) continue;
       fx_disc(q->pos, eye, r, v3_scale(q->col, k * nf), (v3){{0, 0, 0}}, 10);
     }
   for (int i = 0; i < MAX_FLASHES; i++) {
@@ -30703,12 +34614,34 @@ static struct { int on, which, piv_on;
 static struct { float bend_deg, bore_deg, palm_mm, off_mm; } g_vm_hdbg[2];
 static v3 g_vm_hand_p[2];   // trigger wrist, support wrist — published by vm_build
 
+// cubic-bezier(x1, y1, x2, y2) easing with (0,0) and (1,1) fixed: solve x(t)
+// for t by Newton, return y(t).
+static float ads_bezier(float x) {
+  x = f_clamp(x, 0.0f, 1.0f);
+  const float x1 = 0.22f, y1 = 0.61f, x2 = 0.36f, y2 = 1.0f;
+  float t = x;
+  for (int i = 0; i < 6; i++) {
+    float it = 1.0f - t;
+    float xt = 3.0f * it * it * t * x1 + 3.0f * it * t * t * x2 + t * t * t;
+    float dx = 3.0f * it * it * x1 + 6.0f * it * t * (x2 - x1) + 3.0f * t * t * (1.0f - x2);
+    if (fabsf(dx) < 1e-5f) break;
+    t = f_clamp(t - (xt - x) / dx, 0.0f, 1.0f);
+  }
+  float it = 1.0f - t;
+  return 3.0f * it * it * t * y1 + 3.0f * it * t * t * y2 + t * t * t;
+}
+
 static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 fwd) {
   const vm_t *v = &p->vm;
   const weapon_t *w = &p->wp;
   scene_reset();
   #define VLERP(f) (v->prev_##f + (v->f - v->prev_##f) * alpha)
-  float ads = w->prev_ads_s + (w->ads_s - w->prev_ads_s) * alpha;
+  // The raise follows a CUBIC BEZIER, not the bare ramp: quick off the hip,
+  // and a long soft arrival into the eye (CSS's ease-out, 0.22/0.61/0.36/1),
+  // so the last millimetres of alignment decelerate instead of stopping
+  // dead. Both ends are fixed (0 and 1), so the hip pose and the aligned
+  // sight picture are exactly where they were.
+  float ads = ads_bezier(w->prev_ads_s + (w->ads_s - w->prev_ads_s) * alpha);
   float kick = VLERP(kick);
   float dip = p->prev_land_dip + (p->land_dip - p->prev_land_dip) * alpha;
 
@@ -30807,11 +34740,18 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // a player is in when they actually shoot, and the press rendered
   // byte-identical frames there. 1.5 mm also stays well under the fire kick's
   // own 9.1 mm peak on the same axis, so recoil still dominates either way.
+  // WALL PULL-BACK: drawn in toward the chest, down, and (below) muzzle up.
+  float wallk = VLERP(wall);
+  wallk = wallk * wallk * (3.0f - 2.0f * wallk);
+  px -= 0.035f * wallk;
+  py -= 0.045f * wallk;
   float tkick = cur == WPN_SR ? hip : 0.45f + 0.55f * hip;
   float pz = (ptl ? 0.37f : 0.30f) - 0.0015f * trig * tkick
            - 0.008f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
            + VLERP(lag_z) - sw * 0.03f + rl * 0.050f
-           - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f;
+           - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f
+           - 0.17f * wallk;
+  float twist = VLERP(twist);
 
   v3 gx = rgt, gy = upv, gz = fwd;
   // sw * 0.42, not 0.7: 0.7 rad of muzzle-down put the barrel tip a further
@@ -30827,9 +34767,11 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
   rot2(&gz, &gy, -(VLERP(sway_p) + kick * (6.0f + 3.2f * hip)
                  + rl * 0.055f - rch * 0.045f
-                 - rk * 0.075f + sw * 0.42f) + 0.022f * hip);              // pitch
+                 - rk * 0.075f + sw * 0.42f) + 0.022f * hip
+                 + 0.62f * wallk);                                         // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (0.112f + lean_d * 0.22f) * hip);                     // yaw
+                 + (0.112f + lean_d * 0.22f) * hip + twist * 0.25f
+                 - 0.20f * wallk);                                         // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
   // (the weapon sits right of centre at the hip, so the camera is on its left);
@@ -30848,7 +34790,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // halves of the reload reading as one long wobble. 49 degrees, against the
   // AR's 19: the AR's charging handle is already on the camera's side.
   float cyroll = cur == WPN_SR ? 0.86f : 0.34f;
-  rot2(&gx, &gy, VLERP(roll) + rl * -0.46f + rch * cyroll - rk * 0.16f +
+  rot2(&gx, &gy, VLERP(roll) + rl * -0.46f + rch * cyroll - rk * 0.16f + twist
+                 + 0.30f * wallk +
                  (-0.086f - lean * 0.10f + lean_d * 0.30f) * hip);         // roll
   int fistw = cur == WPN_KN || cur == WPN_GR;
   if (fistw) {
@@ -30895,9 +34838,38 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     if (!nade_gone) model_draw(mv, mp, mn, 0, org, gx, gy, gz);
     if (ads < 0.5f && rl < 0.2f && !nade_gone && ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
     float md = mdrop * GUN_MAG_TRAVEL[cur][0], mx = mdrop * -GUN_MAG_TRAVEL[cur][1];
-    model_draw(mv, mp, mn, 1,
-               v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(ar ? gz : gx, mx))),
-               gx, gy, gz);
+    {
+      // Old and fresh magazines (see gun_anim_t.pair): each sits at the well's
+      // travel, rides as much of the hand's pouch trip as it is in the hand
+      // for, and the pair is offset sideways by the shift across.
+      v3 well = v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(ar ? gz : gx, mx)));
+      v3 L = vm_mag_centre(cur);
+      v3 wc = v3_add(well, v3_add(v3_scale(gy, L.y), v3_scale(gz, L.z)));
+      v3 po = (ar || cur == WPN_SR) ? vm_pouch_disp(wc, eye, rgt, upv, fwd, ga_.pouch)
+                                    : gun_pouch_ofs(gx, gy, gz, ga_.pouch);
+      v3 so = ga_.retain ? gun_pair_ofs(gx, gz) : (v3){{0, 0, 0}};
+      if (ga_.old_vis)
+        model_draw(mv, mp, mn, 1, v3_add(v3_add(well, v3_scale(po, ga_.old_pouch)),
+                                         v3_scale(so, -ga_.pair)), gx, gy, gz);
+      if (ga_.fresh_vis) {
+        // INDEXED: tilted nose-forward about its own centre on the way up, so
+        // the front of the magazine meets the well first and the hand rocks it
+        // straight as it goes in.
+        float ta = 0.55f * ga_.index;
+        float ca = cosf(ta), sa = sinf(ta);
+        v3 ty = v3_add(v3_scale(gy, ca), v3_scale(gz, sa));
+        v3 tz = v3_sub(v3_scale(gz, ca), v3_scale(gy, sa));
+        v3 c = v3_add(v3_add(wc, v3_scale(po, ga_.fresh_pouch)), v3_scale(so, 1.0f - ga_.pair));
+        model_draw(mv, mp, mn, 1, v3_sub(c, v3_add(v3_scale(ty, L.y), v3_scale(tz, L.z))),
+                   gx, ty, tz);
+      }
+    }
+    // The spent magazine, falling free of the well (empty reloads only).
+    if (ga_.drop_t >= 0.0f && ga_.drop_t < 0.6f && (ar || cur == WPN_SR)) {
+      v3 dy = gy, dz = gz;
+      v3 dorg = gun_drop_pose(cur, org, gx, &dy, &dz, ga_.drop_t);
+      model_draw(mv, mp, mn, 1, dorg, gx, dy, dz);
+    }
     if (cur == WPN_PT) {
       model_draw(mv, mp, mn, 3, v3_add(org, v3_scale(gz, -ga_.slide * 0.034f)), gx, gy, gz);
       g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, GUN_MUZ[WPN_PT][1]),
@@ -30913,10 +34885,27 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       g_vm_muzzle = v3_add(org, v3_add(v3_scale(gy, 0.022f), v3_scale(gz, 0.492f)));
       g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, VM_HOLO_Z)));
       g_gun_sight_r = VM_HOLO_R;
-      mat_set(0.22f, 0.0f);
-      scene_box(v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, VM_HOLO_DOT_Z))),
-                v3_scale(gx, 0.0008f), v3_scale(gy, 0.0008f), v3_scale(gz, 0.0004f),
-                (v3){{3.200f, 0.420f, 0.220f}});   // the holographic dot
+      // NO MODELLED DOT. A holographic reticle is collimated: it is an image at
+      // infinity, so it sits on the point of aim wherever the eye is behind the
+      // window and slides across the glass as the rifle sways — a dot BUILT
+      // into the hood does the opposite and rides with the frame. The reticle
+      // is drawn in the HUD on the aim point and clipped by this window, which
+      // is projected here exactly as the scope's ocular is.
+      {
+        v3 rel = v3_sub(g_gun_sight_p, eye);
+        float oz = v3_dot(rel, fwd);
+        g_holo_ex[0] = g_holo_ex[1] = g_holo_ey[0] = g_holo_ey[1] = 0.0f;
+        if (oz > 0.02f) {
+          float sc = ui_scale();
+          float vh = (float)R.height / sc, vw = (float)R.width / sc;
+          float f = (vh * 0.5f) / tanf(VM_FOV_DEG * 0.5f * DEG2RAD);
+          g_holo_cx = 0.5f * vw + v3_dot(rel, rgt) / oz * f;
+          g_holo_cy = 0.5f * vh - v3_dot(rel, upv) / oz * f;
+          float hr = VM_HOLO_R * 0.92f / oz * f;   // inside the hood's own lip
+          g_holo_ex[0] = v3_dot(gx, rgt) * hr * 1.18f; g_holo_ex[1] = -v3_dot(gx, upv) * hr * 1.18f;
+          g_holo_ey[0] = v3_dot(gy, rgt) * hr;          g_holo_ey[1] = -v3_dot(gy, upv) * hr;
+        }
+      }
     } else {
       float blift, bdraw;
       gun_bolt_phase(ga_.bolt, &blift, &bdraw);
@@ -31000,6 +34989,25 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         // to fix, in the other axis.
         rc = v3_add(rc, v3_add(v3_scale(gy, -mdrop * GUN_MAG_TRAVEL[cur][0]),
                                v3_scale(gx, -mdrop * GUN_MAG_TRAVEL[cur][1])));
+        if (cur == WPN_AR || cur == WPN_SR) {
+          float md2 = mdrop * GUN_MAG_TRAVEL[cur][0], mx2 = mdrop * -GUN_MAG_TRAVEL[cur][1];
+          v3 L = vm_mag_centre(cur);
+          v3 wc = v3_add(org, v3_add(v3_scale(gy, -md2 + L.y),
+                         v3_add(v3_scale(gz, L.z), v3_scale(cur == WPN_AR ? gz : gx, mx2))));
+          rc = v3_add(rc, vm_pouch_disp(wc, eye, rgt, upv, fwd, ga_.pouch));
+          // The hand turns with the magazine it is indexing.
+          float ta = 0.55f * ga_.index;
+          ra = v3_norm(v3_add(v3_scale(ra, cosf(ta)), v3_scale(v3_cross(gx, ra), sinf(ta))));
+        } else {
+          rc = v3_add(rc, gun_pouch_ofs(gx, gy, gz, ga_.pouch));
+        }
+        if (ga_.retain) {
+          // Two in the hand: grip between them. One (the old, after the seat):
+          // grip it.
+          float both = (float)(ga_.old_vis && ga_.fresh_vis && ga_.fresh_pouch > 0.5f);
+          float k = both ? 0.5f - ga_.pair : (ga_.fresh_pouch > 0.5f ? 1.0f - ga_.pair : -ga_.pair);
+          rc = v3_add(rc, v3_scale(gun_pair_ofs(gx, gz), k));
+        }
         gc = v3_lerp(gc, rc, mgv);
         ga = v3_norm(v3_lerp(ga, ra, mgv));
         gr = gr + (rr - gr) * mgv;
@@ -31313,6 +35321,22 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
         model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, wr, ax, on, v3_cross(ax, on));
+        if (h == 1 && !knf && cur != WPN_GR) {
+          // The wrist display, laid over the bracer's amber window (that part
+          // spans x 41..61 mm, z +-10.8 mm, its top at 40.8 mm in model units).
+          v3 az = v3_cross(ax, on);
+          v3 c0 = v3_add(wr, v3_add(v3_scale(ax, 0.0510f), v3_scale(on, 0.0413f)));
+          v3 eu = v3_scale(ax, 0.0094f), ev = v3_scale(az, 0.0100f);
+          mat_set(0.3f, -8.0f);
+          v3 P4[4] = {v3_sub(v3_sub(c0, eu), ev), v3_sub(v3_add(c0, eu), ev),
+                      v3_add(v3_add(c0, eu), ev), v3_add(v3_sub(c0, eu), ev)};
+          // UV: u along the forearm reads left-to-right from the eye, v up.
+          v3 U4[4] = {{{1, 1, 0}}, {{1, 0, 0}}, {{0, 0, 0}}, {{0, 1, 0}}};
+          int ord[2][6] = {{0, 1, 2, 0, 2, 3}, {0, 2, 1, 0, 3, 2}};
+          for (int w2 = 0; w2 < 2; w2++)
+            for (int k = 0; k < 6; k++) scene_push(P4[ord[w2][k]], on, U4[ord[w2][k]]);
+          mat_set(MAT_PARK_R, MAT_PARK_M);
+        }
       }
       #undef VP
       #undef VD
@@ -32194,91 +36218,583 @@ static void atm_upload(void) {
   }
 }
 
-// Full-resolution single-sample copy of the frame, rebuilt on size change.
-static void post_update(void) {
-  if (R.post_fbo && R.post_w == R.width && R.post_h == R.height) return;
-  if (R.post_fbo) {
-    glDeleteFramebuffers(1, &R.post_fbo);
-    glDeleteTextures(1, &R.post_tex);
-    R.post_fbo = 0;
-  }
-  R.post_w = R.width; R.post_h = R.height;
-  glGenTextures(1, &R.post_tex);
-  glBindTexture(GL_TEXTURE_2D, R.post_tex);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, R.width, R.height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, NULL);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+// --- the HDR chain's targets -----------------------------------------------
+// One colour texture, optionally with a depth attachment (renderbuffer or
+// texture) — every target in the chain is one of these.
+static GLuint tex_make(int w, int h, GLenum ifmt, GLenum fmt, GLenum type, GLenum filt) {
+  GLuint t;
+  glGenTextures(1, &t);
+  glBindTexture(GL_TEXTURE_2D, t);
+  glTexImage2D(GL_TEXTURE_2D, 0, (GLint)ifmt, w, h, 0, fmt, type, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, (GLint)filt);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filt == GL_NEAREST ? GL_NEAREST : GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-  glGenFramebuffers(1, &R.post_fbo);
-  glBindFramebuffer(GL_FRAMEBUFFER, R.post_fbo);
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         R.post_tex, 0);
-  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-    glDeleteFramebuffers(1, &R.post_fbo);
-    glDeleteTextures(1, &R.post_tex);
-    R.post_fbo = 0;  // an ungraded game rather than no game
-  }
+  return t;
+}
+static GLuint fbo_make(GLuint color, GLuint depth_tex) {
+  GLuint f;
+  glGenFramebuffers(1, &f);
+  glBindFramebuffer(GL_FRAMEBUFFER, f);
+  if (color) glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+  else glDrawBuffer(GL_NONE);
+  if (depth_tex) glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, depth_tex, 0);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    fatal("hdr: a post-chain framebuffer is incomplete (RGBA16F unsupported?)");
+  return f;
 }
 
-// Bloom, grade and vignette, over the finished 3D frame and under the HUD.
-static void post_pass(void) {
-  blur_update();
-  post_update();
-  if (!R.post_fbo || !R.blur_fbo[0] || !R.blur_fbo[1]) return;
-  const atm_t *a = atm_now();
-  GLuint dst = R.msaa_fbo ? R.msaa_fbo : R.present_fbo;
-  msaa_resolve();
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
-  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.post_fbo);
+static void scene_update(void) {
+  if (R.scene_fbo && R.post_w == R.width && R.post_h == R.height) return;
+  if (R.scene_fbo) {
+    GLuint f[] = {R.scene_fbo, R.z_fbo[0], R.z_fbo[1], R.ao_fbo, R.vol_fbo, R.lum_fbo,
+                  R.ad_fbo[0], R.ad_fbo[1], R.bl_fbo[0], R.bl_fbo[1], R.bl_fbo[2],
+                  R.bl_fbo[3], R.bl_fbo[4]};
+    GLuint t[] = {R.scene_tex, R.z_tex[0], R.z_tex[1], R.ao_tex, R.vol_tex, R.lum_tex,
+                  R.ad_tex[0], R.ad_tex[1], R.bl_tex[0], R.bl_tex[1], R.bl_tex[2],
+                  R.bl_tex[3], R.bl_tex[4]};
+    glDeleteFramebuffers((GLsizei)(sizeof f / sizeof f[0]), f);
+    glDeleteTextures((GLsizei)(sizeof t / sizeof t[0]), t);
+    glDeleteRenderbuffers(1, &R.scene_zrb);
+  }
+  int w = R.width, h = R.height, hw = (w + 1) / 2, hh = (h + 1) / 2;
+  R.post_w = w; R.post_h = h;
+  R.scene_tex = tex_make(w, h, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, GL_LINEAR);
+  glGenRenderbuffers(1, &R.scene_zrb);
+  glBindRenderbuffer(GL_RENDERBUFFER, R.scene_zrb);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
+  R.scene_fbo = fbo_make(R.scene_tex, 0);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, R.scene_zrb);
+  for (int i = 0; i < 2; i++) {
+    R.z_tex[i] = tex_make(w, h, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_FLOAT, GL_NEAREST);
+    R.z_fbo[i] = fbo_make(0, R.z_tex[i]);
+  }
+  R.ao_tex = tex_make(hw, hh, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE, GL_LINEAR);
+  R.ao_fbo = fbo_make(R.ao_tex, 0);
+  R.vol_tex = tex_make(hw, hh, GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, GL_LINEAR);
+  R.vol_fbo = fbo_make(R.vol_tex, 0);
+  for (int i = 0; i < 5; i++) {
+    R.bl_w[i] = w >> (i + 1); R.bl_h[i] = h >> (i + 1);
+    if (R.bl_w[i] < 1) R.bl_w[i] = 1;
+    if (R.bl_h[i] < 1) R.bl_h[i] = 1;
+    R.bl_tex[i] = tex_make(R.bl_w[i], R.bl_h[i], GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT, GL_LINEAR);
+    R.bl_fbo[i] = fbo_make(R.bl_tex[i], 0);
+  }
+  // The meter: 128x64, mipped down to one texel that holds the weighted mean.
+  R.lum_tex = tex_make(128, 64, GL_RG16F, GL_RG, GL_HALF_FLOAT, GL_LINEAR_MIPMAP_LINEAR);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  R.lum_levels = 7;
+  R.lum_fbo = fbo_make(R.lum_tex, 0);
+  for (int i = 0; i < 2; i++) {
+    R.ad_tex[i] = tex_make(1, 1, GL_RG16F, GL_RG, GL_HALF_FLOAT, GL_NEAREST);
+    R.ad_fbo[i] = fbo_make(R.ad_tex[i], 0);
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+  }
+  glClearColor(0.71f, 0.73f, 0.75f, 1.0f);
+  R.ad_frame = -10;
+  R.have_prev = 0;
+  glBindTexture(GL_TEXTURE_2D, R.font_tex);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.present_fbo);
+}
+static GLuint scene_target(void) { return R.msaa_fbo ? R.msaa_fbo : R.scene_fbo; }
+
+// Copy the depth the frame holds right now into z_tex[which]. Called twice:
+// before the viewmodel clears depth (the world) and after it (the weapon).
+static void depth_copy(int which) {
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, scene_target());
+  glBindFramebuffer(GL_DRAW_FRAMEBUFFER, R.z_fbo[which]);
   glBlitFramebuffer(0, 0, R.width, R.height, 0, 0, R.width, R.height,
-                    GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                    GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+  glBindFramebuffer(GL_FRAMEBUFFER, scene_target());
+}
+
+static mat4 m4_inverse(mat4 a) {
+  const float *m = a.m;
+  float inv[16];
+  inv[0] = m[5]*m[10]*m[15] - m[5]*m[11]*m[14] - m[9]*m[6]*m[15] + m[9]*m[7]*m[14] + m[13]*m[6]*m[11] - m[13]*m[7]*m[10];
+  inv[4] = -m[4]*m[10]*m[15] + m[4]*m[11]*m[14] + m[8]*m[6]*m[15] - m[8]*m[7]*m[14] - m[12]*m[6]*m[11] + m[12]*m[7]*m[10];
+  inv[8] = m[4]*m[9]*m[15] - m[4]*m[11]*m[13] - m[8]*m[5]*m[15] + m[8]*m[7]*m[13] + m[12]*m[5]*m[11] - m[12]*m[7]*m[9];
+  inv[12] = -m[4]*m[9]*m[14] + m[4]*m[10]*m[13] + m[8]*m[5]*m[14] - m[8]*m[6]*m[13] - m[12]*m[5]*m[10] + m[12]*m[6]*m[9];
+  inv[1] = -m[1]*m[10]*m[15] + m[1]*m[11]*m[14] + m[9]*m[2]*m[15] - m[9]*m[3]*m[14] - m[13]*m[2]*m[11] + m[13]*m[3]*m[10];
+  inv[5] = m[0]*m[10]*m[15] - m[0]*m[11]*m[14] - m[8]*m[2]*m[15] + m[8]*m[3]*m[14] + m[12]*m[2]*m[11] - m[12]*m[3]*m[10];
+  inv[9] = -m[0]*m[9]*m[15] + m[0]*m[11]*m[13] + m[8]*m[1]*m[15] - m[8]*m[3]*m[13] - m[12]*m[1]*m[11] + m[12]*m[3]*m[9];
+  inv[13] = m[0]*m[9]*m[14] - m[0]*m[10]*m[13] - m[8]*m[1]*m[14] + m[8]*m[2]*m[13] + m[12]*m[1]*m[10] - m[12]*m[2]*m[9];
+  inv[2] = m[1]*m[6]*m[15] - m[1]*m[7]*m[14] - m[5]*m[2]*m[15] + m[5]*m[3]*m[14] + m[13]*m[2]*m[7] - m[13]*m[3]*m[6];
+  inv[6] = -m[0]*m[6]*m[15] + m[0]*m[7]*m[14] + m[4]*m[2]*m[15] - m[4]*m[3]*m[14] - m[12]*m[2]*m[7] + m[12]*m[3]*m[6];
+  inv[10] = m[0]*m[5]*m[15] - m[0]*m[7]*m[13] - m[4]*m[1]*m[15] + m[4]*m[3]*m[13] + m[12]*m[1]*m[7] - m[12]*m[3]*m[5];
+  inv[14] = -m[0]*m[5]*m[14] + m[0]*m[6]*m[13] + m[4]*m[1]*m[14] - m[4]*m[2]*m[13] - m[12]*m[1]*m[6] + m[12]*m[2]*m[5];
+  inv[3] = -m[1]*m[6]*m[11] + m[1]*m[7]*m[10] + m[5]*m[2]*m[11] - m[5]*m[3]*m[10] - m[9]*m[2]*m[7] + m[9]*m[3]*m[6];
+  inv[7] = m[0]*m[6]*m[11] - m[0]*m[7]*m[10] - m[4]*m[2]*m[11] + m[4]*m[3]*m[10] + m[8]*m[2]*m[7] - m[8]*m[3]*m[6];
+  inv[11] = -m[0]*m[5]*m[11] + m[0]*m[7]*m[9] + m[4]*m[1]*m[11] - m[4]*m[3]*m[9] - m[8]*m[1]*m[7] + m[8]*m[3]*m[5];
+  inv[15] = m[0]*m[5]*m[10] - m[0]*m[6]*m[9] - m[4]*m[1]*m[10] + m[4]*m[2]*m[9] + m[8]*m[1]*m[6] - m[8]*m[2]*m[5];
+  float det = m[0]*inv[0] + m[1]*inv[4] + m[2]*inv[8] + m[3]*inv[12];
+  mat4 r;
+  float id = fabsf(det) > 1e-30f ? 1.0f / det : 0.0f;
+  for (int i = 0; i < 16; i++) r.m[i] = inv[i] * id;
+  return r;
+}
+
+static GLint uloc(GLuint prog, const char *name) { return glGetUniformLocation(prog, name); }
+static void fs_tri(GLuint fbo, int w, int h) {
+  glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+  glViewport(0, 0, w, h);
+  glDrawArrays(GL_TRIANGLES, 0, 3);
+}
+static void depth_uniforms(GLuint prog) {
+  glUniform2f(uloc(prog, "uTanXY"), R.tan_x, R.tan_y);
+  glUniform2f(uloc(prog, "uNF"), ZNEAR, ZFAR);
+}
+// The grade uniforms, shared by the frame composite and the scope picture.
+static void grade_uniforms(GLuint prog, int fx) {
+  const atm_t *a = atm_now();
+  glUniform1f(uloc(prog, "uSat"), a->sat);
+  glUniform1f(uloc(prog, "uCon"), a->con);
+  glUniform1f(uloc(prog, "uVig"), a->vig);
+  glUniform3fv(uloc(prog, "uTint"), 1, a->tint);
+  glUniform3fv(uloc(prog, "uLift"), 1, a->lift);
+  glUniform1f(uloc(prog, "uFx"), fx ? 1.0f : 0.0f);
+}
+
+// Heat haze over the player's muzzle: published by the weapon code (Phase 6).
+static float g_heat_shimmer;
+static int   g_post_dbg;          // harness `postdbg`: show one post channel
+static v3    g_heat_scr;          // x, y in uv, radius in uv
+
+// Eye adaptation + the whole post chain, scene -> present buffer. ALWAYS runs:
+// the display transform lives here now, so `fx` only switches the effects.
+static void post_pass(int fx) {
+  const atm_t *a = atm_now();
+  msaa_resolve();
+  glDepthMask(GL_TRUE);
+  if (!R.vm_drawn) {   // no weapon this frame: its depth is "nothing"
+    glBindFramebuffer(GL_FRAMEBUFFER, R.z_fbo[1]);
+    glClear(GL_DEPTH_BUFFER_BIT);
+  }
   glDisable(GL_BLEND);
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
   glBindVertexArray(R.vao_sky);
-  glViewport(0, 0, R.blur_w, R.blur_h);
-  glBindFramebuffer(GL_FRAMEBUFFER, R.blur_fbo[0]);
-  glUseProgram(R.prog_bright);
-  glUniform1i(R.u_br_tex, 0);
-  glUniform1f(R.u_br_thresh, 0.70f);
-  glUniform1f(R.u_br_gain, 1.0f);
-  glBindTexture(GL_TEXTURE_2D, R.post_tex);
-  glDrawArrays(GL_TRIANGLES, 0, 3);
-  glUseProgram(R.prog_blur);
-  glUniform1i(R.u_blur_tex, 0);
-  int src = 0;
-  for (int i = 0; i < 6; i++) {
-    glBindFramebuffer(GL_FRAMEBUFFER, R.blur_fbo[1 - src]);
-    glBindTexture(GL_TEXTURE_2D, R.blur_tex[src]);
-    glUniform2f(R.u_blur_px, (float)(i + 1) / (float)R.blur_w,
-                (float)(i + 1) / (float)R.blur_h);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    src = 1 - src;
+  glBindSampler(1, 0);          // the PCSS sampler must not filter the chain
+
+  // METER + ADAPT. A frame that does not directly follow the last one (the
+  // first frame, a harness `shot` after a `wait`, a map change) snaps to the
+  // metered exposure instead of easing from a stale one.
+  glUseProgram(R.prog_lum);
+  glUniform1i(uloc(R.prog_lum, "uTex"), 0);
+  glUniform1i(uloc(R.prog_lum, "uVmD"), 1);
+  glBindTexture(GL_TEXTURE_2D, R.scene_tex);
+  tex_on(1, R.z_tex[1]);
+  fs_tri(R.lum_fbo, 128, 64);
+  glBindTexture(GL_TEXTURE_2D, R.lum_tex);
+  glGenerateMipmap(GL_TEXTURE_2D);
+  int src = R.ad_i, dst = 1 - R.ad_i;
+  int snap = R.ad_frame != R.frame_no - 1;
+  R.ad_frame = R.frame_no;
+  glUseProgram(R.prog_adapt);
+  glUniform1i(uloc(R.prog_adapt, "uLum"), 0);
+  glUniform1i(uloc(R.prog_adapt, "uPrev"), 1);
+  glUniform1f(uloc(R.prog_adapt, "uLod"), (float)R.lum_levels);
+  // Brightening is slow (an eye opening in a dark alley, ~1.6 s), darkening
+  // faster — both measured on presentation time, never on the sim clock.
+  glUniform1f(uloc(R.prog_adapt, "uK"), snap ? 1.0f : 1.0f - expf(-g_ui_dt * 1.4f));
+  glUniform1f(uloc(R.prog_adapt, "uKey"), 0.10f);
+  // Range in stops, around the preset's authored exposure: the art direction
+  // stays in charge, adaptation only rescues the extremes.
+  // The authored look is the target: no map's normal range of light is
+  // corrected at all (the dead band below covers ~0.03 .. 0.3 mean luminance).
+  // A +0.43-stop lift on the shaded harbour read as a chalky, over-exposed
+  // frame, so only genuinely dark interiors are helped, and only a little.
+  glUniform2f(uloc(R.prog_adapt, "uRange"), -0.30f, 0.60f);
+  tex_on(1, R.ad_tex[src]);
+  fs_tri(R.ad_fbo[dst], 1, 1);
+  R.ad_i = dst;
+
+  if (fx) {
+    // AO / contact shadows / edges.
+    glUseProgram(R.prog_ao);
+    depth_uniforms(R.prog_ao);
+    glUniform1i(uloc(R.prog_ao, "uDepth"), 0);
+    glUniform2f(uloc(R.prog_ao, "uPix"), 1.0f / (float)R.width, 1.0f / (float)R.height);
+    v3 sn = atm_sun();
+    glUniform3f(uloc(R.prog_ao, "uSunV"), v3_dot(sn, R.cam_rgt), v3_dot(sn, R.cam_up),
+                -v3_dot(sn, R.cam_fwd));
+    glBindTexture(GL_TEXTURE_2D, R.z_tex[0]);
+    fs_tri(R.ao_fbo, (R.width + 1) / 2, (R.height + 1) / 2);
+
+    // Volumetric sun.
+    glUseProgram(R.prog_vol);
+    glUniform1i(uloc(R.prog_vol, "uDepth"), 0);
+    glUniform1i(uloc(R.prog_vol, "uSm"), 1);
+    glUniformMatrix4fv(uloc(R.prog_vol, "uInvVP"), 1, GL_FALSE, R.inv_vp.m);
+    glUniformMatrix4fv(uloc(R.prog_vol, "uLightVP"), 1, GL_FALSE, R.light_vp.m);
+    glUniform3f(uloc(R.prog_vol, "uEye"), g_cam_eye.x, g_cam_eye.y, g_cam_eye.z);
+    glUniform3f(uloc(R.prog_vol, "uSun"), sn.x, sn.y, sn.z);
+    glUniform3fv(uloc(R.prog_vol, "uSunC"), 1, a->sun_col);
+    // Density follows the preset's haze: a storm front is thick, high noon clear.
+    glUniform1f(uloc(R.prog_vol, "uDens"), R.sm_fbo ? 0.0030f + a->fog * 42.0f : 0.0f);
+    glUniform1f(uloc(R.prog_vol, "uExp"), a->exposure);
+    tex_on(1, R.sm_tex);
+    fs_tri(R.vol_fbo, (R.width + 1) / 2, (R.height + 1) / 2);
+
+    // Bloom: down five levels with the soft knee on the first, back up additively.
+    glUseProgram(R.prog_bdown);
+    glUniform1i(uloc(R.prog_bdown, "uTex"), 0);
+    for (int i = 0; i < 5; i++) {
+      int sw = i ? R.bl_w[i - 1] : R.width, sh = i ? R.bl_h[i - 1] : R.height;
+      glBindTexture(GL_TEXTURE_2D, i ? R.bl_tex[i - 1] : R.scene_tex);
+      glUniform2f(uloc(R.prog_bdown, "uHp"), 0.5f / (float)sw, 0.5f / (float)sh);
+      glUniform1f(uloc(R.prog_bdown, "uThr"), i ? -1.0f : 1.6f);
+      fs_tri(R.bl_fbo[i], R.bl_w[i], R.bl_h[i]);
+    }
+    glUseProgram(R.prog_bup);
+    glUniform1i(uloc(R.prog_bup, "uTex"), 0);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+    for (int i = 4; i > 0; i--) {
+      glBindTexture(GL_TEXTURE_2D, R.bl_tex[i]);
+      glUniform2f(uloc(R.prog_bup, "uHp"), 0.5f / (float)R.bl_w[i], 0.5f / (float)R.bl_h[i]);
+      fs_tri(R.bl_fbo[i - 1], R.bl_w[i - 1], R.bl_h[i - 1]);
+    }
+    glDisable(GL_BLEND);
   }
-  // Everything stays on texture unit 0 (see the loader's note), so the bloom is
-  // screen-blended into the copy first and the grade then reads one texture.
-  glViewport(0, 0, R.width, R.height);
-  glBindFramebuffer(GL_FRAMEBUFFER, R.post_fbo);
-  glEnable(GL_BLEND);
-  glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_COLOR);
-  glUseProgram(R.prog_bright);
-  glUniform1f(R.u_br_thresh, -1.0f);   // pass everything through
-  glUniform1f(R.u_br_gain, a->bloom);
-  glBindTexture(GL_TEXTURE_2D, R.blur_tex[src]);
-  glDrawArrays(GL_TRIANGLES, 0, 3);
-  glDisable(GL_BLEND);
-  glBindFramebuffer(GL_FRAMEBUFFER, dst);
-  glUseProgram(R.prog_post);
-  glUniform1i(R.u_po_tex, 0);
-  glUniform1f(R.u_po_sat, a->sat);
-  glUniform1f(R.u_po_con, a->con);
-  glUniform1f(R.u_po_vig, a->vig);
-  glUniform3fv(R.u_po_tint, 1, a->tint);
-  glUniform3fv(R.u_po_lift, 1, a->lift);
-  glBindTexture(GL_TEXTURE_2D, R.post_tex);
-  glDrawArrays(GL_TRIANGLES, 0, 3);
+
+  // COMPOSITE into the present buffer.
+  GLuint pp = R.prog_post;
+  glUseProgram(pp);
+  depth_uniforms(pp);
+  grade_uniforms(pp, fx);
+  const char *names[7] = {"uTex", "uAO", "uVol", "uBloom", "uAdapt", "uDepth", "uVmD"};
+  GLuint texs[7] = {R.scene_tex, R.ao_tex, R.vol_tex, R.bl_tex[0], R.ad_tex[R.ad_i],
+                    R.z_tex[0], R.z_tex[1]};
+  for (int i = 0; i < 7; i++) {
+    glUniform1i(uloc(pp, names[i]), i);
+    tex_on(i, texs[i]);
+  }
+  glUniform1f(uloc(pp, "uBloomK"), 0.05f + a->bloom * 0.16f);
+  glUniform1f(uloc(pp, "uCA"), 0.0065f);
+  glUniform1f(uloc(pp, "uMotion"), R.have_prev && !snap ? 0.32f : 0.0f);
+  glUniform1f(uloc(pp, "uAds"), R.ads_now);
+  glUniform1f(uloc(pp, "uVmOn"), R.vm_drawn ? 1.0f : 0.0f);
+  glUniform1f(uloc(pp, "uTime"), g_ui_time);
+  glUniform1f(uloc(pp, "uAspect"), (float)R.width / (float)R.height);
+  glUniform4f(uloc(pp, "uHeat"), g_heat_scr.x, g_heat_scr.y, fmaxf(g_heat_scr.z, 0.01f),
+              g_heat_shimmer);
+  glUniform3fv(uloc(pp, "uSunC"), 1, a->sun_col);
+  glUniform1f(uloc(pp, "uDbg"), (float)g_post_dbg);
+  glUniform2f(uloc(pp, "uVmVel"), R.vm_vel[0], R.vm_vel[1]);
+  glUniformMatrix4fv(uloc(pp, "uInvVP"), 1, GL_FALSE, R.inv_vp.m);
+  glUniformMatrix4fv(uloc(pp, "uPrevVP"), 1, GL_FALSE, R.prev_vp.m);
+  fs_tri(R.present_fbo, R.width, R.height);
+  for (int i = 6; i >= 1; i--) tex_on(i, 0);
+  R.prev_vp = R.cur_vp;
+  R.have_prev = 1;
+  glBindTexture(GL_TEXTURE_2D, R.font_tex);
+}
+
+// THE HOLOGRAPHIC SIGHT, in two layers. The GLASS: an anti-reflection coated
+// pane — faintly cyan where it is seen straight through, magenta toward the
+// rim where the coating's Fresnel lift shows, with one soft reflection streak
+// from the sky. The RETICLE: a 1 MOA dot inside a 65 MOA ring with range
+// ticks under it, on the point of aim (collimated, so parallax-free), and
+// visible only where the window actually is — sway the rifle hard enough and
+// the ring is cut off by the frame, which is what a real holo does.
+// Window-local coordinates (u along the window's x, v along its y, -1..1)
+// come from inverting the projected half-axes.
+static int holo_local(float x, float y, float *u, float *v) {
+  float a = g_holo_ex[0], b = g_holo_ey[0], c = g_holo_ex[1], d = g_holo_ey[1];
+  float det = a * d - b * c;
+  if (fabsf(det) < 1e-4f) return 0;
+  float dx = x - g_holo_cx, dy = y - g_holo_cy;
+  *u = (d * dx - b * dy) / det;
+  *v = (-c * dx + a * dy) / det;
+  return 1;
+}
+static float holo_clip(float x, float y) {
+  float u, v;
+  if (!holo_local(x, y, &u, &v)) return 0.0f;
+  float e = fmaxf(fabsf(u), fabsf(v));
+  return 1.0f - smooth01(f_clamp((e - 0.86f) / 0.14f, 0.0f, 1.0f));
+}
+static void holo_draw(float ccx, float ccy, float glass_a, float dot_a) {
+  if (g_holo_ex[0] == 0.0f && g_holo_ey[1] == 0.0f) return;
+  g_ui_mode = UIM_RAW;
+  float su = g_hf_solid_u, sv = g_hf_solid_v;
+  // Glass: a 4x4 patch so the Fresnel tint can vary across it.
+  for (int j = 0; j < 4; j++)
+    for (int i = 0; i < 4; i++) {
+      float u0 = -1.0f + 0.5f * (float)i, v0 = -1.0f + 0.5f * (float)j;
+      float uu[4] = {u0, u0 + 0.5f, u0 + 0.5f, u0}, vv[4] = {v0, v0, v0 + 0.5f, v0 + 0.5f};
+      float px[4], py[4], col[4][4];
+      for (int k = 0; k < 4; k++) {
+        px[k] = g_holo_cx + g_holo_ex[0] * uu[k] + g_holo_ey[0] * vv[k];
+        py[k] = g_holo_cy + g_holo_ex[1] * uu[k] + g_holo_ey[1] * vv[k];
+        float r = fminf(1.0f, uu[k] * uu[k] * 0.5f + vv[k] * vv[k] * 0.5f);
+        float fr = r * r;                      // the coating's rim lift
+        // Reflection streak along the window's upper diagonal.
+        float st = expf(-powf((uu[k] * 0.7f + vv[k] * 0.7f + 0.35f) * 3.2f, 2.0f));
+        col[k][0] = 0.55f + 0.40f * fr + 0.30f * st;
+        col[k][1] = 0.80f - 0.42f * fr + 0.30f * st;
+        col[k][2] = 0.95f + 0.05f * st;
+        col[k][3] = glass_a * (0.035f + 0.075f * fr + 0.05f * st);
+      }
+      ui_push(px[0], py[0], su, sv, col[0]); ui_push(px[1], py[1], su, sv, col[1]);
+      ui_push(px[2], py[2], su, sv, col[2]); ui_push(px[0], py[0], su, sv, col[0]);
+      ui_push(px[2], py[2], su, sv, col[2]); ui_push(px[3], py[3], su, sv, col[3]);
+    }
+  if (dot_a <= 0.0f) return;
+  // Reticle, clipped per element by the window.
+  float cr = 1.0f, cg = 0.20f, cb = 0.09f;
+  float dc = holo_clip(ccx, ccy);
+  if (dc > 0.0f) {
+    ui_glow(ccx, ccy, 4.6f, 1.0f, 0.12f, 0.05f, 0.34f * dot_a * dc);
+    ui_disk(ccx, ccy, 1.25f, cr, cg + 0.02f, cb, 0.98f * dot_a * dc);
+  }
+  float rr = 11.5f;
+  for (int i = 0; i < 48; i++) {
+    float a0 = (float)i * F_TAU / 48.0f, a1 = (float)(i + 1) * F_TAU / 48.0f;
+    float x0 = ccx + cosf(a0) * rr, y0 = ccy + sinf(a0) * rr;
+    float x1 = ccx + cosf(a1) * rr, y1 = ccy + sinf(a1) * rr;
+    float k = fminf(holo_clip(x0, y0), holo_clip(x1, y1));
+    if (k <= 0.0f) continue;
+    ui_line(x0, y0, x1, y1, 0.45f, cr, cg, cb, 0.80f * dot_a * k);
+  }
+  // Four cardinal ticks on the ring, and the range ticks under the dot.
+  for (int i = 0; i < 4; i++) {
+    float dx = (i == 0) - (i == 1), dy = (i == 2) - (i == 3);
+    float x0 = ccx + dx * (rr - 1.6f), y0 = ccy + dy * (rr - 1.6f);
+    float x1 = ccx + dx * (rr + 0.3f), y1 = ccy + dy * (rr + 0.3f);
+    float k = holo_clip(x0, y0);
+    if (k > 0.0f) ui_line(x0, y0, x1, y1, 0.5f, cr, cg, cb, 0.85f * dot_a * k);
+  }
+  for (int i = 1; i <= 3; i++) {
+    float y = ccy + 3.2f * (float)i;
+    float hl = i == 2 ? 1.5f : 0.9f;
+    float k = holo_clip(ccx, y);
+    if (k > 0.0f) ui_line(ccx - hl, y, ccx + hl, y, 0.36f, cr, cg, cb, 0.75f * dot_a * k);
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// HOSTAGE RESCUE on the HUD: the objective card, the detection arcs round the
+// crosshair, ? and ! over the guards you can see, objective markers, the
+// RELOAD prompt beside a captive, the banner line, and the debrief.
+// ---------------------------------------------------------------------------
+static int rescue_proj(v3 w, float *sx, float *sy) {
+  const float *m = R.cur_vp.m;
+  float cx = m[0] * w.x + m[4] * w.y + m[8] * w.z + m[12];
+  float cy = m[1] * w.x + m[5] * w.y + m[9] * w.z + m[13];
+  float cw = m[3] * w.x + m[7] * w.y + m[11] * w.z + m[15];
+  if (cw < 0.1f) return 0;
+  *sx = (cx / cw * 0.5f + 0.5f) * g_ui_vw;
+  *sy = (0.5f - cy / cw * 0.5f) * g_ui_vh;
+  return *sx > -40.0f && *sx < g_ui_vw + 40.0f && *sy > -40.0f && *sy < g_ui_vh + 40.0f;
+}
+static void rescue_diamond(float x, float y, float r, float cr, float cg, float cb, float a) {
+  ui_line(x, y - r, x + r, y, 1.6f, cr, cg, cb, a);
+  ui_line(x + r, y, x, y + r, 1.6f, cr, cg, cb, a);
+  ui_line(x, y + r, x - r, y, 1.6f, cr, cg, cb, a);
+  ui_line(x - r, y, x, y - r, 1.6f, cr, cg, cb, a);
+}
+static void rescue_clock(char *b, size_t n, int ticks) {
+  int s = (ticks + TICK_HZ - 1) / TICK_HZ;
+  snprintf(b, n, "%d:%02d", s / 60, s % 60);
+}
+static const char *rescue_rating(void) {
+  if (g_resc.result != RR_SUCCESS) return "MISSION FAILED";
+  if (!g_resc.alarm && !g_resc.ever_seen && g_resc.kills == 0) return "GHOST";
+  if (!g_resc.alarm && !g_resc.ever_seen) return "SHADOW";
+  if (!g_resc.alarm) return "SILENT";
+  return "LOUD";
+}
+
+static void rescue_hud(const player_t *p, float ccx, float ccy) {
+  if (!rescue_on()) return;
+  char b[64];
+  float t = (float)g_tick * TICK_DT;
+  // THE ALARM VIGNETTE.
+  if (g_resc.alarm && !g_match.over) {
+    float pu = 0.5f + 0.5f * sinf(t * 6.0f);
+    ui_vgrad(0, 0, g_ui_vw, 60, C4(0.55f, 0.04f, 0.02f, 0.30f + 0.15f * pu), C4(0.5f, 0, 0, 0));
+    ui_vgrad(0, g_ui_vh - 60, g_ui_vw, 60, C4(0.5f, 0, 0, 0), C4(0.55f, 0.04f, 0.02f, 0.30f + 0.15f * pu));
+  }
+  // THE OBJECTIVE CARD, top left.
+  {
+    float x = 14, y = 12;
+    ui_rect(x - 6, y - 5, 196, 62, 0.02f, 0.03f, 0.04f, 0.42f);
+    ui_rect(x - 6, y - 5, 2, 62, C_BLAZE, 0.9f);
+    ui_text_ex("OPERATION NIGHTFALL", x, y, 0.75f, TXT_REG, 1.6f, C4(C_HAZE, 0.95f));
+    int all = g_resc.freed == RESC_HOSTAGES, out = g_resc.extracted == RESC_HOSTAGES;
+    for (int k = 0; k < 2; k++) {   // the two objectives' check boxes
+      float by = y + 14 + 12.0f * (float)k;
+      int done = k ? out : all;
+      ui_rect(x, by, 7, 7, C_BONE, 0.55f);
+      ui_rect(x + 1, by + 1, 5, 5, 0.02f, 0.03f, 0.04f, 0.9f);
+      if (done) ui_rect(x + 1.5f, by + 1.5f, 4, 4, 0.45f, 0.95f, 0.55f, 1.0f);
+    }
+    snprintf(b, sizeof b, "FREE THE HOSTAGES  %d/%d", g_resc.freed, RESC_HOSTAGES);
+    ui_text_ex(b, x + 12, y + 13, 0.8f, TXT_REG, 1.2f, all ? C4(0.45f, 0.95f, 0.55f, 0.95f) : C4(C_BONE, 0.95f));
+    snprintf(b, sizeof b, "ESCORT THEM TO THE LZ  %d/%d", g_resc.extracted, RESC_HOSTAGES);
+    ui_text_ex(b, x + 12, y + 25, 0.8f, TXT_REG, 1.2f,
+               out ? C4(0.45f, 0.95f, 0.55f, 0.95f) : g_resc.freed ? C4(C_BONE, 0.95f) : C4(C_HAZE, 0.7f));
+    float maxd = 0.0f;
+    for (int i = 0; i < g_match.nbots; i++)
+      if (g_bots[i].active && g_bots[i].alive && g_resc.detect[i] > maxd) maxd = g_resc.detect[i];
+    if (g_resc.alarm) {
+      int captive = 0;
+      for (int i = 0; i < RESC_HOSTAGES; i++) captive += g_resc.h[i].state == HS_CAPTIVE;
+      char c[16];
+      rescue_clock(c, sizeof c, g_resc.exec_t);
+      if (captive) snprintf(b, sizeof b, "ALARM \x05 EXECUTIONS IN %s", c);
+      else snprintf(b, sizeof b, "ALARM \x05 HOSTAGES SAFE");
+      float pu = 0.65f + 0.35f * sinf(t * 7.0f);
+      ui_text_ex(b, x, y + 40, 0.85f, TXT_BLACK, 1.3f, C4(C_THREAT, pu));
+    } else if (maxd >= 1.0f) {
+      ui_text_ex("SPOTTED \x05 KILL HIM BEFORE THE RADIO", x, y + 40, 0.85f, TXT_BLACK, 1.2f, C4(C_THREAT, 1));
+    } else if (maxd > 0.22f) {
+      ui_text_ex("SUSPICIOUS", x, y + 40, 0.85f, TXT_BLACK, 1.4f, C4(C_BLAZE, 0.95f));
+    } else {
+      ui_text_ex(g_resc.lit ? "UNDETECTED \x05 IN THE LIGHT" : "UNDETECTED", x, y + 40, 0.85f,
+                 TXT_BLACK, 1.4f, g_resc.lit ? C4(0.95f, 0.85f, 0.45f, 0.9f) : C4(0.45f, 0.9f, 0.6f, 0.9f));
+    }
+  }
+  if (g_match.over) goto debrief;
+  // DETECTION ARCS: one per guard building suspicion, on its bearing.
+  for (int i = 0; i < g_match.nbots; i++) {
+    const bot_t *bt = &g_bots[i];
+    float d = g_resc.detect[i];
+    if (!bt->active || !bt->alive || d < 0.02f) continue;
+    float dx = bt->pos.x - p->pos.x, dz = bt->pos.z - p->pos.z;
+    float rel = wrap_pi(atan2f(dx, -dz) - p->yaw);
+    float R0 = 58.0f, half = 0.10f + 0.26f * d;
+    float cr = 1.0f, cg = d >= 1.0f ? 0.18f : 1.0f - 0.55f * d, cb = d >= 1.0f ? 0.12f : 1.0f - 0.9f * d;
+    float al = 0.35f + 0.6f * d;
+    if (d >= 1.0f) al *= 0.7f + 0.3f * sinf(t * 14.0f);
+    for (int s = 0; s < 6; s++) {
+      float a0 = rel - half + 2.0f * half * (float)s / 6.0f, a1 = rel - half + 2.0f * half * (float)(s + 1) / 6.0f;
+      ui_line(ccx + sinf(a0) * R0, ccy - cosf(a0) * R0, ccx + sinf(a1) * R0, ccy - cosf(a1) * R0,
+              3.2f, 0, 0, 0, 0.35f * al);
+      ui_line(ccx + sinf(a0) * R0, ccy - cosf(a0) * R0, ccx + sinf(a1) * R0, ccy - cosf(a1) * R0,
+              2.0f, cr, cg, cb, al);
+    }
+    // ...and the mark over the guard himself, when he is in plain view.
+    float sx, sy;
+    v3 hp = {{bt->pos.x, bt->pos.y + 2.15f, bt->pos.z}};
+    v3 eye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
+    if (d > 0.22f && rescue_proj(hp, &sx, &sy) && los_clear(eye, hp)) {
+      const char *mk = d >= 1.0f ? "!" : "?";
+      ui_text_ex(mk, sx - ui_text_width_tr(mk, 1.6f, 1.0f) * 0.5f, sy - 10, 1.6f, TXT_BLACK, 1.0f,
+                 d >= 1.0f ? C4(C_THREAT, 1) : C4(1.0f, 0.82f, 0.30f, 0.6f + 0.4f * d));
+    }
+  }
+  // OBJECTIVE MARKERS: the captives, then the LZ once anyone is free.
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    const hostage_t *h = &g_resc.h[i];
+    if (h->state != HS_CAPTIVE) continue;
+    float sx, sy;
+    v3 w = {{h->pos.x, h->pos.y + 1.7f, h->pos.z}};
+    float dd = v3_len(v3_sub(h->pos, p->pos));
+    if (dd < 3.0f || !rescue_proj(w, &sx, &sy)) continue;
+    float a = f_clamp((dd - 3.0f) / 4.0f, 0.0f, 1.0f) * 0.9f;
+    rescue_diamond(sx, sy, 6.0f, 1.0f, 0.75f, 0.25f, a);
+    snprintf(b, sizeof b, "%s  %dM", RESC_HOLD_NAME[i], (int)(dd + 0.5f));
+    ui_text_ex(b, sx - ui_text_width_tr(b, 0.7f, 1.2f) * 0.5f, sy + 9, 0.7f, TXT_REG, 1.2f,
+               C4(1.0f, 0.85f, 0.5f, a));
+  }
+  if (g_resc.freed > 0) {
+    float sx, sy;
+    v3 lz = {{22.0f, 4.5f, -45.0f}};
+    float dd = v3_len(v3_sub(lz, p->pos));
+    if (dd > 6.0f && rescue_proj(lz, &sx, &sy)) {
+      rescue_diamond(sx, sy, 7.0f, 0.4f, 1.0f, 0.55f, 0.9f);
+      snprintf(b, sizeof b, "LZ %dM", (int)(dd + 0.5f));
+      ui_text_ex(b, sx - ui_text_width_tr(b, 0.75f, 1.3f) * 0.5f, sy + 10, 0.75f, TXT_REG, 1.3f,
+                 C4(0.5f, 1.0f, 0.6f, 0.9f));
+    }
+  }
+  // THE PROMPT beside a captive.
+  if (g_resc.reach_i >= 0 && p->alive) {
+    const hostage_t *h = &g_resc.h[g_resc.reach_i];
+    char key[16];
+    snprintf(key, sizeof key, "%s", g_cfg.bind[IN_RELOAD]);
+    for (char *c = key; *c; c++) if (*c >= 'a' && *c <= 'z') *c = (char)(*c - 32);
+    snprintf(b, sizeof b, "HOLD [%s] CUT RESTRAINTS", key);
+    float w = ui_text_width_tr(b, 1.0f, 1.4f);
+    ui_rect(ccx - w * 0.5f - 10, ccy + 44, w + 20, 30, 0.02f, 0.03f, 0.04f, 0.5f);
+    ui_text_ex(b, ccx - w * 0.5f, ccy + 49, 1.0f, TXT_REG, 1.4f, C4(C_BONE, 1));
+    ui_rect(ccx - w * 0.5f, ccy + 65, w, 3, C_BONE, 0.18f);
+    ui_rect(ccx - w * 0.5f, ccy + 65, w * h->free_t, 3, C_BLAZE, 1.0f);
+  }
+  // THE BANNER.
+  if (g_resc.msg_t > 0) {
+    float a = f_clamp((float)g_resc.msg_t / 40.0f, 0.0f, 1.0f);
+    float in = f_clamp((float)(4 * TICK_HZ - g_resc.msg_t) / 12.0f, 0.0f, 1.0f);
+    if (g_resc.msg_kind == 0)
+      in = f_clamp((float)(7 * TICK_HZ - g_resc.msg_t) / 30.0f, 0.0f, 1.0f);
+    a *= in;
+    const float *col = g_resc.msg_kind == 2 ? C4(C_THREAT, a) : g_resc.msg_kind == 1 ? C4(C_BLAZE, a)
+                     : g_resc.msg_kind == 3 ? C4(0.5f, 1.0f, 0.6f, a) : C4(C_BONE, a);
+    float by = g_ui_vh * 0.22f, s1 = g_resc.msg_kind == 0 ? 2.2f : 1.7f;
+    ui_vgrad(0, by - 10, g_ui_vw, 56, C4(0, 0, 0, 0.40f * a), C4(0, 0, 0, 0));
+    float w1 = ui_text_width_tr(g_resc.msg, s1, 2.0f);
+    ui_text_ex(g_resc.msg, ccx - w1 * 0.5f + 1, by + 1, s1, TXT_BLACK, 2.0f, C4(0, 0, 0, 0.8f * a));
+    ui_text_ex(g_resc.msg, ccx - w1 * 0.5f, by, s1, TXT_BLACK, 2.0f, col);
+    if (g_resc.msg2[0]) {
+      float w2 = ui_text_width_tr(g_resc.msg2, 0.9f, 1.5f);
+      ui_text_ex(g_resc.msg2, ccx - w2 * 0.5f, by + (g_resc.msg_kind == 0 ? 30 : 24), 0.9f, TXT_REG, 1.5f,
+                 C4(C_BONE, 0.85f * a));
+    }
+    if (g_resc.msg_kind == 0) {
+      const char *l3 = "STAY UNSEEN \x05 CROUCH IN THE DARK \x05 KNIFE FROM BEHIND IS SILENT";
+      float w3 = ui_text_width_tr(l3, 0.75f, 1.3f);
+      ui_text_ex(l3, ccx - w3 * 0.5f, by + 44, 0.75f, TXT_REG, 1.3f, C4(C_HAZE, 0.85f * a));
+    }
+  }
+  return;
+debrief:
+  {
+    int ok = g_resc.result == RR_SUCCESS;
+    ui_rect(0, 0, g_ui_vw, g_ui_vh, 0.0f, 0.0f, 0.0f, 0.55f);
+    float y = g_ui_vh * 0.24f;
+    const char *h1 = ok ? "MISSION COMPLETE" : "MISSION FAILED";
+    float w1 = ui_text_width_tr(h1, 2.8f, 2.4f);
+    ui_text_ex(h1, ccx - w1 * 0.5f + 1, y + 1, 2.8f, TXT_BLACK, 2.4f, C4(0, 0, 0, 0.85f));
+    ui_text_ex(h1, ccx - w1 * 0.5f, y, 2.8f, TXT_BLACK, 2.4f,
+               ok ? C4(0.5f, 1.0f, 0.6f, 1) : C4(C_THREAT, 1));
+    const char *h2 = ok ? "ALL THREE HOSTAGES ARE ON THE HELICOPTER"
+                   : g_resc.why == RF_EXECUTED ? "THE HOSTAGES WERE EXECUTED"
+                   : "YOU WERE KILLED IN ACTION";
+    float w2 = ui_text_width_tr(h2, 1.0f, 1.6f);
+    ui_text_ex(h2, ccx - w2 * 0.5f, y + 34, 1.0f, TXT_REG, 1.6f, C4(C_BONE, 0.9f));
+    ui_rect(ccx - 150, y + 54, 300, 1, C_BONE, 0.3f);
+    char tm[16];
+    rescue_clock(tm, sizeof tm, g_resc.end_tick);
+    struct { const char *k; char v[24]; } rows[6];
+    snprintf(rows[0].v, sizeof rows[0].v, "%s", tm);
+    snprintf(rows[1].v, sizeof rows[1].v, "%d / %d", g_resc.extracted, RESC_HOSTAGES);
+    snprintf(rows[2].v, sizeof rows[2].v, "%d", g_resc.kills);
+    snprintf(rows[3].v, sizeof rows[3].v, "%d", g_resc.takedowns);
+    snprintf(rows[4].v, sizeof rows[4].v, "%d", g_resc.heads);
+    snprintf(rows[5].v, sizeof rows[5].v, "%s", g_resc.alarm ? "RAISED" : "NEVER");
+    rows[0].k = "TIME"; rows[1].k = "HOSTAGES SAVED"; rows[2].k = "GUARDS DOWN";
+    rows[3].k = "SILENT TAKEDOWNS"; rows[4].k = "HEADSHOTS"; rows[5].k = "ALARM";
+    for (int i = 0; i < 6; i++) {
+      float ry = y + 64 + 15.0f * (float)i;
+      ui_text_ex(rows[i].k, ccx - 140, ry, 0.9f, TXT_REG, 1.4f, C4(C_HAZE, 0.95f));
+      ui_text_ex(rows[i].v, ccx + 140 - ui_text_width_tr(rows[i].v, 0.9f, 1.4f), ry, 0.9f, TXT_REG,
+                 1.4f, C4(C_BONE, 1));
+    }
+    if (ok) {
+      const char *r = rescue_rating();
+      snprintf(b, sizeof b, "RATING  %s", r);
+      float w3 = ui_text_width_tr(b, 1.6f, 2.2f);
+      ui_text_ex(b, ccx - w3 * 0.5f, y + 164, 1.6f, TXT_BLACK, 2.2f, C4(C_BLAZE, 1));
+    }
+    const char *h4 = ok ? "PRESS FIRE TO PLAY AGAIN" : "PRESS FIRE TO RETRY";
+    ui_text_ex(h4, ccx - ui_text_width_tr(h4, 0.9f, 1.4f) * 0.5f, y + 192, 0.9f, TXT_REG, 1.4f,
+               C4(C_BONE, 0.85f));
+  }
 }
 
 static void render_frame(const player_t *p, float alpha, int fps,
@@ -32286,7 +36802,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
   atm_upload();
   if (g_world_dirty) { world_upload(); g_world_dirty = 0; }
   msaa_update();
-  glBindFramebuffer(GL_FRAMEBUFFER, R.msaa_fbo ? R.msaa_fbo : R.present_fbo);
+  scene_update();
+  R.frame_no++;
+  R.vm_drawn = 0;
+  glBindFramebuffer(GL_FRAMEBUFFER, scene_target());
   v3 feet = v3_lerp(p->prev_pos, p->pos, alpha);
   float eye_h = p->prev_eye + (p->eye - p->prev_eye) * alpha
               - (p->prev_land_dip + (p->land_dip - p->prev_land_dip) * alpha);
@@ -32325,7 +36844,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // is allowed to move freely.
   float proll = w->prev_punch_roll + (w->punch_roll - w->prev_punch_roll) * alpha;
   float roll = (third || cam_free) ? 0.0f
-             : leanv * LEAN_ANGLE * LEAN_VIEW_K + proll * DEG2RAD;
+             : leanv * LEAN_ANGLE * LEAN_VIEW_K + proll * DEG2RAD
+               + p->vm.prev_cam_roll + (p->vm.cam_roll - p->vm.prev_cam_roll) * alpha;
   // The shock front through the camera: a hard jolt that rings out fast.
   if (g_shake > 0.002f && !cam_free) {
     float st = (float)g_tick * TICK_DT;
@@ -32406,6 +36926,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
   float kick = p->prev_fov_kick + (p->fov_kick - p->prev_fov_kick) * alpha;
   float fov_deg = f_clamp(g_cfg.fov + kick * g_cfg.mv[MV_FOV_KICK], 40.0f, 150.0f);
   fov_deg *= 1.0f - (1.0f - g_cfg.wp[p->wp.cur][WP_ADS_ZOOM] * 0.01f) * ads;
+  // FOV IMPULSE on a shot: the kick spring's own displacement, so the frame
+  // breathes out by ~1.5% at the peak of each recoil and settles with the gun.
+  if (!cam_free && !third) {
+    float vk = p->vm.prev_kick + (p->vm.kick - p->vm.prev_kick) * alpha;
+    fov_deg *= 1.0f + f_clamp(vk, 0.0f, 0.02f) * 0.9f;
+  }
   float fovy = 2.0f * atanf(tanf(fov_deg * (F_PI / 180.0f) * 0.5f) / aspect);
   // ZNEAR is the single biggest lever on depth precision: resolution goes as
   // z^2*(f-n)/(n*f*2^24), so it is set by 1/n. At 0.05 the 24-bit buffer resolves
@@ -32418,6 +36944,30 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // 68 m) is a small extra gain.
   mat4 vp = m4_mul(m4_perspective(fovy, aspect, ZNEAR, ZFAR),
                    m4_look(eye, yaw, pitch, roll));
+  R.cur_vp = vp;
+  R.inv_vp = m4_inverse(vp);
+  {  // A CUT is not motion: a respawn, a map change, a harness camera jump.
+    // Anything faster than a hard flick (≈40 deg or 1.5 m in one frame) drops
+    // the reprojection instead of smearing the first frame of the new view.
+    static v3 pe, pf;
+    v3 cf = {{cosf(pitch) * sinf(yaw), sinf(pitch), -cosf(pitch) * cosf(yaw)}};
+    if (v3_len(v3_sub(eye, pe)) > 1.5f || v3_dot(cf, pf) < 0.77f) R.have_prev = 0;
+    pe = eye; pf = cf;
+  }
+  R.tan_y = tanf(fovy * 0.5f);
+  R.tan_x = R.tan_y * aspect;
+  R.ads_now = (!cam_free && !third) ? ads : 0.0f;
+  {  // The weapon's screen motion over this frame, from its springs' last tick
+    // (angles straight, positions over the ~0.3 m the receiver sits at).
+    const vm_t *v = &p->vm;
+    float tk = f_clamp(g_ui_dt * (float)TICK_HZ, 0.0f, 3.0f);
+    float ty = tanf(VM_FOV_DEG * DEG2RAD * 0.5f);
+    R.vm_vel[0] = ((v->sway_y - v->prev_sway_y) + (v->lag_x - v->prev_lag_x) / 0.3f
+                   + (v->twist - v->prev_twist) * 0.3f) * tk / (2.0f * ty * aspect);
+    R.vm_vel[1] = ((v->sway_p - v->prev_sway_p) + (v->lag_y - v->prev_lag_y) / 0.3f
+                   + (v->kick - v->prev_kick) * 3.0f) * tk / (2.0f * ty);
+  }
+  cam_basis(yaw, pitch, roll, &R.cam_fwd, &R.cam_rgt, &R.cam_up);
 
   // Everything that casts is built BEFORE anything is drawn: the shadow pass
   // draws the same two VBOs the colour passes do, so the caster list cannot
@@ -32467,8 +37017,15 @@ static void render_frame(const player_t *p, float alpha, int fps,
     glBindVertexArray(R.vao_world);
     glDrawArrays(GL_TRIANGLES, 0, R.world_cast_verts);
     scene_draw();   // the same buffer, same guard — the casters ARE the figures
-    rt_bind(R.msaa_fbo ? R.msaa_fbo : R.present_fbo, R.width, R.height);
+    rt_bind(scene_target(), R.width, R.height);
     glBindTexture(GL_TEXTURE_2D, R.sm_tex);   // stays bound for every lit pass
+    // ...and on unit 1 through the no-compare sampler, for the PCSS blocker
+    // search. Unit 1 is otherwise only touched by the post chain, after the
+    // last lit pass, which always hands it back empty.
+    gl_active_texture(GL_TEXTURE0 + 1);
+    glBindTexture(GL_TEXTURE_2D, R.sm_tex);
+    glBindSampler(1, R.sm_raw);
+    gl_active_texture(GL_TEXTURE0);
   }
 
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -32484,8 +37041,36 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // copy at either of them is a second copy that can disagree.
   { v3 sp = surf_params();
     glUniform4f(R.u_surf, sp.x, sp.y, sp.z, g_wind_ang); }
+  // The town the weathering belongs to (CITADEL/HARBOR/REFINERY are
+  // MAP_DEFS 4..6), -1 on the arenas.
+  glUniform1i(uloc(R.prog_world, "uTown"), g_map_id >= 4 && g_map_id <= 6 ? g_map_id - 4
+                                           : g_map_id == MAP_COMPOUND_ID ? 0 : -1);
+  {
+    // THE LANTERNS COME ON AS THE SUN GOES DOWN: off above ~24 degrees, full
+    // below ~12. The eight nearest to the eye light the world; the rest
+    // still glow (their glass is SMAT_LAMP), they just do not throw light.
+    float on = f_clamp((0.42f - atm_sun().y) / 0.20f, 0.0f, 1.0f);
+    float L[8][4] = {{0}};
+    float bd[8];
+    for (int k = 0; k < 8; k++) bd[k] = 1e9f;
+    for (int i = 0; i < g_nprops; i++) {
+      if (g_props[i].kind != PROP_LAMP) continue;
+      float dx = g_props[i].x - eye.x, dz = g_props[i].z - eye.z, dd = dx * dx + dz * dz;
+      int worst = 0;
+      for (int k = 1; k < 8; k++) if (bd[k] > bd[worst]) worst = k;
+      if (dd < bd[worst]) {
+        bd[worst] = dd;
+        L[worst][0] = g_props[i].x; L[worst][1] = 3.80f; L[worst][2] = g_props[i].z;
+        L[worst][3] = 6.5f * on;
+      }
+    }
+    glUniform1f(uloc(R.prog_world, "uLampOn"), on);
+    glUniform4fv(uloc(R.prog_world, "uLamp"), 8, &L[0][0]);
+  }
   glUniform1f(R.u_emis, 0.0f);
   glUniform1i(R.u_sm, 0);
+  glUniform1i(uloc(R.prog_world, "uSmRaw"), 1);
+  glUniform1f(uloc(R.prog_world, "uSmPen"), SHADOW_DEPTH * 0.016f / (2.0f * SHADOW_HALF));
   glUniform1f(R.u_shadow, shadow_on ? 1.0f : 0.0f);
   glUniform1f(R.u_vm, 0.0f);
   // The world's own muzzle light. It rides the SAME `fresh` latch the flash
@@ -32565,7 +37150,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     glDrawArrays(GL_TRIANGLES, 0, R.world_verts);
     sky_pass(yaw, pitch, roll, szoom, 1.0f);
     scene_draw_vp(&svp);              // the figures, still in the buffer
-    rt_bind(R.msaa_fbo ? R.msaa_fbo : R.present_fbo, R.width, R.height);
+    rt_bind(scene_target(), R.width, R.height);
     glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, vp.m);
   }
 
@@ -32594,11 +37179,26 @@ static void render_frame(const player_t *p, float alpha, int fps,
     g_fx_muz_live = 1;
   }
   g_fx_alpha = alpha;
+  g_fx_muzzle_vis = g_fx_muzzle;
+  g_fx_muz_live_vis = g_fx_muz_live;
+  // HEAT HAZE: where the drawn muzzle lands on screen, through the viewmodel's
+  // own projection, and how hard the barrel is shimmering.
+  g_heat_shimmer = 0.0f;
+  if (g_fx_muz_live && g_vm_muz_cam.z > 0.05f) {
+    float hk = f_clamp((g_wpn_heat - 0.45f) / 0.8f, 0.0f, 1.0f);
+    float ty = tanf(VM_FOV_DEG * DEG2RAD * 0.5f);
+    g_heat_scr.x = 0.5f + 0.5f * g_vm_muz_cam.x / (g_vm_muz_cam.z * ty * aspect);
+    g_heat_scr.y = 0.5f + 0.5f * g_vm_muz_cam.y / (g_vm_muz_cam.z * ty);
+    g_heat_scr.z = 0.075f;
+    g_heat_shimmer = hk * hk * (1.0f - 0.5f * ads);
+  }
   puffs_build(eye);
   if (g_scene_floats) {
     fx_pass_begin();
     glBlendFunc(GL_DST_COLOR, GL_ZERO);       // multiply: smoke darkens the frame
+    glUniform1f(R.u_emis, 2.0f);              // ...a transmittance, passed raw
     scene_draw_vp(&vp);
+    glUniform1f(R.u_emis, 1.0f);
     glBlendFunc(GL_ONE, GL_ONE);
     fx_pass_end();
   }
@@ -32610,7 +37210,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
       rt_bind(R.scope_fbo, R.scope_size, R.scope_size);
       glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, svp.m);
       scene_draw_vp(&svp);
-      rt_bind(R.msaa_fbo ? R.msaa_fbo : R.present_fbo, R.width, R.height);
+      rt_bind(scene_target(), R.width, R.height);
       glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, vp.m);
     }
     fx_pass_end();
@@ -32623,10 +37223,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // rifle — "YOU DIED" over a fully shouldered combat-ready weapon read as a
   // glitch, and the sinking camera already carries the death (the scope gate
   // above matches, or a scoped death leaves a magnified disc with no rifle).
+  depth_copy(0);   // the world's depth, before the viewmodel clears it
   if ((!cam_free && !third && p->alive) || g_vmorb.on) {
     v3 fwd, rgt, upv;
     cam_basis(yaw, pitch, roll, &fwd, &rgt, &upv);
     glClear(GL_DEPTH_BUFFER_BIT);
+    R.vm_drawn = !g_vmorb.on;
     mat4 vmvp = m4_mul(m4_perspective(VM_FOV_DEG * DEG2RAD, aspect, 0.01f, 5.0f),
                        m4_look(eye, yaw, pitch, roll));
     glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, vmvp.m);
@@ -32764,6 +37366,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
     // The weapon's own frame, uploaded AFTER vm_build so it describes the pose
     // that was just emitted rather than the previous frame's.
+    glUniform3f(uloc(R.prog_world, "uWrist"), (float)p->wp.ammo[p->wp.cur],
+                (float)WPN_DEF[p->wp.cur].mag, g_ui_time);
     glUniform3f(R.u_mdlo, g_vm_mdl_o.x, g_vm_mdl_o.y, g_vm_mdl_o.z);
     glUniform3f(R.u_mdlx, g_vm_mdl_x.x, g_vm_mdl_x.y, g_vm_mdl_x.z);
     glUniform3f(R.u_mdlz, g_vm_mdl_z.x, g_vm_mdl_z.y, g_vm_mdl_z.z);
@@ -32796,7 +37400,9 @@ static void render_frame(const player_t *p, float alpha, int fps,
   }
 
   // HUD + menu: everything batches into one buffer, one draw call.
-  if (g_cfg.post_fx && !g_vmorb.on) post_pass();
+  if (R.vm_drawn) depth_copy(1);   // ...and the weapon's own, for DoF and masking
+  post_pass(g_cfg.post_fx && !g_vmorb.on);
+  rt_bind(R.present_fbo, R.width, R.height);
   g_ui_time += g_ui_dt;   // presentation clock (pulses, glides); never sim-read
   glDisable(GL_DEPTH_TEST);
   glDisable(GL_CULL_FACE);
@@ -32856,9 +37462,19 @@ static void render_frame(const player_t *p, float alpha, int fps,
         ui_push(cx + cosf(a1) * rad, cy + sinf(a1) * rad,
                 0.5f + cosf(a1) * 0.5f, 0.5f - sinf(a1) * 0.5f, grim);
       }
-      glUniform1i(R.u_img, 1);
+      // HDR picture through the ocular's optics (HUD_FS uImg 2). The eye
+      // offset is how far the ocular centre sits off the view axis, in disc
+      // radii: the exit-pupil shadow sweeps in from that side.
+      glUniform1i(R.u_img, 2);
+      grade_uniforms(R.prog_hud, g_cfg.post_fx);
+      glUniform1i(uloc(R.prog_hud, "uAdapt"), 1);
+      tex_on(1, R.ad_tex[R.ad_i]);
+      { float ex = (cx - vw_ * 0.5f) / fmaxf(rad, 1.0f), ey = -(cy - vh_ * 0.5f) / fmaxf(rad, 1.0f);
+        float mis = f_clamp(sqrtf(ex * ex + ey * ey) * 2.2f, 0.0f, 1.0f);
+        glUniform4f(uloc(R.prog_hud, "uLens"), ex * 1.4f, ey * 1.4f, mis, 0.010f); }
       glBindTexture(GL_TEXTURE_2D, R.scope_tex);
       ui_flush();
+      tex_on(1, 0);
       glUniform1i(R.u_img, 0);
       // Glass furniture, drawn over the picture in font/solid mode: a dark
       // vignette ring that fades the image into the tube wall, then the reticle
@@ -32889,10 +37505,20 @@ static void render_frame(const player_t *p, float alpha, int fps,
                 cx + dx * rad * 0.92f, cy + dy * rad * 0.92f, thick,
                 0.04f, 0.04f, 0.05f, 0.95f);
       }
-      for (int i = 1; i <= 4; i++) {  // mil hashes below centre
-        float y = cy + rad * 0.12f * (float)i;
-        float hlen = rad * (i % 2 ? 0.045f : 0.075f);
-        ui_line(cx - hlen, y, cx + hlen, y, thin, 0.04f, 0.04f, 0.05f, 0.9f);
+      // MIL-DOTS on all four arms, as etched in the glass of a real mil-dot
+      // reticle — round, not hashes — with the holdover marks below the
+      // centre kept as the longer bars a shooter ranges with.
+      for (int arm = 0; arm < 4; arm++) {
+        float dx = (arm == 0) - (arm == 1), dy = (arm == 2) - (arm == 3);
+        for (int i = 1; i <= 3; i++) {
+          float x = cx + dx * rad * 0.12f * (float)i, y = cy + dy * rad * 0.12f * (float)i;
+          ui_disk(x, y, thin * 1.9f, 0.04f, 0.04f, 0.05f, 0.92f);
+        }
+      }
+      for (int i = 1; i <= 4; i++) {  // holdover bars below centre
+        float y = cy + rad * 0.12f * (float)i + rad * 0.06f;
+        float hlen = rad * (i % 2 ? 0.030f : 0.055f);
+        ui_line(cx - hlen, y, cx + hlen, y, thin * 0.8f, 0.04f, 0.04f, 0.05f, 0.85f);
       }
       ui_flush();
     }
@@ -32948,15 +37574,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
       else ui_text_sh(fs, ccx - fw_ * 0.5f, ccy + 12, 1.1f, TXT_BOLD, 0, C4(C_BONE, 0.95f));
     }
     float dot_a = f_clamp((ads - 0.78f) / 0.17f, 0.0f, 1.0f);
-    if (dot_a > 0.0f && in_play && !third && p->wp.cur == WPN_AR) {
-      // A soft radial bloom (the atlas soft cell) under a mid falloff and a
-      // saturated core. One 0.9 px core under a 0.22-alpha halo measured as a
-      // dim faceted smudge; 1.25 vu of core rather than 1.0: at the 720p
-      // integer scale of 2 the old dot was 6.4 px where 2 MOA is about 8 px.
-      ui_glow(ccx, ccy, 4.6f, 1.0f, 0.12f, 0.05f, 0.38f * dot_a);
-      ui_disk(ccx, ccy, 2.0f, 1.0f, 0.14f, 0.05f, 0.45f * dot_a);
-      ui_disk(ccx, ccy, 1.25f, 1.0f, 0.22f, 0.10f, 0.98f * dot_a);
-    }
+    float glass_a = f_clamp((ads - 0.35f) / 0.40f, 0.0f, 1.0f);
+    if (glass_a > 0.0f && in_play && !third && p->wp.cur == WPN_AR) holo_draw(ccx, ccy, glass_a, dot_a);
     // THE HITMARKER. Four diagonal strokes; the levers are the lessons:
     // it POPS AND SETTLES off g_hitmark_t (a distinct beat per round, even
     // re-armed mid-life); the outline is CONCENTRIC, not a drop shadow (the
@@ -32975,17 +37594,43 @@ static void render_frame(const player_t *p, float alpha, int fps,
       float in = 4.4f * pop, out = (kill ? 11.4f : 9.0f) * pop;
       float r  = 1.0f, g = kill ? 0.74f : 0.96f, b = kill ? 0.64f : 0.96f;
       float orr = kill ? 0.78f : 0.0f, og = kill ? 0.05f : 0.0f, ob = kill ? 0.03f : 0.0f;
+      // PLATE: steel-blue strokes and a diamond in the gap — the armour took it.
+      int plate = g_hitmark_plate && !kill;
+      if (plate) { r = 0.62f; g = 0.86f; b = 1.0f; orr = 0.02f; og = 0.06f; ob = 0.12f; }
       float k = 0.7071f;
+      // DIRECTIONAL: centred on where the round landed, within a hand's span of
+      // the crosshair, so a spread shot that clipped the edge marks the edge.
+      float hcx = ccx, hcy = ccy;
+      {
+        const float *m = R.cur_vp.m;
+        v3 q = g_hitmark_at;
+        float cw = m[3] * q.x + m[7] * q.y + m[11] * q.z + m[15];
+        if (cw > 0.05f) {
+          float nx = (m[0] * q.x + m[4] * q.y + m[8] * q.z + m[12]) / cw;
+          float ny = (m[1] * q.x + m[5] * q.y + m[9] * q.z + m[13]) / cw;
+          float ox = nx * g_ui_vw * 0.5f, oy = -ny * g_ui_vh * 0.5f;
+          float ol = sqrtf(ox * ox + oy * oy);
+          if (ol > 10.0f) { ox *= 10.0f / ol; oy *= 10.0f / ol; }
+          hcx += ox; hcy += oy;
+        }
+      }
+      if (plate) {
+        float d = 2.4f * pop;
+        ui_line(hcx - d, hcy, hcx, hcy - d, 0.32f, r, g, b, a);
+        ui_line(hcx, hcy - d, hcx + d, hcy, 0.32f, r, g, b, a);
+        ui_line(hcx + d, hcy, hcx, hcy + d, 0.32f, r, g, b, a);
+        ui_line(hcx, hcy + d, hcx - d, hcy, 0.32f, r, g, b, a);
+      }
       for (int pass = 0; pass < (head ? 2 : 1); pass++) {
         float i0 = pass ? (out + 1.5f) : in, o0 = pass ? (out + 4.2f) : out;
         float hwd = pass ? 0.28f : 0.34f;
         for (int sx = -1; sx <= 1; sx += 2)
           for (int sy = -1; sy <= 1; sy += 2) {
-            ui_capsule(ccx + (float)sx * i0 * k, ccy + (float)sy * i0 * k,
-                       ccx + (float)sx * o0 * k, ccy + (float)sy * o0 * k,
+            ui_capsule(hcx + (float)sx * i0 * k, hcy + (float)sy * i0 * k,
+                       hcx + (float)sx * o0 * k, hcy + (float)sy * o0 * k,
                        hwd + 0.55f, orr, og, ob, 0.72f * a);
-            ui_capsule(ccx + (float)sx * i0 * k, ccy + (float)sy * i0 * k,
-                       ccx + (float)sx * o0 * k, ccy + (float)sy * o0 * k,
+            ui_capsule(hcx + (float)sx * i0 * k, hcy + (float)sy * i0 * k,
+                       hcx + (float)sx * o0 * k, hcy + (float)sy * o0 * k,
                        hwd, r, g, b, a);
           }
       }
@@ -33086,7 +37731,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // lead and the margin reads N:N forever. Hidden once the match is over:
     // the winner hero owns the top centre then.
     int hgm = game_mode();
-    if (!g_match.over) {
+    if (!g_match.over && hgm != GM_RESCUE) {
       // GUN GAME and LAST MAN STANDING score on the mode's own number (rung,
       // rounds), so that is what the me:rival line counts there.
       // Rungs read 1-based.
@@ -33264,7 +37909,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // Match over: winner hero over a top scrim, graticule ruler under it;
     // the scoreboard forces on below. VICTORY is gated on g_local_ent, not
     // on a literal 0 — a high-human-id client wins matches too.
-    if (g_match.over) {
+    rescue_hud(p, ccx, ccy);
+    if (g_match.over && !rescue_on()) {
       ui_vgrad(0, 0, g_ui_vw, 96, C4(0, 0, 0, 0.60f), C4(0, 0, 0, 0));
       char msg[32];
       if (g_match.winner == g_local_ent) snprintf(msg, sizeof msg, "VICTORY");
@@ -33289,7 +37935,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  TXT_REG, 1.4f, C4(C_BONE, 0.85f));
     }
 
-    if (g_score_held || g_match.over) ui_scoreboard();
+    if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
   }
   }
   if (!hud_on) {
@@ -33304,9 +37950,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
   ui_flush();
 
   // Leave the present FBO bound on both targets so glReadPixels/SwapBuffers
-  // see it.
-  msaa_resolve();
-  if (R.msaa_fbo) glBindFramebuffer(GL_FRAMEBUFFER, R.present_fbo);
+  // see it. (The HUD already drew into it: the post chain resolved the scene.)
+  glBindFramebuffer(GL_FRAMEBUFFER, R.present_fbo);
 }
 
 #define DEFAULT_SEED 1337u
@@ -39560,7 +44205,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       const char *n = next_tok();
       int m = map_parse(n);
       if (m < 0) {
-        fprintf(stderr, "script: unknown map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate)\n", n);
+        fprintf(stderr, "script: unknown map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|compound|rotate)\n", n);
         exit(1);
       }
       g_cfg.sp_map = m;
@@ -39573,10 +44218,81 @@ static void run_script(char *script, sim_ctx_t *s) {
       const char *n = next_tok();
       int m = gm_parse(n);
       if (m < 0) {
-        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms)\n", n);
+        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms|rescue)\n", n);
         exit(1);
       }
       g_cfg.sp_mode = m;
+    } else if (!strcmp(t, "rescue")) {
+      // HOSTAGE RESCUE state: the mission line, every guard, every hostage.
+      // `rescue show` (the mission line) | `rescue all` (+ guards, hostages) |
+      // `rescue free N` (cut hostage N loose) | `rescue alarm`.
+      const char *a = next_tok();
+      if (!strcmp(a, "free")) {
+        long k = next_n();
+        if (k >= 0 && k < RESC_HOSTAGES && g_resc.h[k].state == HS_CAPTIVE) {
+          g_resc.h[k].state = HS_FOLLOW;
+          g_resc.freed++;
+        }
+        continue;
+      }
+      if (!strcmp(a, "alarm")) { rescue_alarm(RW_SPOTTED); continue; }
+      printf("rescue t=%ld on=%d alarm=%d exec=%d freed=%d extracted=%d result=%d why=%d "
+             "kills=%d td=%d heads=%d spotted=%d bodies=%d lit=%d near=%d clock=%d\n",
+             s->tick, rescue_on(), g_resc.alarm, g_resc.exec_t, g_resc.freed, g_resc.extracted,
+             g_resc.result, g_resc.why, g_resc.kills, g_resc.takedowns, g_resc.heads,
+             g_resc.spotted_n, g_resc.bodies, g_resc.lit, g_resc.reach_i, g_resc.clock);
+      if (!strcmp(a, "all")) {
+        for (int i = 0; i < g_match.nbots; i++) {
+          const bot_t *b = &g_bots[i];
+          printf("guard %d kind=%d alive=%d pos=(%.1f %.1f %.1f) yaw=%.2f det=%.2f tgt=%d alert=%d wpn=%s\n",
+                 i, rescue_post(i)->kind, b->alive, (double)b->pos.x, (double)b->pos.y,
+                 (double)b->pos.z, (double)b->yaw, (double)g_resc.detect[i], b->tgt, b->alert_t,
+                 WPN_DEF[b->wp.cur].name);
+        }
+        for (int i = 0; i < RESC_HOSTAGES; i++)
+          printf("hostage %d state=%d pos=(%.1f %.1f %.1f) free=%.2f\n", i, g_resc.h[i].state,
+                 (double)g_resc.h[i].pos.x, (double)g_resc.h[i].pos.y, (double)g_resc.h[i].pos.z,
+                 (double)g_resc.h[i].free_t);
+      }
+    } else if (!strcmp(t, "rescuecheck")) {
+      // Every post and waypoint stands on floor a body fits on, and the grid
+      // routes reach every hostage, the LZ and each next waypoint.
+      nav_ready();
+      int bad = 0;
+      v3 ins = {{RESC_INSERT_X, 0.0f, RESC_INSERT_Z}};
+      for (int i = 0; i < RESC_POSTS; i++) {
+        const guard_post_t *gp = &GUARD_POSTS[i];
+        v3 c = {{gp->x, gp->y + 0.01f, gp->z}};
+        if (!aabb_fits(c, PLAYER_RADIUS, HEIGHT_STAND)) { printf("rescuecheck post %d blocked\n", i); bad++; }
+      }
+      for (size_t r = 0; r < sizeof GUARD_ROUTES / sizeof GUARD_ROUTES[0]; r++)
+        for (int k = 0; k < GUARD_ROUTES[r].n; k++) {
+          v3 a = {{GUARD_ROUTES[r].p[k][0], 0.01f, GUARD_ROUTES[r].p[k][1]}};
+          int k2 = (k + 1) % GUARD_ROUTES[r].n;
+          v3 b2 = {{GUARD_ROUTES[r].p[k2][0], 0.0f, GUARD_ROUTES[r].p[k2][1]}};
+          if (!aabb_fits(a, PLAYER_RADIUS, HEIGHT_STAND)) { printf("rescuecheck route %d wp %d blocked\n", (int)r, k); bad++; continue; }
+          int g2 = nav_snap(b2), s2 = nav_snap(a);
+          if (g2 < 0 || s2 < 0 || nav_field_for(g2)[s2] == 0xFFFF) { printf("rescuecheck route %d leg %d unrouted\n", (int)r, k); bad++; }
+        }
+      v3 goals[RESC_HOSTAGES + 1];
+      for (int i = 0; i < RESC_HOSTAGES; i++) goals[i] = (v3){{RESC_HOLD[i][0], RESC_HOLD[i][2], RESC_HOLD[i][1]}};
+      goals[RESC_HOSTAGES] = (v3){{22.0f, 0.0f, -41.5f}};
+      int si = nav_snap(ins);
+      for (int i = 0; i <= RESC_HOSTAGES; i++) {
+        int gi = nav_snap(goals[i]);
+        const uint16_t *f = gi >= 0 ? nav_field_for(gi) : NULL;
+        // The roof is climbed by hand (a 0.4 m stair is two steps a grid cell,
+        // which the routes do not climb); what must hold there is the way DOWN.
+        int ok = goals[i].y > 1.0f || (f && si >= 0 && f[si] != 0xFFFF);
+        if (i < RESC_HOSTAGES && goals[i].y < 1.0f) {   // ...and back out to the LZ
+          int lz = nav_snap(goals[RESC_HOSTAGES]);
+          const uint16_t *fl = lz >= 0 ? nav_field_for(lz) : NULL;
+          ok = ok && fl && fl[gi] != 0xFFFF;
+        }
+        printf("rescuecheck goal %d %s steps=%d\n", i, ok ? "ok" : "UNREACHABLE", f && si >= 0 ? f[si] : -1);
+        if (!ok) bad++;
+      }
+      printf("rescuecheck bad=%d\n", bad);
     } else if (!strcmp(t, "restart")) {
       g_match.restart_req = 1;
     } else if (!strcmp(t, "match")) {
@@ -39762,6 +44478,22 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_world_dirty = 1;
       printf("mapcheck maps=%ld coplanar_total=%ld worst=%ld worst_seed=%u\n",
              n, total, worst, bad_seed);
+    } else if (!strcmp(t, "ballistics")) {
+      // Lands on the next `restart`, like the menu toggle.
+      g_cfg.ballistics = next_on_off("ballistics");
+    } else if (!strcmp(t, "exposure")) {
+      // The adaptation state after the last rendered frame: the applied offset
+      // in stops and the metered mean luminance it was chasing.
+      float px[4] = {0};
+      if (R.ad_fbo[R.ad_i]) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, R.ad_fbo[R.ad_i]);
+        glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, px);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
+      }
+      printf("exposure stops=%.3f mean_lum=%.4f\n", (double)px[0], (double)px[1]);
+    } else if (!strcmp(t, "postdbg")) {
+      // 0 off, 1 SSAO, 2 contact shadow, 3 edge catch-light, 4 volumetric, 5 bloom
+      g_post_dbg = (int)next_n();
     } else if (!strcmp(t, "budget")) {
       // A dropped triangle looks exactly like geometry that was never authored,
       // so the peak has to be printable rather than inferred from a screenshot.
@@ -41844,14 +46576,19 @@ int main(int argc, char **argv) {
     else if (arg && !strcmp(a, "--skill"))      g_srv.skill = atoi(argv[++i]);
     else if (arg && !strcmp(a, "--fraglimit"))  g_srv.fraglimit = atoi(argv[++i]);
     else if (arg && !strcmp(a, "--rounds"))     g_srv.rounds = atoi(argv[++i]);
+    else if (!strcmp(a, "--ballistics"))        g_ballistics_srv = 1;
     else if (arg && !strcmp(a, "--map")) {
       int m = map_parse(argv[++i]);
-      if (m < 0) { fprintf(stderr, "unknown --map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|rotate)\n", argv[i]); return 1; }
+      if (m < 0) { fprintf(stderr, "unknown --map '%s' (arena|foundry|bazaar|outpost|citadel|harbor|refinery|compound|rotate)\n", argv[i]); return 1; }
       g_srv.map = m;
     }
     else if (arg && !strcmp(a, "--mode")) {
       int m = gm_parse(argv[++i]);
-      if (m < 0) { fprintf(stderr, "unknown --mode '%s' (dm|gun|sniper|blades|lms)\n", argv[i]); return 1; }
+      if (m < 0 || m == GM_RESCUE) {
+        fprintf(stderr, m == GM_RESCUE ? "--mode rescue is a single-player mission\n"
+                                       : "unknown --mode '%s' (dm|gun|sniper|blades|lms)\n", argv[i]);
+        return 1;
+      }
       g_srv.mode = m;
     }
     else if (arg && !strcmp(a, "--ticks"))      g_srv.ticks = atol(argv[++i]);

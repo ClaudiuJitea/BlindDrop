@@ -17,6 +17,8 @@
 #   parity  : no MISMATCH in the shared-code rows
 #   budget  : drops = 0 and ev_drops = 0 at 20 bots hard (nothing silently
 #             dropped a triangle or an event)
+#   decor   : world_drops = 0 on every map (the static world mesh kept all of
+#             its decor — a truncated tail is a hole, not an error)
 # Also prints the glibc floor for the log — a rise excludes whole distros, so
 # it is worth seeing even though it is not gated here.
 set -eu
@@ -339,6 +341,16 @@ for k in drops ev_drops; do
   v="$(field "$bl" "$k")"
   [ "${v:-x}" = 0 ] || { say "GATE budget $k=$v (want 0)"; fail=1; }
 done
+
+# decor on every map: the static world mesh is truncated at DECOR_MAX_VERTS, and
+# the cut is a silent hole in whatever was dressed last. The world mesh is built
+# on the first rendered frame, so each map renders one shot before `budget`.
+for m in arena foundry bazaar outpost citadel harbor refinery compound; do
+  dl="$(run "usemap $m; restart; wait 10; shot screenshots/_ci.png; budget" | grep '^budget' | head -1)"
+  v="$(field "$dl" world_drops)"
+  [ "${v:-x}" = 0 ] || { say "GATE decor map=$m world_drops=$v (want 0)"; fail=1; }
+done
+rm -f "$ROOT/screenshots/_ci.png"
 
 # glibc floor — printed, not gated (a rise silently excludes distros)
 if command -v objdump >/dev/null 2>&1; then
