@@ -1453,6 +1453,7 @@ typedef struct {
   // Counted on the presentation side (vfx_on_event), so offline and online
   // matches both add to them; the boot screen's showcase match never does.
   int   st_matches, st_wins, st_kills, st_deaths, st_hs, st_best;
+  int   hints;               // first-match control prompts still to show (1 = yes)
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1523,7 +1524,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -1595,6 +1596,7 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
+  fprintf(f, "hints %d\n", c->hints);
   fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
              "stat_headshots %d\nstat_best_streak %d\n",
           c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
@@ -1771,6 +1773,7 @@ static void config_load_or_create(const char *path, config_t *c) {
       c->wpn_theme = parse_int(val, c->wpn_theme, 0, WPN_THEME_COUNT - 1);
     else if (!strcmp(key, "gear_theme"))
       c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
+    else if (!strcmp(key, "hints")) c->hints = parse_long(val, c->hints) ? 1 : 0;
     else if (!strncmp(key, "stat_", 5)) {
       int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
                : !strcmp(key, "stat_wins")        ? &c->st_wins
@@ -23507,6 +23510,8 @@ static void ui_menu(void) {
     }
     y += 15;
   }
+  ui_toggle("CONTROL HINTS", &g_cfg.hints, px, pw, y, click, cx, cy);
+  y += 15;
   y += 4;
   ui_section("MOUSE", px, pw, y);
   y += 14;
@@ -24200,6 +24205,71 @@ static void ui_scoreboard(void) {
   }
   g_sb_bottom = py + ph;
   g_sb_w = pw;
+}
+
+// FIRST-MATCH CONTROL HINTS. The genre's core verbs are discoverable, but this
+// game's distinctive ones — the aim button as a knife guard, lean, the slide —
+// are not, and the CONTROLS page is a menu nobody opens before playing. One
+// prompt at a time, bottom centre, naming the player's OWN binding (pad labels
+// when a pad is connected). Each clears when the player does it, or after
+// HINT_SHOW_TICKS so it never nags; when the list is done `hints` goes to 0 in
+// the config and stays there until Settings > CONTROL HINTS turns it back on.
+#define HINT_DELAY_TICKS 240     // 2 s into a life before the first prompt
+#define HINT_SHOW_TICKS  960     // 8 s per prompt at most
+typedef struct { int act, act2; const char *text; } hint_def_t;
+static const hint_def_t HINTS[] = {
+  {IN_ADS,    -1,        "AIM DOWN SIGHTS"},
+  {IN_LEAN_L, IN_LEAN_R, "LEAN AROUND COVER"},
+  {IN_CROUCH, -1,        "WHILE RUNNING TO SLIDE"},
+  {IN_SWAP,   -1,        "SWAP WEAPON  /  1-5 PICK ONE"},
+  {IN_SCORE,  -1,        "SCOREBOARD"},
+};
+#define HINT_COUNT ((int)(sizeof HINTS / sizeof HINTS[0]))
+
+static const char *hint_key(int act) {
+  if (g_pad.connected) return pad_disp(g_cfg.padbind[act]);
+  const char *t = g_cfg.bind[act];
+  return !strcmp(t, "mouse1") ? "LMB" : !strcmp(t, "mouse2") ? "RMB"
+       : !strcmp(t, "mouse3") ? "MMB" : !strcmp(t, "lshift") ? "SHIFT"
+       : !strcmp(t, "lctrl")  ? "CTRL" : t;
+}
+
+static void hud_hints(const player_t *p, float ccx) {
+  // Timed in SIM ticks, not frames: the same 8 s at 60 or 120 fps, frozen
+  // while the menu pauses the match. t0 is the tick the current prompt
+  // started counting from (a delay ahead of it is a t0 in the future).
+  static int idx, was_on;
+  static long t0;
+  if (!g_cfg.hints) { was_on = 0; return; }
+  if (!was_on || g_tick < t0 - HINT_DELAY_TICKS) {       // fresh, or a new match's clock
+    idx = 0; t0 = g_tick + HINT_DELAY_TICKS; was_on = 1;
+  }
+  if (g_home || rescue_on() || g_match.over || !p->alive || g_menu_open) return;
+  if (idx >= HINT_COUNT) { g_cfg.hints = 0; return; }
+  const hint_def_t *h = &HINTS[idx];
+  int done = p->prev_held[h->act] || (h->act2 >= 0 && p->prev_held[h->act2]);
+  if (h->act == IN_CROUCH) done = p->sliding;            // the slide, not a crouch
+  if (h->act == IN_SWAP)
+    done = done || p->prev_held[IN_SLOT1] || p->prev_held[IN_SLOT2] ||
+           p->prev_held[IN_SLOT3] || p->prev_held[IN_SLOT4] || p->prev_held[IN_SLOT5];
+  long shown_t = g_tick - t0;
+  if (shown_t > 0 && (done || shown_t > HINT_SHOW_TICKS)) {
+    idx++;
+    t0 = g_tick + HINT_DELAY_TICKS / 4;                  // a breath between prompts
+    return;
+  }
+  if (shown_t <= 0) return;
+  float a = f_clamp((float)shown_t / 30.0f, 0.0f, 1.0f);
+  char key[24];
+  if (h->act2 >= 0) snprintf(key, sizeof key, "%s / %s", hint_key(h->act), hint_key(h->act2));
+  else              snprintf(key, sizeof key, "%s", hint_key(h->act));
+  for (char *c = key; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+  float kw = ui_text_width_tr(key, 1.0f, 1.4f), tw = ui_text_width_tr(h->text, 0.95f, 1.4f);
+  float w = kw + 14 + 10 + tw, x = ccx - w * 0.5f, y = g_ui_vh - 74.0f;
+  ui_rect(x - 10, y - 5, w + 20, 21, 0.0f, 0.0f, 0.0f, 0.45f * a);
+  ui_rrect_line(x, y - 2, kw + 14, 15, 0, 0.8f, C_BLAZE, 0.9f * a);
+  ui_text_ex(key, x + 7, y + 2, 1.0f, TXT_BOLD, 1.4f, C4(C_BLAZE, a));
+  ui_text_ex(h->text, x + kw + 24, y + 2.5f, 0.95f, TXT_REG, 1.4f, C4(C_BONE, 0.95f * a));
 }
 
 // THE END SCREEN SAYS HOW *YOU* DID. The board ranks everyone; this strip under
@@ -38330,6 +38400,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
 
     if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
     hud_match_summary();
+    hud_hints(p, ccx);
   }
   }
   if (!hud_on) {
