@@ -1131,6 +1131,20 @@ static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
 static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
   "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC"};
 static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
+// Crosshair options. The colours are chosen for VALUE as much as hue: each
+// reads against both the bright sand/sky and the dark interiors, and the set
+// spans the hues that survive the common colour-vision deficiencies (yellow
+// and cyan stay distinct from each other and from the world under protan and
+// deutan simulation, where the default bone white and red do not separate
+// from a red-helmeted enemy as well).
+#define CH_STYLE_COUNT 5
+#define CH_COLOR_COUNT 6
+static const char *const CH_STYLE_NAMES[CH_STYLE_COUNT] = {"CROSS", "DOT", "CROSS+DOT", "CIRCLE", "T"};
+static const char *const CH_COLOR_NAMES[CH_COLOR_COUNT] = {"WHITE", "YELLOW", "CYAN", "GREEN", "MAGENTA", "RED"};
+static const float CH_COLORS[CH_COLOR_COUNT][3] = {
+  {0.941f, 0.957f, 0.973f}, {1.00f, 0.90f, 0.20f}, {0.30f, 0.95f, 1.00f},
+  {0.40f, 1.00f, 0.42f},    {1.00f, 0.40f, 0.95f}, {1.00f, 0.32f, 0.26f},
+};
 static const char *const VM_POS_NAMES[3] = {"STANDARD", "LOW", "LOWER"};
 
 // Raw controller state, written by the platform pump. Sticks are -1..1 with
@@ -1457,6 +1471,10 @@ typedef struct {
   // matches both add to them; the boot screen's showcase match never does.
   int   st_matches, st_wins, st_kills, st_deaths, st_hs, st_best;
   int   hints;               // first-match control prompts still to show (1 = yes)
+  // HUD (Settings > HUD): crosshair shape / colour / size and HUD opacity.
+  // Index 0 / 1.0 of each is the shipped HUD exactly.
+  int   ch_style, ch_color;
+  float ch_size, hud_alpha;
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1527,7 +1545,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -1602,6 +1620,8 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
   fprintf(f, "hints %d\n", c->hints);
+  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\n",
+          c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha);
   fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
              "stat_headshots %d\nstat_best_streak %d\n",
           c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
@@ -1781,6 +1801,10 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "gear_theme"))
       c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
     else if (!strcmp(key, "hints")) c->hints = parse_long(val, c->hints) ? 1 : 0;
+    else if (!strcmp(key, "crosshair_style")) c->ch_style = parse_int(val, c->ch_style, 0, CH_STYLE_COUNT - 1);
+    else if (!strcmp(key, "crosshair_color")) c->ch_color = parse_int(val, c->ch_color, 0, CH_COLOR_COUNT - 1);
+    else if (!strcmp(key, "crosshair_size"))  c->ch_size = parse_float(val, c->ch_size, 0.5f, 2.0f);
+    else if (!strcmp(key, "hud_opacity"))     c->hud_alpha = parse_float(val, c->hud_alpha, 0.2f, 1.0f);
     else if (!strncmp(key, "stat_", 5)) {
       int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
                : !strcmp(key, "stat_wins")        ? &c->st_wins
@@ -21773,12 +21797,15 @@ static void ui_begin(void) {
   g_ui_nverts = 0;
 }
 
+// HUD opacity (Settings > HUD): 1 everywhere except while the in-match HUD
+// draws, so menus, the scoreboard's pause overlay and the boot screen stay solid.
+static float g_ui_alpha = 1.0f;
 static void ui_push(float x, float y, float u, float v, const float c[4]) {
   if (g_ui_nverts >= UI_MAX_VERTS) { g_ui_drops++; return; }
   float *p = g_ui_vb + (size_t)g_ui_nverts++ * 9;
   p[0] = x * g_uis; p[1] = y * g_uis;
   p[2] = u; p[3] = v;
-  p[4] = c[0]; p[5] = c[1]; p[6] = c[2]; p[7] = c[3];
+  p[4] = c[0]; p[5] = c[1]; p[6] = c[2]; p[7] = c[3] * g_ui_alpha;
   p[8] = g_ui_mode;
 }
 
@@ -22335,6 +22362,7 @@ static int g_ui_control;  // CONTROLS page: 0 keyboard/mouse, 1 gamepad
 static int g_ui_tab;      // legacy uistat field; mirrors the page enum
 static int g_ui_pad_sub;  // CONTROLS/GAMEPAD: 0 sticks+aim, 1 buttons
 static int g_ui_dev_sub;  // DEV page: 0 movement, 1 weapon, 2 assist
+static int g_ui_set_sub;  // SETTINGS page: 0 general, 1 HUD
 
 // Swallow currently-held pad buttons until they are released — the pad
 // analogue of WM_MOUSEACTIVATE's MA_ACTIVATEANDEAT and the 150 ms refocus
@@ -22569,7 +22597,8 @@ static const char *pad_disp(const char *tok) {
 
 enum { DRAG_SENSE = 1, DRAG_FOV, DRAG_CAP, DRAG_VOL, DRAG_BOTS, DRAG_FRAG,
        DRAG_ADS_SENSE,  // 7, the one id left before the MV block starts
-       DRAG_MV0 = 8, DRAG_VMFOV = 30, DRAG_WP0 = 32, DRAG_PAD0 = 56 };  // +i = tuning slider i
+       DRAG_MV0 = 8, DRAG_CHSIZE = 28, DRAG_HUDA = 29, DRAG_VMFOV = 30, DRAG_WP0 = 32,
+       DRAG_PAD0 = 56 };  // +i = tuning slider i
 
 // Register one interactive row (layout order) and draw the focus ring when the
 // pad drives the menu. Returns whether this row has focus — the row then also
@@ -23485,6 +23514,33 @@ static void ui_menu(void) {
   //  screen, boot or pause; see ui_home. The list that used to live here
   //  was the last thing in the game with two designs for one screen.)
   } else if (drawn_page == UI_PAGE_SETTINGS) {
+  {
+    static const char *const SETSUB[2] = {"GENERAL", "HUD"};
+    ui_subsel(SETSUB, 2, &g_ui_set_sub, px, pw, y, click, cx, cy);
+    y += 18;
+  }
+  if (g_ui_set_sub == 1) {
+    // THE HUD TAB. The crosshair is the one HUD element on screen every frame
+    // of a match, and the shipped bone-white cross is the only mark a player
+    // with a red-green deficiency, or on a bright desert map, was offered.
+    ui_section("CROSSHAIR", px, pw, y);
+    y += 14;
+    ui_cycle("STYLE", CH_STYLE_NAMES, CH_STYLE_COUNT, &g_cfg.ch_style, px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("COLOUR", CH_COLOR_NAMES, CH_COLOR_COUNT, &g_cfg.ch_color, px, pw, y, click, cx, cy);
+    y += 15;
+    { param_def_t cd = {"", "SIZE", 1.0f, 0.5f, 2.0f, 0.1f};
+      y = ui_param_row(&cd, &g_cfg.ch_size, DRAG_CHSIZE, px, y, click, cx, cy); }
+    y += 4;
+    ui_section("HUD", px, pw, y);
+    y += 14;
+    { float pct = g_cfg.hud_alpha * 100.0f;
+      param_def_t od = {"", "OPACITY", 100.0f, 20.0f, 100.0f, 5.0f};
+      y = ui_param_row(&od, &pct, DRAG_HUDA, px, y, click, cx, cy);
+      g_cfg.hud_alpha = pct * 0.01f; }
+    ui_toggle("CONTROL HINTS", &g_cfg.hints, px, pw, y, click, cx, cy);
+    y += 15;
+  } else {
   // IDENTITY FIRST. The name field used to sit on the Singleplayer page, which
   // is where a MATCH is configured — but the name is not match property: it is
   // who you are, it persists across sessions, and online it is what every other
@@ -23517,8 +23573,6 @@ static void ui_menu(void) {
     }
     y += 15;
   }
-  ui_toggle("CONTROL HINTS", &g_cfg.hints, px, pw, y, click, cx, cy);
-  y += 15;
   y += 4;
   ui_section("MOUSE", px, pw, y);
   y += 14;
@@ -23595,6 +23649,7 @@ static void ui_menu(void) {
     vd.lo = 0; vd.hi = 100; vd.step = 5;
     y = ui_param_row(&vd, &pct, DRAG_VOL, px, y, click, cx, cy);
     g_cfg.vol = pct * 0.01f;
+  }
   }
   } else if (drawn_page == UI_PAGE_CONTROLS) {
     // Gamepad: deadzones and aim feel on one page, the button layout on the
@@ -38034,6 +38089,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     ui_text_sh(text, tx, 6, 0.7f, TXT_REG, 0.6f, C4(C_HAZE, 0.7f));
   }
   if (!g_menu_open && !cam_free && !g_vmorb.on) {
+    g_ui_alpha = f_clamp(g_cfg.hud_alpha, 0.2f, 1.0f);
     float ccx = g_ui_vw * 0.5f, ccy = g_ui_vh * 0.5f;
     int in_play = p->alive && !g_match.over;
     // Crosshair: the gap mirrors the live spread cone, so bloom/motion
@@ -38053,13 +38109,39 @@ static void render_frame(const player_t *p, float alpha, int fps,
       float gap = 3.0f + tanf(weapon_spread(p) * DEG2RAD) / tanf(fovy * 0.5f) * 450.0f
                 + g_ch_kick;
       float a = 1.0f - ads / ch_hide;
-      const float armlen = 4.6f;
-      for (int i = 0; i < 4; i++) {
-        float dx = (i == 0) - (i == 1), dy = (i == 2) - (i == 3);
-        float x0 = ccx + dx * gap, y0 = ccy + dy * gap;
-        float x1 = ccx + dx * (gap + armlen), y1 = ccy + dy * (gap + armlen);
-        ui_capsule(x0, y0, x1, y1, 1.15f, 0.02f, 0.03f, 0.04f, 0.50f * a);
-        ui_capsule(x0, y0, x1, y1, 0.62f, C_BONE, 0.97f * a);
+      // The player's crosshair (Settings > HUD). Style 0, white, size 1 is the
+      // shipped mark exactly: same arms, same outline, same alpha. The gap
+      // still follows the spread in every style that has one.
+      int cst = armory_idx(g_cfg.ch_style, CH_STYLE_COUNT);
+      const float *cc = CH_COLORS[armory_idx(g_cfg.ch_color, CH_COLOR_COUNT)];
+      float cs = f_clamp(g_cfg.ch_size, 0.5f, 2.0f);
+      const float armlen = 4.6f * cs;
+      if (cst != 1 && cst != 3) {
+        for (int i = 0; i < 4; i++) {
+          if (cst == 4 && i == 3) continue;              // T: no top arm
+          float dx = (i == 0) - (i == 1), dy = (i == 2) - (i == 3);
+          float x0 = ccx + dx * gap, y0 = ccy + dy * gap;
+          float x1 = ccx + dx * (gap + armlen), y1 = ccy + dy * (gap + armlen);
+          ui_capsule(x0, y0, x1, y1, 1.15f * cs, 0.02f, 0.03f, 0.04f, 0.50f * a);
+          ui_capsule(x0, y0, x1, y1, 0.62f * cs, cc[0], cc[1], cc[2], 0.97f * a);
+        }
+      }
+      if (cst == 3) {                                    // ring at the spread
+        float rr = gap + armlen * 0.5f;
+        for (int i = 0; i < 24; i++) {
+          float t0 = (float)i / 24.0f * 6.2831853f, t1 = (float)(i + 1) / 24.0f * 6.2831853f;
+          float x0 = ccx + cosf(t0) * rr, y0 = ccy + sinf(t0) * rr;
+          float x1 = ccx + cosf(t1) * rr, y1 = ccy + sinf(t1) * rr;
+          ui_capsule(x0, y0, x1, y1, 1.10f * cs, 0.02f, 0.03f, 0.04f, 0.45f * a);
+          ui_capsule(x0, y0, x1, y1, 0.55f * cs, cc[0], cc[1], cc[2], 0.95f * a);
+        }
+      }
+      if (cst == 1 || cst == 2 || cst == 3) {            // centre dot
+        // A DOT IS ITS OWN MARK, not an arm's end: at the arm's 0.62 width it
+        // was a 1.5 px speck at 720p. The lone DOT style gets the larger size.
+        float dr = (cst == 1 ? 1.25f : 0.80f) * cs;
+        ui_diskn(ccx, ccy, dr + 0.50f, 14, C4(0.02f, 0.03f, 0.04f, 0.55f * a));
+        ui_diskn(ccx, ccy, dr, 14, C4(cc[0], cc[1], cc[2], 0.97f * a));
       }
     }
     // Sight picture once snapped in, exactly point-of-aim — the AR's red dot only.
@@ -38440,6 +38522,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
     hud_match_summary();
     hud_hints(p, ccx);
+    g_ui_alpha = 1.0f;
   }
   }
   if (!hud_on) {

@@ -11,6 +11,8 @@ post/
 tools/*
 !tools/ci-proofs.sh
 !tools/build_models.py
+!tools/art_capture.sh
+!tools/art_compare.py
 CLAUDE.md
 AGENTS.md
 docs/
@@ -23,3 +25,4 @@ post.md
 opencode.json
 node_modules/.devcontainer/
 .vscode/
+art_review/
