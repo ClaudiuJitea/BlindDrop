@@ -40658,6 +40658,7 @@ static void usage(void) {
        "  parity             24 player-vs-bot gameplay rows, ok/MISMATCH each\n"
        "  bothear            authoritative shot/step hearing and investigation proof\n"
        "  botweapon          bot weapon-choice/swap/cooldown hysteresis proof\n"
+       "  perfbench N        N timed frames: sim / render CPU / GPU avg p50 p95 max\n"
        "  hurt N             N damage to the local player (capture death/damage states)\n"
        "  spawncheck N       N ticks: %% of non-player deaths within 1 s / 3 s of a respawn\n"
        "  meleecheck         knife: hit, thrust, block, parry, rear and flank\n"
@@ -43403,6 +43404,54 @@ static void run_script(char *script, sim_ctx_t *s) {
       bothear_proof();
     } else if (!strcmp(t, "botweapon")) {
       botweapon_proof();
+    } else if (!strcmp(t, "perfbench")) {
+      // perfbench N: N frames of the live match, each one sim tick + a full
+      // render, timed with a GPU timer query and a glFinish so every number is
+      // that frame's own (no pipelining). Prints avg / p50 / p95 / max of the
+      // sim CPU, the render submission CPU and the GPU. Run on the TARGET:
+      //   ./game --do "bots 20; skill hard; restart; wait 600; perfbench 600"
+      long n = next_n();
+      if (n < 1) n = 1;
+      if (n > 4000) n = 4000;
+      float *sm = malloc(sizeof(float) * 3 * (size_t)n);
+      if (!sm) { fprintf(stderr, "perfbench: out of memory\n"); exit(1); }
+      float *cp = sm + n, *gp = cp + n;
+      GLuint q = 0;
+      int gq = gl_gen_queries && gl_begin_query && gl_end_query && gl_query_u64;
+      if (gq) gl_gen_queries(1, &q);
+      for (long i = 0; i < n; i++) {
+        double t0 = perf_now();
+        sim_advance(s);
+        double t1 = perf_now();
+        if (gq) gl_begin_query(GL_TIME_ELAPSED_Q, q);
+        render_frame(s->p, 1.0f, 120, &s->cam);
+        if (gq) gl_end_query(GL_TIME_ELAPSED_Q);
+        double t2 = perf_now();
+        glFinish();
+        double t3 = perf_now();
+        GLuint64 ns = 0;
+        if (gq) gl_query_u64(q, GL_QUERY_RESULT_Q, &ns);
+        sm[i] = (float)((t1 - t0) * 1e3);
+        cp[i] = (float)((t2 - t1) * 1e3);
+        gp[i] = gq ? (float)((double)ns * 1e-6) : (float)((t3 - t2) * 1e3);
+      }
+      const char *nm[3] = {"sim", "render_cpu", gq ? "gpu" : "gpu_wait"};
+      float *arr[3] = {sm, cp, gp};
+      for (int k = 0; k < 3; k++) {
+        float *a = arr[k], sum = 0, mx = 0;
+        for (long i = 0; i < n; i++) { sum += a[i]; if (a[i] > mx) mx = a[i]; }
+        // Insertion sort is fine at n <= 4000 for a one-shot report.
+        for (long i = 1; i < n; i++) {
+          float v = a[i]; long j = i - 1;
+          while (j >= 0 && a[j] > v) { a[j + 1] = a[j]; j--; }
+          a[j + 1] = v;
+        }
+        printf("perfbench %-10s avg=%.3f p50=%.3f p95=%.3f max=%.3f ms\n", nm[k],
+               (double)(sum / (float)n), (double)a[n / 2], (double)a[(n * 95) / 100],
+               (double)mx);
+      }
+      printf("perfbench frames=%ld res=%dx%d budget=8.333 ms (120 Hz)\n", n, R.width, R.height);
+      free(sm);
     } else if (!strcmp(t, "hurt")) {
       // hurt N: N damage to the local player from bot 0's position (the
       // death/damage states for the visual capture set).
