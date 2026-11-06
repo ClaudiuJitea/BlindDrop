@@ -1131,6 +1131,7 @@ static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
 static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
   "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC"};
 static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
+static const char *const VM_POS_NAMES[3] = {"STANDARD", "LOW", "LOWER"};
 
 // Raw controller state, written by the platform pump. Sticks are -1..1 with
 // +x right and +y UP (XInput's convention; the evdev pump negates its
@@ -1423,6 +1424,8 @@ typedef struct {
   // artefact in the battery.
   float ads_sense;           // mouse ADS sensitivity multiplier, 1 = unchanged
   float fov;                 // horizontal FOV in degrees
+  float vm_fov;              // weapon (viewmodel) vertical FOV, see vm_fov_deg
+  int   vm_pos;              // hip weapon position: 0 standard, 1 low, 2 lower
   int   vsync;
   int   fps_cap;             // frame limiter, 0 = off
   int   show_fps;
@@ -1524,7 +1527,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .hints = 1, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -1577,13 +1580,15 @@ static void config_emit(FILE *f, const config_t *c) {
     "sense %.3f\n"
     "ads_sense %.3f\n"
     "fov %.0f\n"
+    "weapon_fov %.0f\n"
+    "weapon_pos %d\n"
     "vsync %d\n"
     "fps_cap %d\n"
     "show_fps %d\n"
     "msaa %d\n"
     "third_person %d\n"
     "devmode %d\n",
-    (double)c->sense, (double)c->ads_sense, (double)c->fov, c->vsync, c->fps_cap,
+    (double)c->sense, (double)c->ads_sense, (double)c->fov, (double)c->vm_fov, c->vm_pos, c->vsync, c->fps_cap,
     c->show_fps, c->msaa,
     c->third_person, c->devmode);
   fprintf(f, "%s %.2f\n", VOL_DEF.key, (double)c->vol);
@@ -1755,6 +1760,8 @@ static void config_load_or_create(const char *path, config_t *c) {
     // ui_param_row's snap-on-interaction-only rule).
     else if (!strcmp(key, "ads_sense")) c->ads_sense = parse_float(val, c->ads_sense, 0.01f, 10.0f);
     else if (!strcmp(key, "fov"))   c->fov   = parse_float(val, c->fov, 50.0f, 130.0f);
+    else if (!strcmp(key, "weapon_fov")) c->vm_fov = parse_float(val, c->vm_fov, 50.0f, 74.0f);
+    else if (!strcmp(key, "weapon_pos")) c->vm_pos = parse_int(val, c->vm_pos, 0, 2);
     else if (!strcmp(key, "vsync") || !strcmp(key, "fps_cap") ||
              !strcmp(key, "show_fps") || !strcmp(key, "msaa")) {
       // The 0/1 flags stay on `? 1 : 0` rather than a parse_int(0, 1) clamp: a
@@ -22562,7 +22569,7 @@ static const char *pad_disp(const char *tok) {
 
 enum { DRAG_SENSE = 1, DRAG_FOV, DRAG_CAP, DRAG_VOL, DRAG_BOTS, DRAG_FRAG,
        DRAG_ADS_SENSE,  // 7, the one id left before the MV block starts
-       DRAG_MV0 = 8, DRAG_WP0 = 32, DRAG_PAD0 = 56 };  // +i = tuning slider i
+       DRAG_MV0 = 8, DRAG_VMFOV = 30, DRAG_WP0 = 32, DRAG_PAD0 = 56 };  // +i = tuning slider i
 
 // Register one interactive row (layout order) and draw the focus ring when the
 // pad drives the menu. Returns whether this row has focus — the row then also
@@ -23535,6 +23542,11 @@ static void ui_menu(void) {
   // top-of-track OFF sentinel is genuinely not a param row.
   { param_def_t fd = {"", "FOV", 90.0f, 60.0f, 120.0f, 1.0f};
     y = ui_param_row(&fd, &g_cfg.fov, DRAG_FOV, px, y, click, cx, cy); }
+  { param_def_t vd = {"", "WEAPON FOV", 58.0f, 50.0f, 74.0f, 1.0f};
+    y = ui_param_row(&vd, &g_cfg.vm_fov, DRAG_VMFOV, px, y, click, cx, cy); }
+  if (g_cfg.vm_pos < 0 || g_cfg.vm_pos > 2) g_cfg.vm_pos = 0;
+  ui_cycle("WEAPON POSITION", VM_POS_NAMES, 3, &g_cfg.vm_pos, px, pw, y, click, cx, cy);
+  y += 15;
 
   // FPS cap: 30..500 in steps of 10; the right end of the track means OFF.
   // Not a param row (the OFF sentinel), so it registers its focus row itself.
@@ -34966,7 +34978,17 @@ static void rot2(v3 *a, v3 *b, float ang) {
 // FOV: at 50 degrees a weapon close enough to read is mostly outside the frame.
 // The scope disc derives its radius from this same number, so the two can never
 // drift — that was two hardcoded halves of one constant.
-#define VM_FOV_DEG 58.0f
+// A PLAYER SETTING NOW (Settings > Graphics > WEAPON FOV), default 58 = the
+// historical constant, so an untouched config renders exactly as before. A
+// wider lens draws the same weapon smaller: at 58 the rifle covers about a
+// fifth of the frame, centre included, and a player who wants the target
+// rather than the receiver had no way to ask for it. Every reader below goes
+// through this one function, the scope disc and holo window included, so
+// they still derive from the lens actually used.
+static float vm_fov_deg(void) { return f_clamp(g_cfg.vm_fov, 50.0f, 74.0f); }
+#define VM_POS_X 0.016f      // m out, per WEAPON POSITION step
+#define VM_POS_Y 0.020f      // m down, per step
+#define VM_FOV_DEG vm_fov_deg()
 static v3 g_vm_muzzle;  // world-space barrel tip, set by vm_build every frame
 // The weapon's own basis in world space, published by the same vm_build call
 // that builds the mesh. The shader's micro-structure is a function of position
@@ -35095,7 +35117,18 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
   int ptl = cur == WPN_PT;    // a pistol sits lower and further out than a rifle
+  // WEAPON POSITION (Settings > Graphics), HIP ONLY: the player's own offset
+  // down and out, scaled by `hip` so ADS — where the sight IS the aim — is
+  // untouched. Measured: the weapon FOV alone shrinks the rifle but pulls the
+  // stock and arm in from off-frame, so the centre stays covered; moving the
+  // hold is what clears it. 0 = the authored pose, exactly.
+  // ...and NOT DURING A RELOAD OR A BOLT CYCLE: those poses are framed so the
+  // magwell and the bolt are mid-frame, and the LOWER offset put the magazine
+  // change half under the bottom edge. The offset blends out with them.
+  float vmo = (float)(g_cfg.vm_pos < 0 ? 0 : g_cfg.vm_pos > 2 ? 2 : g_cfg.vm_pos)
+            * (1.0f - f_clamp(rl + rch, 0.0f, 1.0f));
   float px = (ptl ? 0.112f : 0.148f) * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
+           + VM_POS_X * vmo * hip
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
            + (lean_d * 0.16f - lean * 0.028f) * hip;
   // DOWN a little and NOT toward the eye. The comment used to call this a "dip
@@ -35105,6 +35138,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
   // below frame, so the old failure is not being re-created.
   float py = (ptl ? -0.105f : -0.063f) * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
+           - VM_POS_Y * vmo * hip
            // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
            // which is the identical failure the reload dip above was already fixed
            // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
