@@ -19021,6 +19021,7 @@ static const char *WORLD_FS =
   // global look, because the single thing that would undo every other detail in
   // the frame is a puddle in a desert. See surf_kind_t.
   "uniform vec4 uSurf;\n"
+  "uniform vec2 uYard;\n"               // yard paint: arena half-size, on (see YARD)
   "uniform int uTown;\n"
   "uniform vec3 uWrist;\n"
   "uniform vec3 uWristOn;\n"            // wrist display's lit colour (gear LED)
@@ -19906,6 +19907,41 @@ static const char *WORLD_FS =
   "      float bay = vhash2(floor(P / 3.0) + vec2(13.0, 29.0));\n"
   "      alb *= (0.95 + 0.10 * bay) * (1.0 - 0.38 * jm);\n"
   "      rough = clamp(rough + 0.10 * jm, 0.045, 1.0);\n"
+  "    }\n"
+  // --- YARD ---------------------------------------------------------------
+  // THE ARENA AND THE FOUNDRY ARE WORKING YARDS, and their floors said nothing:
+  // forty-eight metres of poured grey with joints in it, the emptiest thing in
+  // the frame. A yard is painted — a safety lane walked round the perimeter, a
+  // chevron hazard band at the foot of every wall — and the paint is worn
+  // through where traffic and weather took it. Oil stains pool in a few bays
+  // and read by their SHEEN as much as their value. All of it is a function of
+  // world position, so it costs no geometry, cannot z-fight, never touches
+  // collision or a bot's path, and fades on the footprint like every other
+  // floor term. Yellow and black, never red: red at any height is the enemy.
+  "    if (uYard.y > 0.5 && uSurf.x == 0.0) {\n"
+  "      vec2 ap = abs(P);\n"
+  "      float dw = uYard.x - max(ap.x, ap.y);\n"
+  "      float lv = mfade(0.30, fp);\n"
+  "      float ln = (1.0 - smoothstep(0.085, 0.105 + fp, abs(dw - 1.6))) * lv;\n"
+  // A WALKWAY down the yard's long axis: two lines 1.5 m apart through the
+  // middle, the one leading line an open box arena otherwise lacks.
+  "      ln = max(ln, (1.0 - smoothstep(0.065, 0.085 + fp, abs(ap.x - 0.75))) * lv\n"
+  "                    * step(dw, uYard.x));\n"
+  "      float band = smoothstep(0.03, 0.05, dw) * (1.0 - smoothstep(0.55, 0.57 + fp, dw));\n"
+  "      float along = ap.x > ap.y ? P.y * sign(P.x) : -P.x * sign(P.y);\n"
+  "      float chev = smoothstep(0.46, 0.54, fract((along + dw) / 0.6));\n"
+  "      float wear = smoothstep(0.30, 0.62, vnoise2(P * 1.7) * 0.6 + vnoise2(P * 9.0) * 0.4);\n"
+  "      float paint = max(ln, band * lv) * (0.30 + 0.70 * wear);\n"
+  "      vec3 yel = vec3(0.50, 0.36, 0.045);\n"
+  "      vec3 pc = mix(vec3(0.030), yel, band > 0.5 ? chev : 1.0);\n"
+  "      alb = mix(alb, pc, paint * 0.88);\n"
+  "      rough = mix(rough, 0.58, paint * 0.6);\n"
+  // Stains stay MATTE. Glossy oil mirrored the sky into white patches in the
+  // sun corridor, which is glare across exactly the floor a fight is read on.
+  "      float st = vnoise2(P * 1.25 + 31.0) * 0.7 + vnoise2(P * 4.1 + 7.0) * 0.3;\n"
+  "      float stain = smoothstep(0.78, 0.86, st) * (1.0 - band) * (1.0 - ln);\n"
+  "      alb *= 1.0 - 0.34 * stain;\n"
+  "      rough = mix(rough, 0.62, stain * 0.5);\n"
   "    }\n"
   "    float gvis = 1.0 - smoothstep(0.02, 0.09, fp);\n"
   "    if (gvis > 0.004) {\n"
@@ -37650,6 +37686,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
   // copy at either of them is a second copy that can disagree.
   { v3 sp = surf_params();
     glUniform4f(R.u_surf, sp.x, sp.y, sp.z, g_wind_ang); }
+  // Yard paint: the open arenas that are working yards (ARENA, FOUNDRY), on
+  // hard floors only — the shader also requires a non-sand treatment.
+  glUniform2f(uloc(R.prog_world, "uYard"), ARENA_HALF,
+              (g_map_id == 0 || g_map_id == 1) && g_theme.surf != SURF_SAND ? 1.0f : 0.0f);
   // The town the weathering belongs to (CITADEL/HARBOR/REFINERY are
   // MAP_DEFS 4..6), -1 on the arenas.
   glUniform1i(uloc(R.prog_world, "uTown"), g_map_id >= 4 && g_map_id <= 6 ? g_map_id - 4
