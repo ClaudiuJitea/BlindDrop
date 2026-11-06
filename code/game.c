@@ -253,6 +253,19 @@ typedef void *(*gl_loader_fn)(const char *);
 // lives on unit 0, and every multi-unit call site hands unit 0 back.
 typedef void (APIENTRY *pfn_active_texture)(GLenum);
 static pfn_active_texture gl_active_texture;
+#define GL_TIME_ELAPSED_Q          0x88BF
+#define GL_QUERY_RESULT_Q          0x8866
+#define GL_QUERY_RESULT_AVAILABLE_Q 0x8867
+typedef void (APIENTRY *pfn_gen_queries)(GLsizei, GLuint *);
+typedef void (APIENTRY *pfn_begin_query)(GLenum, GLuint);
+typedef void (APIENTRY *pfn_end_query)(GLenum);
+typedef void (APIENTRY *pfn_query_iv)(GLuint, GLenum, GLint *);
+typedef void (APIENTRY *pfn_query_u64)(GLuint, GLenum, GLuint64 *);
+static pfn_gen_queries gl_gen_queries;
+static pfn_begin_query gl_begin_query;
+static pfn_end_query gl_end_query;
+static pfn_query_iv gl_query_iv;
+static pfn_query_u64 gl_query_u64;
 static void gl_load_functions(gl_loader_fn load) {
 #define X(ret, name, args) name = (pfn_##name)load(#name); \
   if (!name) fatal("GL 3.3 function missing: " #name);
@@ -260,6 +273,13 @@ static void gl_load_functions(gl_loader_fn load) {
 #undef X
   gl_active_texture = (pfn_active_texture)load("glActiveTexture");
   if (!gl_active_texture) fatal("GL 3.3 function missing: glActiveTexture");
+  // Timer queries: core in 3.3, but loaded OPTIONALLY — they only feed the
+  // PERF overlay, and a driver that lacks them must still run the game.
+  gl_gen_queries = (pfn_gen_queries)load("glGenQueries");
+  gl_begin_query = (pfn_begin_query)load("glBeginQuery");
+  gl_end_query = (pfn_end_query)load("glEndQuery");
+  gl_query_iv = (pfn_query_iv)load("glGetQueryObjectiv");
+  gl_query_u64 = (pfn_query_u64)load("glGetQueryObjectui64v");
 }
 // Bind `tex` on texture unit `unit`, then return to unit 0.
 static void tex_on(int unit, GLuint tex) {
@@ -1477,6 +1497,7 @@ typedef struct {
   float ch_size, hud_alpha;
   float hud_scale;           // in-match HUD size, 0.75-1.5, 1 = shipped
   int   enemy_mark;          // chevron over SEEN enemies past 12 m (0 off, 1 on)
+  int   perf;                // PERF overlay: frame/CPU/GPU milliseconds
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1622,9 +1643,9 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
   fprintf(f, "hints %d\n", c->hints);
-  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\n",
+  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\nperf_overlay %d\n",
           c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale,
-          c->enemy_mark);
+          c->enemy_mark, c->perf);
   fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
              "stat_headshots %d\nstat_best_streak %d\n",
           c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
@@ -1810,6 +1831,7 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "hud_opacity"))     c->hud_alpha = parse_float(val, c->hud_alpha, 0.2f, 1.0f);
     else if (!strcmp(key, "hud_scale"))       c->hud_scale = parse_float(val, c->hud_scale, 0.75f, 1.5f);
     else if (!strcmp(key, "enemy_markers"))   c->enemy_mark = parse_long(val, c->enemy_mark) ? 1 : 0;
+    else if (!strcmp(key, "perf_overlay"))    c->perf = parse_long(val, c->perf) ? 1 : 0;
     else if (!strncmp(key, "stat_", 5)) {
       int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
                : !strcmp(key, "stat_wins")        ? &c->st_wins
@@ -23551,6 +23573,8 @@ static void ui_menu(void) {
     y += 15;
     ui_toggle("ENEMY MARKERS", &g_cfg.enemy_mark, px, pw, y, click, cx, cy);
     y += 15;
+    ui_toggle("PERF STATS", &g_cfg.perf, px, pw, y, click, cx, cy);
+    y += 15;
   } else {
   // IDENTITY FIRST. The name field used to sit on the Singleplayer page, which
   // is where a MATCH is configured — but the name is not match property: it is
@@ -24299,6 +24323,7 @@ static void ui_scoreboard(void) {
 // alive. It fades in from 12 m (closer, the figure itself is the cue) and is
 // off in the rescue, which is a game about not being seen.
 static int rescue_proj(v3 w, float *sx, float *sy);   // world -> HUD units
+static void perf_draw(void);   // the PERF overlay, defined with app_frame
 static void hud_enemy_marks(const player_t *p) {
   if (!g_cfg.enemy_mark || rescue_on() || g_match.over || !p->alive) return;
   v3 eye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
@@ -38125,6 +38150,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
   }
   glBindTexture(GL_TEXTURE_2D, R.font_tex);
   ui_begin();
+  perf_draw();
   if (g_cfg.show_fps) {
     char text[16];
     snprintf(text, sizeof text, "%d FPS", fps);
@@ -39243,7 +39269,105 @@ static void leave_match(void) {
   match_restart();     // fresh local arena; it also runs vfx_match_reset,
 }                      // which clears the corpses of players who are gone
 
+// --- THE PERF OVERLAY (Settings > HUD > PERF STATS) ------------------------
+// The numbers this file's comments quote come from llvmpipe in a container; the
+// target is a 120 Hz handheld, and nothing measured it THERE. This does, on the
+// device, with no tooling: frame time (average and the worst of the last
+// second), CPU split into sim ticks and render submission, and GPU time from
+// GL_TIME_ELAPSED queries in a ring of four, read only once their result is
+// available so the counter never stalls the pipeline it is measuring.
+static double perf_now(void) {
+#ifdef _WIN32
+  static LARGE_INTEGER f;
+  LARGE_INTEGER c;
+  if (!f.QuadPart) QueryPerformanceFrequency(&f);
+  QueryPerformanceCounter(&c);
+  return (double)c.QuadPart / (double)f.QuadPart;
+#else
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+#endif
+}
+#define PERF_N 120
+static struct {
+  float frame[PERF_N], sim[PERF_N], cpu[PERF_N], gpu[PERF_N];
+  int at, n, gpu_n;
+  GLuint q[4];
+  int q_live[4], q_head, q_init;
+} g_perf;
+static void perf_gpu_begin(void) {
+  if (!g_cfg.perf || !gl_gen_queries || !gl_begin_query || !gl_end_query ||
+      !gl_query_iv || !gl_query_u64) return;
+  if (!g_perf.q_init) { gl_gen_queries(4, g_perf.q); g_perf.q_init = 1; }
+  // Harvest every finished query first, oldest first.
+  for (int k = 0; k < 4; k++) {
+    int i = (g_perf.q_head + k) % 4;
+    if (!g_perf.q_live[i]) continue;
+    GLint ok = 0;
+    gl_query_iv(g_perf.q[i], GL_QUERY_RESULT_AVAILABLE_Q, &ok);
+    if (!ok) continue;
+    GLuint64 ns = 0;
+    gl_query_u64(g_perf.q[i], GL_QUERY_RESULT_Q, &ns);
+    g_perf.gpu[g_perf.gpu_n++ % PERF_N] = (float)((double)ns * 1e-6);
+    g_perf.q_live[i] = 0;
+  }
+  int i = g_perf.q_head;
+  if (g_perf.q_live[i]) return;          // ring full: skip this frame's sample
+  gl_begin_query(GL_TIME_ELAPSED_Q, g_perf.q[i]);
+  g_perf.q_live[i] = 2;                  // 2 = open, 1 = waiting for result
+}
+static void perf_gpu_end(void) {
+  int i = g_perf.q_head;
+  if (g_perf.q_live[i] != 2) return;
+  gl_end_query(GL_TIME_ELAPSED_Q);
+  g_perf.q_live[i] = 1;
+  g_perf.q_head = (i + 1) % 4;
+}
+static void perf_push(float frame_ms, float sim_ms, float cpu_ms) {
+  int i = g_perf.at;
+  g_perf.frame[i] = frame_ms; g_perf.sim[i] = sim_ms; g_perf.cpu[i] = cpu_ms;
+  g_perf.at = (i + 1) % PERF_N;
+  if (g_perf.n < PERF_N) g_perf.n++;
+}
+static void perf_draw(void) {
+  if (!g_cfg.perf || !g_perf.n) return;
+  float fa = 0, fm = 0, sa = 0, ca = 0, ga = 0;
+  for (int i = 0; i < g_perf.n; i++) {
+    fa += g_perf.frame[i]; sa += g_perf.sim[i]; ca += g_perf.cpu[i];
+    if (g_perf.frame[i] > fm) fm = g_perf.frame[i];
+  }
+  fa /= (float)g_perf.n; sa /= (float)g_perf.n; ca /= (float)g_perf.n;
+  int gn = g_perf.gpu_n < PERF_N ? g_perf.gpu_n : PERF_N;
+  for (int i = 0; i < gn; i++) ga += g_perf.gpu[i];
+  if (gn) ga /= (float)gn;
+  char l1[64], l2[64], l3[64];
+  snprintf(l1, sizeof l1, "FRAME %.2f MS  WORST %.2f", (double)fa, (double)fm);
+  snprintf(l2, sizeof l2, "CPU SIM %.2f  RENDER %.2f", (double)sa, (double)ca);
+  if (gn) snprintf(l3, sizeof l3, "GPU %.2f MS  BUDGET 8.33", (double)ga);
+  else    snprintf(l3, sizeof l3, "GPU N/A  BUDGET 8.33");
+  float x = 8, y = 20;
+  ui_rect(x - 4, y - 3, 150, 40, 0.0f, 0.0f, 0.0f, 0.55f);
+  // Over budget reads in the threat colour: the line a tester is looking for.
+  int over = fa > 8.34f || ga > 8.34f;
+  ui_text_sh(l1, x, y, 0.75f, TXT_REG, 0.6f, over ? C4(C_THREAT, 1) : C4(C_BONE, 0.95f));
+  ui_text_sh(l2, x, y + 12, 0.75f, TXT_REG, 0.6f, C4(C_HAZE, 0.95f));
+  ui_text_sh(l3, x, y + 24, 0.75f, TXT_REG, 0.6f, C4(C_HAZE, 0.95f));
+}
+
+static double g_perf_tr;   // when this frame's render submission began
+static int app_frame_body(app_t *a, player_t *p, double dt, const frame_input_t *in);
 static int app_frame(app_t *a, player_t *p, double dt, const frame_input_t *in) {
+  if (!g_cfg.perf) return app_frame_body(a, p, dt, in);
+  double t0 = perf_now();
+  g_perf_tr = 0.0;
+  int r = app_frame_body(a, p, dt, in);
+  double t1 = perf_now();
+  double tr = g_perf_tr > 0.0 ? g_perf_tr : t1;
+  perf_push((float)(dt * 1000.0), (float)((tr - t0) * 1000.0), (float)((t1 - tr) * 1000.0));
+  return r;
+}
+static int app_frame_body(app_t *a, player_t *p, double dt, const frame_input_t *in) {
   if (dt > 0.1) dt = 0.1;  // hitch clamp: never spiral the sim
   // Presentation motion clock: real dt while playing; the harness never gets
   // here for uiframe/shot, so those keep the fixed 1/60 default and stay
@@ -39309,7 +39433,9 @@ static int app_frame(app_t *a, player_t *p, double dt, const frame_input_t *in) 
       audio_frame_drain(p);
       a->frames++; a->fps_window += dt;
       if (a->fps_window >= 0.25) { a->fps = (int)((double)a->frames / a->fps_window + 0.5); a->frames = 0; a->fps_window = 0; }
+      g_perf_tr = perf_now(); perf_gpu_begin();
       render_frame(p, (float)(a->acc / TICK_DT), a->fps, NULL);
+      perf_gpu_end();
       return nt;
     }
   }
@@ -39362,7 +39488,9 @@ static int app_frame(app_t *a, player_t *p, double dt, const frame_input_t *in) 
     a->fps_window = 0;
   }
 
+  g_perf_tr = perf_now(); perf_gpu_begin();
   render_frame(p, (float)(a->acc / TICK_DT), a->fps, NULL);
+  perf_gpu_end();
   return ticks;
 }
 
