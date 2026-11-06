@@ -1476,6 +1476,7 @@ typedef struct {
   int   ch_style, ch_color;
   float ch_size, hud_alpha;
   float hud_scale;           // in-match HUD size, 0.75-1.5, 1 = shipped
+  int   enemy_mark;          // chevron over SEEN enemies past 12 m (0 off, 1 on)
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1621,8 +1622,9 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
   fprintf(f, "hints %d\n", c->hints);
-  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\n",
-          c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale);
+  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\n",
+          c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale,
+          c->enemy_mark);
   fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
              "stat_headshots %d\nstat_best_streak %d\n",
           c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
@@ -1807,6 +1809,7 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "crosshair_size"))  c->ch_size = parse_float(val, c->ch_size, 0.5f, 2.0f);
     else if (!strcmp(key, "hud_opacity"))     c->hud_alpha = parse_float(val, c->hud_alpha, 0.2f, 1.0f);
     else if (!strcmp(key, "hud_scale"))       c->hud_scale = parse_float(val, c->hud_scale, 0.75f, 1.5f);
+    else if (!strcmp(key, "enemy_markers"))   c->enemy_mark = parse_long(val, c->enemy_mark) ? 1 : 0;
     else if (!strncmp(key, "stat_", 5)) {
       int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
                : !strcmp(key, "stat_wins")        ? &c->st_wins
@@ -23546,6 +23549,8 @@ static void ui_menu(void) {
       g_cfg.hud_alpha = pct * 0.01f; }
     ui_toggle("CONTROL HINTS", &g_cfg.hints, px, pw, y, click, cx, cy);
     y += 15;
+    ui_toggle("ENEMY MARKERS", &g_cfg.enemy_mark, px, pw, y, click, cx, cy);
+    y += 15;
   } else {
   // IDENTITY FIRST. The name field used to sit on the Singleplayer page, which
   // is where a MATCH is configured — but the name is not match property: it is
@@ -24283,6 +24288,38 @@ static void ui_scoreboard(void) {
   }
   g_sb_bottom = py + ph;
   g_sb_w = pw;
+}
+
+// ENEMY MARKERS (Settings > HUD, default off). The red helmet is the game's
+// only hostile cue, and it is a COLOUR: under a red-green deficiency, against
+// the warm sand and brick maps, or past ~25 m where the helmet is a few pixels,
+// it stops carrying. This is a SHAPE — a downward chevron over the head, an
+// outline the eye reads without hue — and it only ever marks what the player
+// can already see: a clear line from the eye to the head, inside the frustum,
+// alive. It fades in from 12 m (closer, the figure itself is the cue) and is
+// off in the rescue, which is a game about not being seen.
+static int rescue_proj(v3 w, float *sx, float *sy);   // world -> HUD units
+static void hud_enemy_marks(const player_t *p) {
+  if (!g_cfg.enemy_mark || rescue_on() || g_match.over || !p->alive) return;
+  v3 eye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
+  ENT_FOREACH(e) {
+    if (e == g_local_ent || !ent_alive(e)) continue;
+    v3 head = ent_aimpoint(e);
+    head.y += 0.62f;
+    v3 d = v3_sub(head, eye);
+    float dist = v3_len(d);
+    if (dist < 12.0f || dist > GUN_RANGE) continue;
+    if (!los_clear(eye, head)) continue;
+    float sx, sy;
+    if (!rescue_proj(head, &sx, &sy)) continue;
+    float a = f_clamp((dist - 12.0f) / 6.0f, 0.0f, 1.0f) * 0.92f;
+    float w = 3.4f, hgt = 2.6f, y0 = sy - 6.0f;
+    // Outline first, then the core: readable on sky and on shadow alike.
+    ui_capsule(sx - w, y0 - hgt, sx, y0, 1.7f, 0.02f, 0.03f, 0.04f, 0.55f * a);
+    ui_capsule(sx, y0, sx + w, y0 - hgt, 1.7f, 0.02f, 0.03f, 0.04f, 0.55f * a);
+    ui_capsule(sx - w, y0 - hgt, sx, y0, 0.85f, C_THREAT, a);
+    ui_capsule(sx, y0, sx + w, y0 - hgt, 0.85f, C_THREAT, a);
+  }
 }
 
 // FIRST-MATCH CONTROL HINTS. The genre's core verbs are discoverable, but this
@@ -38540,6 +38577,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  TXT_REG, 1.4f, C4(C_BONE, 0.85f));
     }
 
+    hud_enemy_marks(p);
     if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
     hud_match_summary();
     hud_hints(p, ccx);
