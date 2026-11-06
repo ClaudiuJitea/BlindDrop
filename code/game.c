@@ -1449,6 +1449,10 @@ typedef struct {
   int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
   int   wpn_theme;           // ARMORY: WPN_THEME_NAMES index, 0 = factory
   int   gear_theme;          // ARMORY: GEAR_THEME_NAMES index, 0 = slate
+  // CAREER: lifetime totals for the local player, shown on the end screen.
+  // Counted on the presentation side (vfx_on_event), so offline and online
+  // matches both add to them; the boot screen's showcase match never does.
+  int   st_matches, st_wins, st_kills, st_deaths, st_hs, st_best;
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1591,6 +1595,9 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
+  fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
+             "stat_headshots %d\nstat_best_streak %d\n",
+          c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
   fprintf(f, "ballistics %d\n", c->ballistics);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
@@ -1764,6 +1771,15 @@ static void config_load_or_create(const char *path, config_t *c) {
       c->wpn_theme = parse_int(val, c->wpn_theme, 0, WPN_THEME_COUNT - 1);
     else if (!strcmp(key, "gear_theme"))
       c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
+    else if (!strncmp(key, "stat_", 5)) {
+      int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
+               : !strcmp(key, "stat_wins")        ? &c->st_wins
+               : !strcmp(key, "stat_kills")       ? &c->st_kills
+               : !strcmp(key, "stat_deaths")      ? &c->st_deaths
+               : !strcmp(key, "stat_headshots")   ? &c->st_hs
+               : !strcmp(key, "stat_best_streak") ? &c->st_best : NULL;
+      if (dst) *dst = parse_int(val, *dst, 0, 1000000000);
+    }
     // The DEV tab's runtime opt-in. It stays a config key with no menu toggle
     // on purpose: a knob that can switch itself on from inside the menu is one
     // stray click away from a player standing in the tuning workbench.
@@ -24012,6 +24028,12 @@ static void ui_menu(void) {
 // Scoreboard — hold the SCOREBOARD bind (default TAB). One slim panel:
 // name, kills, deaths, K/D and accuracy, sorted by kills (ties broken by
 // fewer deaths); the player's row is tinted. Forced on when the match ends.
+// THE LOCAL PLAYER'S MATCH, for the end-screen summary: what the scoreboard
+// does not already carry (kills, deaths and accuracy are g_match's). `life` is
+// kills since the last death; `best` the match's longest such run. Reset when
+// a match goes live (see hud_match_summary), counted by vfx_on_event.
+static struct { int hs, life, best, counted; } g_ms;
+static float g_sb_bottom = 180.0f, g_sb_w = 300.0f;   // last board drawn
 static void ui_scoreboard(void) {
   // ENT_FOREACH, not `1 + nbots` (P1-63): idx[i] = i assumed a DENSE id space
   // — humans on 21+ simply vanished from the board while empty bot slots
@@ -24044,7 +24066,10 @@ static void ui_scoreboard(void) {
   // was left out; a silently truncated board reads as a board with fewer
   // players in the match.
   float top = g_match.over ? 96.0f : 24.0f;
-  int fit = (int)((g_ui_vh - top - 12.0f - 46.0f) / 11.0f);
+  // ...and at match end the personal summary (hud_match_summary, 44 units)
+  // needs its own room under the board.
+  float sum_h = g_match.over && !rescue_on() ? 44.0f : 0.0f;
+  int fit = (int)((g_ui_vh - top - 12.0f - 46.0f - sum_h) / 11.0f);
   if (fit < 1) fit = 1;
   int shown = n < fit ? n : fit;
   int hidden = n - shown;
@@ -24173,6 +24198,45 @@ static void ui_scoreboard(void) {
     snprintf(more, sizeof more, "+%d MORE", hidden);
     ui_text(more, px + 12, y + 1, 0.9f, C_HAZE, 1);
   }
+  g_sb_bottom = py + ph;
+  g_sb_w = pw;
+}
+
+// THE END SCREEN SAYS HOW *YOU* DID. The board ranks everyone; this strip under
+// it is the local player's own match (headshots and the best run without
+// dying, which no column carries) and the career it just added to — the one
+// thing in the game that carries over from one session to the next.
+static void hud_match_summary(void) {
+  static int was_over = -1;
+  int over = g_match.over && !rescue_on();
+  if (was_over == 1 && !g_match.over) g_ms = (typeof(g_ms)){0};   // live again
+  was_over = g_match.over;
+  if (!over) return;
+  int me = g_local_ent;
+  float w = g_sb_w > 300.0f ? g_sb_w : 300.0f;
+  float x = g_ui_vw * 0.5f - w * 0.5f;
+  float y = g_sb_bottom + 6.0f;
+  if (y > g_ui_vh - 44.0f) y = g_ui_vh - 44.0f;
+  ui_panel(x, y, w, 38, 0, 1);
+  int sh = g_match.shots[me], hi = g_match.hits[me];
+  char l1[96], l2[96];
+  // The board's own accuracy rule (integer, floored, capped at 100), so the
+  // two numbers on one screen can never disagree by a rounding.
+  snprintf(l1, sizeof l1, "YOUR MATCH   %d K   %d D   %d HS   %d%% ACC   BEST RUN %d",
+           g_match.kills[me], g_match.deaths[me], g_ms.hs,
+           sh ? (hi >= sh ? 100 : hi * 100 / sh) : 0, g_ms.best);
+  float kd = g_cfg.st_deaths ? (float)g_cfg.st_kills / (float)g_cfg.st_deaths
+                             : (float)g_cfg.st_kills;
+  snprintf(l2, sizeof l2, "CAREER  %d PLAYED  %d WON  %.2f K/D  %d HS  BEST RUN %d",
+           g_cfg.st_matches, g_cfg.st_wins, (double)kd, g_cfg.st_hs, g_cfg.st_best);
+  // Never past the panel's edge: a long name list or big career numbers
+  // shrink the line instead of running it out of its box.
+  float l1s = 1.0f, l1w = ui_text_width(l1, l1s);
+  if (l1w > w - 24.0f) l1s *= (w - 24.0f) / l1w;
+  float l2s = 0.9f, l2w = ui_text_width(l2, l2s);
+  if (l2w > w - 24.0f) l2s *= (w - 24.0f) / l2w;
+  ui_text(l1, x + 12, y + 8, l1s, C_BONE, 1);
+  ui_text(l2, x + 12, y + 23, l2s, C_HAZE, 1);
 }
 
 // MSAA render target — rebuilt lazily whenever the setting or framebuffer
@@ -25607,6 +25671,17 @@ static void vfx_on_event(const event_t *e) {
     break;
   }
   case EV_KILL:
+    if (!g_home && e->dst == g_local_ent) {
+      g_ms.life = 0;
+      g_cfg.st_deaths++;
+    }
+    if (!g_home && e->src == g_local_ent && e->dst != g_local_ent) {
+      g_ms.life++;
+      if (g_ms.life > g_ms.best) g_ms.best = g_ms.life;
+      if (g_ms.best > g_cfg.st_best) g_cfg.st_best = g_ms.best;
+      if (e->k) { g_ms.hs++; g_cfg.st_hs++; }
+      g_cfg.st_kills++;
+    }
     if (e->src == g_local_ent) {
       // The kill REPLACES whatever hit was still waiting to be armed — the two
       // are pushed on the same tick by ent_damage, and a smeared pair of
@@ -25737,10 +25812,18 @@ static void vfx_on_event(const event_t *e) {
     if (ah >= 0 && e->k) g_players[ah].wp.stagger_t = MELEE_STAGGER_TICKS;
     break;
   }
+  case EV_END:
+    // Once per match: LMS ends rounds without an EV_END, the rescue keeps its
+    // own debrief and is not a match against anyone.
+    if (!g_home && !rescue_on() && !g_ms.counted) {
+      g_ms.counted = 1;
+      g_cfg.st_matches++;
+      if (e->k == g_local_ent) g_cfg.st_wins++;
+    }
+    break;
   case EV_RESPAWN:
   case EV_STEP:
   case EV_LAND:
-  case EV_END:
     break;
   }
 }
@@ -38246,6 +38329,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
 
     if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
+    hud_match_summary();
   }
   }
   if (!hud_on) {
