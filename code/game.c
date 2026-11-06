@@ -11526,6 +11526,7 @@ static int rescue_guards(void) {
 static const guard_post_t *rescue_post(int bi) {
   return &GUARD_POSTS[bi >= 0 && bi < RESC_POSTS ? bi : 0];
 }
+#define RESC_INTRO_TICKS (9 * TICK_HZ / 2)   // 4.5 s: the briefing, then the job
 static void rescue_msg(int kind, const char *a, const char *b) {
   snprintf(g_resc.msg, sizeof g_resc.msg, "%s", a);
   snprintf(g_resc.msg2, sizeof g_resc.msg2, "%s", b ? b : "");
@@ -16258,7 +16259,7 @@ static void rescue_reset(void) {
     h->grounded = 1;
   }
   rescue_msg(0, "OPERATION NIGHTFALL", "FREE THE 3 HOSTAGES  \x05  GET THEM TO THE LZ");
-  g_resc.msg_t = 7 * TICK_HZ;
+  g_resc.msg_t = RESC_INTRO_TICKS;
 }
 
 static void rescue_alarm(int why) {
@@ -37283,45 +37284,67 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
     ui_vgrad(0, 0, g_ui_vw, 60, C4(0.55f, 0.04f, 0.02f, 0.30f + 0.15f * pu), C4(0.5f, 0, 0, 0));
     ui_vgrad(0, g_ui_vh - 60, g_ui_vw, 60, C4(0.5f, 0, 0, 0), C4(0.55f, 0.04f, 0.02f, 0.30f + 0.15f * pu));
   }
-  // THE OBJECTIVE CARD, top left.
+  // THE OBJECTIVE TRACKER, top left. It was a dark card carrying the mission
+  // name (which the banner was saying at the same moment, in letters ten
+  // times the size), both objectives at once and a status line — four rows
+  // and a box over the corner of the map, all the time. Now: ONE objective,
+  // the one that is live, with its progress as pips, and the stealth state as
+  // a small status pill under it. No box: the type's own shadow carries it
+  // over a bright sky, and the pill brings its own backing. The alarm is the one state that is allowed to
+  // shout.
   {
-    float x = 14, y = 12;
-    ui_rect(x - 6, y - 5, 196, 62, 0.02f, 0.03f, 0.04f, 0.42f);
-    ui_rect(x - 6, y - 5, 2, 62, C_BLAZE, 0.9f);
-    ui_text_ex("OPERATION NIGHTFALL", x, y, 0.75f, TXT_REG, 1.6f, C4(C_HAZE, 0.95f));
-    int all = g_resc.freed == RESC_HOSTAGES, out = g_resc.extracted == RESC_HOSTAGES;
-    for (int k = 0; k < 2; k++) {   // the two objectives' check boxes
-      float by = y + 14 + 12.0f * (float)k;
-      int done = k ? out : all;
-      ui_rect(x, by, 7, 7, C_BONE, 0.55f);
-      ui_rect(x + 1, by + 1, 5, 5, 0.02f, 0.03f, 0.04f, 0.9f);
-      if (done) ui_rect(x + 1.5f, by + 1.5f, 4, 4, 0.45f, 0.95f, 0.55f, 1.0f);
+    float x = 14, y = 13;
+    int all = g_resc.freed == RESC_HOSTAGES;
+    const char *obj = all ? "ESCORT THEM TO THE LZ" : "FREE THE HOSTAGES";
+    int prog = all ? g_resc.extracted : g_resc.freed;
+    ui_rect(x - 6, y - 1, 1.5f, 13, C_BLAZE, 0.95f);
+    ui_text_sh(obj, x, y, 0.82f, TXT_BOLD, 1.25f, C4(C_BONE, 0.97f));
+    float px = x + ui_text_width_tr(obj, 0.82f, 1.25f) + 9;
+    for (int k = 0; k < RESC_HOSTAGES; k++) {         // progress pips
+      int on = k < prog;
+      ui_diskn(px + 3.0f + 8.0f * (float)k, y + 4.5f, 2.6f, 10, C4(0, 0, 0, 0.45f));
+      ui_diskn(px + 3.0f + 8.0f * (float)k, y + 4.5f, 2.0f, 10,
+               on ? C4(0.45f, 0.95f, 0.55f, 1.0f) : C4(C_BONE, 0.28f));
     }
-    snprintf(b, sizeof b, "FREE THE HOSTAGES  %d/%d", g_resc.freed, RESC_HOSTAGES);
-    ui_text_ex(b, x + 12, y + 13, 0.8f, TXT_REG, 1.2f, all ? C4(0.45f, 0.95f, 0.55f, 0.95f) : C4(C_BONE, 0.95f));
-    snprintf(b, sizeof b, "ESCORT THEM TO THE LZ  %d/%d", g_resc.extracted, RESC_HOSTAGES);
-    ui_text_ex(b, x + 12, y + 25, 0.8f, TXT_REG, 1.2f,
-               out ? C4(0.45f, 0.95f, 0.55f, 0.95f) : g_resc.freed ? C4(C_BONE, 0.95f) : C4(C_HAZE, 0.7f));
+    // A freed hostage is following you while the rest are still captive:
+    // that is the one secondary fact worth a line.
+    if (!all && g_resc.freed > 0) {
+      snprintf(b, sizeof b, "%d FOLLOWING  \x05  LZ MARKED", g_resc.freed - g_resc.extracted);
+      ui_text_sh(b, x, y + 13, 0.66f, TXT_REG, 1.2f, C4(C_HAZE, 0.9f));
+    }
     float maxd = 0.0f;
     for (int i = 0; i < g_match.nbots; i++)
       if (g_bots[i].active && g_bots[i].alive && g_resc.detect[i] > maxd) maxd = g_resc.detect[i];
+    // A real array, not a pointer to C4(...): a compound literal dies with
+    // the if-branch that made it, and the pill read back garbage colours.
+    const char *st;
+    float sc[4] = {0.45f, 0.9f, 0.6f, 1.0f};
+    float stp = 1.0f;
+#define SC_SET(r, g, b_) (sc[0] = (r), sc[1] = (g), sc[2] = (b_))
     if (g_resc.alarm) {
       int captive = 0;
       for (int i = 0; i < RESC_HOSTAGES; i++) captive += g_resc.h[i].state == HS_CAPTIVE;
       char c[16];
       rescue_clock(c, sizeof c, g_resc.exec_t);
-      if (captive) snprintf(b, sizeof b, "ALARM \x05 EXECUTIONS IN %s", c);
-      else snprintf(b, sizeof b, "ALARM \x05 HOSTAGES SAFE");
-      float pu = 0.65f + 0.35f * sinf(t * 7.0f);
-      ui_text_ex(b, x, y + 40, 0.85f, TXT_BLACK, 1.3f, C4(C_THREAT, pu));
+      if (captive) snprintf(b, sizeof b, "ALARM  EXECUTIONS IN %s", c);
+      else snprintf(b, sizeof b, "ALARM  HOSTAGES SAFE");
+      st = b; SC_SET(1.000f, 0.294f, 0.227f); stp = 0.65f + 0.35f * sinf(t * 7.0f);
     } else if (maxd >= 1.0f) {
-      ui_text_ex("SPOTTED \x05 KILL HIM BEFORE THE RADIO", x, y + 40, 0.85f, TXT_BLACK, 1.2f, C4(C_THREAT, 1));
+      st = "SPOTTED  KILL HIM BEFORE THE RADIO"; SC_SET(1.000f, 0.294f, 0.227f);
     } else if (maxd > 0.22f) {
-      ui_text_ex("SUSPICIOUS", x, y + 40, 0.85f, TXT_BLACK, 1.4f, C4(C_BLAZE, 0.95f));
+      st = "SUSPICIOUS"; SC_SET(1.000f, 0.549f, 0.102f);
+    } else if (g_resc.lit) {
+      st = "IN THE LIGHT"; SC_SET(0.95f, 0.85f, 0.45f);
     } else {
-      ui_text_ex(g_resc.lit ? "UNDETECTED \x05 IN THE LIGHT" : "UNDETECTED", x, y + 40, 0.85f,
-                 TXT_BLACK, 1.4f, g_resc.lit ? C4(0.95f, 0.85f, 0.45f, 0.9f) : C4(0.45f, 0.9f, 0.6f, 0.9f));
+      st = "UNDETECTED";
     }
+#undef SC_SET
+    float sy = y + (!all && g_resc.freed > 0 ? 26.0f : 16.0f);
+    float sw = ui_text_width_tr(st, 0.66f, 1.4f);
+    ui_rrect_c(x - 2, sy - 2, sw + 16, 11, 0, C4(0.01f, 0.015f, 0.025f, 0.55f),
+               C4(sc[0], sc[1], sc[2], 0.35f * stp));
+    ui_diskn(x + 3.5f, sy + 3.5f, 1.8f, 10, C4(sc[0], sc[1], sc[2], stp));
+    ui_text_ex(st, x + 9, sy + 0.5f, 0.66f, TXT_BOLD, 1.4f, C4(sc[0], sc[1], sc[2], 0.95f * stp));
   }
   if (g_match.over) goto debrief;
   // DETECTION ARCS: one per guard building suspicion, on its bearing.
@@ -37360,10 +37383,18 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
     v3 w = {{h->pos.x, h->pos.y + 1.7f, h->pos.z}};
     float dd = v3_len(v3_sub(h->pos, p->pos));
     if (dd < 3.0f || !rescue_proj(w, &sx, &sy)) continue;
-    float a = f_clamp((dd - 3.0f) / 4.0f, 0.0f, 1.0f) * 0.9f;
-    rescue_diamond(sx, sy, 6.0f, 1.0f, 0.75f, 0.25f, a);
-    snprintf(b, sizeof b, "%s  %dM", RESC_HOLD_NAME[i], (int)(dd + 0.5f));
-    ui_text_ex(b, sx - ui_text_width_tr(b, 0.7f, 1.2f) * 0.5f, sy + 9, 0.7f, TXT_REG, 1.2f,
+    // QUIET UNTIL LOOKED AT. Three labelled markers at once were a row of
+    // text across the middle of the screen. Each is a small diamond and its
+    // distance; the NAME appears only on the marker the player is looking
+    // toward, and the others sit back at half strength.
+    float a = f_clamp((dd - 3.0f) / 4.0f, 0.0f, 1.0f);
+    float off = hypotf(sx - ccx, sy - ccy);
+    float focus = 1.0f - f_clamp((off - 40.0f) / 50.0f, 0.0f, 1.0f);
+    a *= 0.50f + 0.45f * focus;
+    rescue_diamond(sx, sy, 4.2f + 1.0f * focus, 1.0f, 0.75f, 0.25f, a);
+    if (focus > 0.05f) snprintf(b, sizeof b, "%s  %dM", RESC_HOLD_NAME[i], (int)(dd + 0.5f));
+    else               snprintf(b, sizeof b, "%dM", (int)(dd + 0.5f));
+    ui_text_sh(b, sx - ui_text_width_tr(b, 0.62f, 1.2f) * 0.5f, sy + 7, 0.62f, TXT_REG, 1.2f,
                C4(1.0f, 0.85f, 0.5f, a));
   }
   if (g_resc.freed > 0) {
@@ -37395,24 +37426,24 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
     float a = f_clamp((float)g_resc.msg_t / 40.0f, 0.0f, 1.0f);
     float in = f_clamp((float)(4 * TICK_HZ - g_resc.msg_t) / 12.0f, 0.0f, 1.0f);
     if (g_resc.msg_kind == 0)
-      in = f_clamp((float)(7 * TICK_HZ - g_resc.msg_t) / 30.0f, 0.0f, 1.0f);
+      in = f_clamp((float)(RESC_INTRO_TICKS - g_resc.msg_t) / 30.0f, 0.0f, 1.0f);
     a *= in;
     const float *col = g_resc.msg_kind == 2 ? C4(C_THREAT, a) : g_resc.msg_kind == 1 ? C4(C_BLAZE, a)
                      : g_resc.msg_kind == 3 ? C4(0.5f, 1.0f, 0.6f, a) : C4(C_BONE, a);
-    float by = g_ui_vh * 0.22f, s1 = g_resc.msg_kind == 0 ? 2.2f : 1.7f;
-    ui_vgrad(0, by - 10, g_ui_vw, 56, C4(0, 0, 0, 0.40f * a), C4(0, 0, 0, 0));
+    // LOWER THIRD, and a size that is a headline rather than a wall. At 22%
+    // down the screen in 2.2x type with three lines under it, the briefing sat
+    // exactly where the first guard would be. It now lives under the
+    // crosshair band, and the stealth tips it used to carry are a game-wide
+    // lesson the control hints and the mission itself teach.
+    float by = g_ui_vh * 0.62f, s1 = g_resc.msg_kind == 0 ? 1.55f : 1.30f;
+    ui_vgrad(0, by - 8, g_ui_vw, 44, C4(0, 0, 0, 0), C4(0, 0, 0, 0.34f * a));
     float w1 = ui_text_width_tr(g_resc.msg, s1, 2.0f);
     ui_text_ex(g_resc.msg, ccx - w1 * 0.5f + 1, by + 1, s1, TXT_BLACK, 2.0f, C4(0, 0, 0, 0.8f * a));
     ui_text_ex(g_resc.msg, ccx - w1 * 0.5f, by, s1, TXT_BLACK, 2.0f, col);
     if (g_resc.msg2[0]) {
       float w2 = ui_text_width_tr(g_resc.msg2, 0.9f, 1.5f);
-      ui_text_ex(g_resc.msg2, ccx - w2 * 0.5f, by + (g_resc.msg_kind == 0 ? 30 : 24), 0.9f, TXT_REG, 1.5f,
+      ui_text_ex(g_resc.msg2, ccx - w2 * 0.5f, by + (g_resc.msg_kind == 0 ? 22 : 19), 0.9f, TXT_REG, 1.5f,
                  C4(C_BONE, 0.85f * a));
-    }
-    if (g_resc.msg_kind == 0) {
-      const char *l3 = "STAY UNSEEN \x05 CROUCH IN THE DARK \x05 KNIFE FROM BEHIND IS SILENT";
-      float w3 = ui_text_width_tr(l3, 0.75f, 1.3f);
-      ui_text_ex(l3, ccx - w3 * 0.5f, by + 44, 0.75f, TXT_REG, 1.3f, C4(C_HAZE, 0.85f * a));
     }
   }
   return;
