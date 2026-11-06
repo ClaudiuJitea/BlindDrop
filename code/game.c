@@ -1475,6 +1475,7 @@ typedef struct {
   // Index 0 / 1.0 of each is the shipped HUD exactly.
   int   ch_style, ch_color;
   float ch_size, hud_alpha;
+  float hud_scale;           // in-match HUD size, 0.75-1.5, 1 = shipped
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1545,7 +1546,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .hud_scale = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -1620,8 +1621,8 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
   fprintf(f, "hints %d\n", c->hints);
-  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\n",
-          c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha);
+  fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\n",
+          c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale);
   fprintf(f, "stat_matches %d\nstat_wins %d\nstat_kills %d\nstat_deaths %d\n"
              "stat_headshots %d\nstat_best_streak %d\n",
           c->st_matches, c->st_wins, c->st_kills, c->st_deaths, c->st_hs, c->st_best);
@@ -1805,6 +1806,7 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "crosshair_color")) c->ch_color = parse_int(val, c->ch_color, 0, CH_COLOR_COUNT - 1);
     else if (!strcmp(key, "crosshair_size"))  c->ch_size = parse_float(val, c->ch_size, 0.5f, 2.0f);
     else if (!strcmp(key, "hud_opacity"))     c->hud_alpha = parse_float(val, c->hud_alpha, 0.2f, 1.0f);
+    else if (!strcmp(key, "hud_scale"))       c->hud_scale = parse_float(val, c->hud_scale, 0.75f, 1.5f);
     else if (!strncmp(key, "stat_", 5)) {
       int *dst = !strcmp(key, "stat_matches")     ? &c->st_matches
                : !strcmp(key, "stat_wins")        ? &c->st_wins
@@ -22597,7 +22599,7 @@ static const char *pad_disp(const char *tok) {
 
 enum { DRAG_SENSE = 1, DRAG_FOV, DRAG_CAP, DRAG_VOL, DRAG_BOTS, DRAG_FRAG,
        DRAG_ADS_SENSE,  // 7, the one id left before the MV block starts
-       DRAG_MV0 = 8, DRAG_CHSIZE = 28, DRAG_HUDA = 29, DRAG_VMFOV = 30, DRAG_WP0 = 32,
+       DRAG_MV0 = 8, DRAG_HUDS = 27, DRAG_CHSIZE = 28, DRAG_HUDA = 29, DRAG_VMFOV = 30, DRAG_WP0 = 32,
        DRAG_PAD0 = 56 };  // +i = tuning slider i
 
 // Register one interactive row (layout order) and draw the focus ring when the
@@ -23534,6 +23536,10 @@ static void ui_menu(void) {
     y += 4;
     ui_section("HUD", px, pw, y);
     y += 14;
+    { float pct = g_cfg.hud_scale * 100.0f;
+      param_def_t sd = {"", "SCALE", 100.0f, 75.0f, 150.0f, 5.0f};
+      y = ui_param_row(&sd, &pct, DRAG_HUDS, px, y, click, cx, cy);
+      g_cfg.hud_scale = pct * 0.01f; }
     { float pct = g_cfg.hud_alpha * 100.0f;
       param_def_t od = {"", "OPACITY", 100.0f, 20.0f, 100.0f, 5.0f};
       y = ui_param_row(&od, &pct, DRAG_HUDA, px, y, click, cx, cy);
@@ -38090,6 +38096,15 @@ static void render_frame(const player_t *p, float alpha, int fps,
   }
   if (!g_menu_open && !cam_free && !g_vmorb.on) {
     g_ui_alpha = f_clamp(g_cfg.hud_alpha, 0.2f, 1.0f);
+    // HUD SCALE: the whole in-match HUD lays itself out from g_ui_vw/vh, so a
+    // larger virtual->pixel scale with a correspondingly smaller virtual space
+    // grows every element about its own anchor (corners stay corners, the
+    // crosshair stays centred, world markers re-project). Restored below
+    // before the menu, which keeps its own scale.
+    const float hud_base_s = g_uis, hud_base_vw = g_ui_vw, hud_base_vh = g_ui_vh;
+    g_uis = hud_base_s * f_clamp(g_cfg.hud_scale, 0.75f, 1.5f);
+    g_ui_vw = (float)R.width / g_uis;
+    g_ui_vh = (float)R.height / g_uis;
     float ccx = g_ui_vw * 0.5f, ccy = g_ui_vh * 0.5f;
     int in_play = p->alive && !g_match.over;
     // Crosshair: the gap mirrors the live spread cone, so bloom/motion
@@ -38159,7 +38174,13 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
     float dot_a = f_clamp((ads - 0.78f) / 0.17f, 0.0f, 1.0f);
     float glass_a = f_clamp((ads - 0.35f) / 0.40f, 0.0f, 1.0f);
-    if (glass_a > 0.0f && in_play && !third && p->wp.cur == WPN_AR) holo_draw(ccx, ccy, glass_a, dot_a);
+    if (glass_a > 0.0f && in_play && !third && p->wp.cur == WPN_AR) {
+      // The holo window was projected by vm_build in BASE units: draw it there.
+      float ks = g_uis, kw = g_ui_vw, kh = g_ui_vh;
+      g_uis = hud_base_s; g_ui_vw = hud_base_vw; g_ui_vh = hud_base_vh;
+      holo_draw(hud_base_vw * 0.5f, hud_base_vh * 0.5f, glass_a, dot_a);
+      g_uis = ks; g_ui_vw = kw; g_ui_vh = kh;
+    }
     // THE HITMARKER. Four diagonal strokes; the levers are the lessons:
     // it POPS AND SETTLES off g_hitmark_t (a distinct beat per round, even
     // re-armed mid-life); the outline is CONCENTRIC, not a drop shadow (the
@@ -38523,6 +38544,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     hud_match_summary();
     hud_hints(p, ccx);
     g_ui_alpha = 1.0f;
+    g_uis = hud_base_s; g_ui_vw = hud_base_vw; g_ui_vh = hud_base_vh;
   }
   }
   if (!hud_on) {
