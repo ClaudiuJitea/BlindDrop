@@ -23542,11 +23542,6 @@ static void ui_menu(void) {
   // top-of-track OFF sentinel is genuinely not a param row.
   { param_def_t fd = {"", "FOV", 90.0f, 60.0f, 120.0f, 1.0f};
     y = ui_param_row(&fd, &g_cfg.fov, DRAG_FOV, px, y, click, cx, cy); }
-  { param_def_t vd = {"", "WEAPON FOV", 58.0f, 50.0f, 74.0f, 1.0f};
-    y = ui_param_row(&vd, &g_cfg.vm_fov, DRAG_VMFOV, px, y, click, cx, cy); }
-  if (g_cfg.vm_pos < 0 || g_cfg.vm_pos > 2) g_cfg.vm_pos = 0;
-  ui_cycle("WEAPON POSITION", VM_POS_NAMES, 3, &g_cfg.vm_pos, px, pw, y, click, cx, cy);
-  y += 15;
 
   // FPS cap: 30..500 in steps of 10; the right end of the track means OFF.
   // Not a param row (the OFF sentinel), so it registers its focus row itself.
@@ -23822,8 +23817,18 @@ static void ui_menu(void) {
     ui_cycle("GLOVES + GAUNTLET", GEAR_THEME_NAMES, GEAR_THEME_COUNT, &g_cfg.gear_theme,
              px, pw, y, click, cx, cy);
     y += 15;
+    // How the weapon sits in view. Here rather than under Settings > Graphics,
+    // which is already as tall as a 720p screen allows.
     y += 4;
-    ui_text("COSMETIC ONLY  /  SHOWN IN FIRST PERSON", px + 16, y + 3, 0.85f, C_DIM, 1);
+    ui_section("VIEW", px, pw, y);
+    y += 14;
+  { param_def_t vd = {"", "WEAPON FOV", 58.0f, 50.0f, 74.0f, 1.0f};
+    y = ui_param_row(&vd, &g_cfg.vm_fov, DRAG_VMFOV, px, y, click, cx, cy); }
+  if (g_cfg.vm_pos < 0 || g_cfg.vm_pos > 2) g_cfg.vm_pos = 0;
+  ui_cycle("WEAPON POSITION", VM_POS_NAMES, 3, &g_cfg.vm_pos, px, pw, y, click, cx, cy);
+  y += 15;
+    y += 4;
+    ui_text("FIRST PERSON ONLY  /  NO GAMEPLAY EFFECT", px + 16, y + 3, 0.85f, C_DIM, 1);
     y += 14;
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
@@ -34978,7 +34983,7 @@ static void rot2(v3 *a, v3 *b, float ang) {
 // FOV: at 50 degrees a weapon close enough to read is mostly outside the frame.
 // The scope disc derives its radius from this same number, so the two can never
 // drift — that was two hardcoded halves of one constant.
-// A PLAYER SETTING NOW (Settings > Graphics > WEAPON FOV), default 58 = the
+// A PLAYER SETTING NOW (ARMORY > VIEW > WEAPON FOV), default 58 = the
 // historical constant, so an untouched config renders exactly as before. A
 // wider lens draws the same weapon smaller: at 58 the rifle covers about a
 // fifth of the frame, centre included, and a player who wants the target
@@ -35117,7 +35122,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // sat in the right-hand edge of the frame and the handle was 20 px of grey.
   int srcyc = cur == WPN_SR;
   int ptl = cur == WPN_PT;    // a pistol sits lower and further out than a rifle
-  // WEAPON POSITION (Settings > Graphics), HIP ONLY: the player's own offset
+  // WEAPON POSITION (ARMORY > VIEW), HIP ONLY: the player's own offset
   // down and out, scaled by `hip` so ADS — where the sight IS the aim — is
   // untouched. Measured: the weapon FOV alone shrinks the rifle but pulls the
   // stock and arm in from off-frame, so the centre stays covered; moving the

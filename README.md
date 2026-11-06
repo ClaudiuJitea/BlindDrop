@@ -31,7 +31,8 @@
   dying) and lifetime totals saved in `config.cfg`.
 - **Armory:** pick one of five knives (combat, tanto, dagger, kukri, talon), one of eleven weapon
   themes (camo, digital, tiger, fade, gilded and more) and a glove and gauntlet colourway. These
-  choices only change how your weapons and gloves look in first person.
+  choices only change how your weapons and gloves look in first person. The same page sets the
+  weapon's field of view and a lower hip position that clears the middle of the screen.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots:** they hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **A detailed world:** physically based materials, soft shadows, ambient occlusion, light shafts,
