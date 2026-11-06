@@ -40411,6 +40411,7 @@ static void usage(void) {
        "  parity             24 player-vs-bot gameplay rows, ok/MISMATCH each\n"
        "  bothear            authoritative shot/step hearing and investigation proof\n"
        "  botweapon          bot weapon-choice/swap/cooldown hysteresis proof\n"
+       "  hurt N             N damage to the local player (capture death/damage states)\n"
        "  spawncheck N       N ticks: %% of non-player deaths within 1 s / 3 s of a respawn\n"
        "  meleecheck         knife: hit, thrust, block, parry, rear and flank\n"
        "  blastcheck         grenade: damage falloff, blast edge and cover\n"
@@ -43155,6 +43156,12 @@ static void run_script(char *script, sim_ctx_t *s) {
       bothear_proof();
     } else if (!strcmp(t, "botweapon")) {
       botweapon_proof();
+    } else if (!strcmp(t, "hurt")) {
+      // hurt N: N damage to the local player from bot 0's position (the
+      // death/damage states for the visual capture set).
+      long n = next_n();
+      v3 at = g_players[0].pos; at.y += 1.2f;
+      ent_damage(g_local_ent, (int)n, 0, 1, g_bots[0].pos, at);
     } else if (!strcmp(t, "spawncheck")) {
       // Deaths within 3 s of a respawn, over N ticks of whatever match is set
       // up (the local player is excluded: in a script it stands still).

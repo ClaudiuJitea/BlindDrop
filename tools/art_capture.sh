@@ -42,9 +42,10 @@ shoot 11_refinery      "hud off; usemap refinery; restart; wait 30; botfreeze on
 shoot 12_combat        "hud off; bots 8; skill hard; restart; wait 900; cam 3 4 20 0 -0.14"
 # One bot, puppeted to a known spot, filmed at 3 m and at 40 m.
 shoot 13_char_close    "hud off; bots 1; restart; wait 30; puppet on; puppet warp 0 -20; puppet face 180; wait 60; cam 0 1.5 -17 0 -0.05"
-shoot 14_char_far      "hud off; bots 1; restart; wait 30; puppet on; puppet warp 0 -20; puppet face 180; wait 60; cam 0 1.7 20 0 0"
+shoot 14_char_far      "hud off; bots 1; restart; wait 30; puppet on; puppet warp 8 -20; puppet face 180; wait 60; cam 8 1.7 20 0 0"
 shoot 15_hud_combat    "bots 3; skill hard; restart; wait 240; aimbot; +fire; wait 12"
-shoot 16_death         "bots 1; botfreeze on; restart; wait 60; weapon gr; aim 0 0 16.8; +fire; wait 30; -fire; wait 400"
+shoot 16_death         "bots 1; botfreeze on; restart; wait 60; hurt 100; wait 30"
+shoot 19_damage        "bots 1; botfreeze on; restart; wait 60; hurt 60; wait 20"
 shoot 17_menu_settings "menu; nav down; uiframe; nav down; uiframe; nav down; uiframe; nav down; uiframe; nav ok; uiframe; uiframe"
 shoot 18_menu_armory   "menu; nav down; uiframe; nav down; uiframe; nav down; uiframe; nav ok; uiframe; uiframe"
 echo "captured $(ls "$OUT"/*.png | wc -l) points into $OUT"
