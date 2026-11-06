@@ -4182,6 +4182,17 @@ static int  g_ev_peak_all[SRV_LOBBIES];
 // parallel cosmetic path. 0 everywhere except inside a client replay.
 static int g_predicting;
 
+#ifndef _WIN32
+// `spawncheck`: per-entity tick of its last respawn, and how many deaths came
+// within SPAWNCHECK_QUICK of one. Fed by the harness event printer below.
+// The 1 s window is the one that measures PLACEMENT: deaths later than that
+// track the arena's ordinary death rate (a 9-body arena's average life is
+// ~10 s, so ~30% of all deaths land within 3 s of any reference point).
+#define SPAWNCHECK_QUICK 120     // 1 s
+#define SPAWNCHECK_SLOW  360     // 3 s, printed for context
+static long g_sc_spawn[MAX_ENTS];
+static int  g_sc_deaths, g_sc_quick, g_sc_slow;
+#endif
 static void ev_push(event_t e) {
   if (g_predicting) return;   // a replayed shot must not re-spawn its VFX/audio
   if (g_num_events < MAX_EVENTS) {
@@ -4225,6 +4236,12 @@ static void ev_push(event_t e) {
   case EV_KILL:
     printf("kill t=%ld by=%s victim=%s hs=%d\n", g_tick,
            ent_name(e.src), ent_name(e.dst), e.k);
+    if (e.dst >= 0 && e.dst < MAX_ENTS && e.dst != g_local_ent && g_sc_spawn[e.dst] > 0) {
+      g_sc_deaths++;
+      if (g_tick - g_sc_spawn[e.dst] < SPAWNCHECK_QUICK) g_sc_quick++;
+      if (g_tick - g_sc_spawn[e.dst] < SPAWNCHECK_SLOW) g_sc_slow++;
+      g_sc_spawn[e.dst] = 0;
+    }
     break;
   // Gated on the pusher's identity, not on push-side discipline: the printer
   // contract is "the PLAYER's dryfire/reload_cancel", and once bots or remote
@@ -4239,7 +4256,10 @@ static void ev_push(event_t e) {
   case EV_RELOAD_CANCEL:
     if (e.src == g_local_ent) printf("reload_cancel t=%ld\n", g_tick);
     break;
-  case EV_RESPAWN: printf("respawn t=%ld ent=%s\n", g_tick, ent_name(e.dst)); break;
+  case EV_RESPAWN:
+    printf("respawn t=%ld ent=%s\n", g_tick, ent_name(e.dst));
+    if (e.dst >= 0 && e.dst < MAX_ENTS) g_sc_spawn[e.dst] = g_tick;
+    break;
   case EV_END:     printf("matchover t=%ld winner=%s\n", g_tick, ent_name(e.k)); break;
   case EV_IMPACT:  break;  // visual only
   // Footsteps and landings are SILENT in the trace by design: 21 entities at
@@ -11964,9 +11984,23 @@ static int net_scores_read(const unsigned char *buf, size_t len,
 // (Lag-comp history moved below ent_trace_box/bot_eye.)
 
 // Random free floor spot far from every living combatant (excluding entity
-// `self`, or nobody for self < 0). Best try wins if no spot clears 8 m.
+// `self`, or nobody for self < 0), and OUT OF THEIR SIGHT.
 // ENT_FOREACH (P1-55): counting one human made spawn placement blind to the
 // other seven — a deterministic double spawn-kill on a shared tick.
+//
+// DISTANCE ALONE WAS NOT SAFETY. The old rule took the first spot 8 m from
+// everyone, and 8 m is point-blank for a rifle: with 8 bots on arena and
+// foundry (3 seeds each), 4.2% of bot deaths came within 1 s of a respawn and
+// 0.7% within half a second — killed where they stood. Scored: 1.5% and 0.
+// (`spawncheck`; the 3 s figure, 28.4% -> 21.8%, is mostly the arena's base
+// death rate, not placement.)
+// Every candidate is now SCORED: its distance to the nearest enemy, capped so
+// that "far" stops mattering past SPAWN_FAR, minus a heavy penalty per living
+// enemy with a clear line to the spawn's head height. A spot nobody can see
+// and that clears SPAWN_FAR ends the search early.
+#define SPAWN_TRIES   96
+#define SPAWN_FAR     24.0f    // m: past this, distance earns nothing more
+#define SPAWN_SEEN_PEN 20.0f   // m of score per enemy with a line to the spot
 static v3 spawn_spot(int self) {
   int sh = human_of_ent(self);
   if (rescue_on() && sh >= 0)
@@ -11974,12 +12008,14 @@ static v3 spawn_spot(int self) {
   // Fallback point PER HUMAN: one literal for all eight is a deterministic
   // stack of bodies on a full-arena tick. Human 0 keeps the historical 18.
   v3 best = {{0, 0, sh >= 0 ? 18.0f - 2.0f * (float)sh : -12.0f}};
-  float best_d = -1.0f;
-  for (int i = 0; i < 40; i++) {
+  float best_s = -1e9f;
+  for (int i = 0; i < SPAWN_TRIES; i++) {
     v3 c = {{rng_rangef(&g_rng_bot, -ARENA_HALF + 2, ARENA_HALF - 2), 0,
              rng_rangef(&g_rng_bot, -ARENA_HALF + 2, ARENA_HALF - 2)}};
     if (!aabb_fits(c, PLAYER_RADIUS, HEIGHT_STAND)) continue;
     float d = 1e9f;
+    int seen = 0;
+    v3 head = {{c.x, c.y + 1.5f, c.z}};
     ENT_FOREACH(e) {
       if (e == self) continue;
       int h = human_of_ent(e);
@@ -11989,9 +12025,12 @@ static v3 spawn_spot(int self) {
       float dx = c.x - ep.x, dz = c.z - ep.z;
       float dd = dx * dx + dz * dz;
       if (dd < d) d = dd;
+      v3 eye = {{ep.x, ep.y + 1.5f, ep.z}};
+      if (dd > 0.25f && los_clear(eye, head)) seen++;
     }
-    if (d > best_d) { best_d = d; best = c; }
-    if (d >= 64.0f) return c;  // >=8 m from everyone: good enough
+    float sc = fminf(sqrtf(d), SPAWN_FAR) - SPAWN_SEEN_PEN * (float)seen;
+    if (sc > best_s) { best_s = sc; best = c; }
+    if (!seen && d >= SPAWN_FAR * SPAWN_FAR) return c;   // unseen and far: done
   }
   return best;
 }
@@ -40095,6 +40134,7 @@ static void usage(void) {
        "  parity             24 player-vs-bot gameplay rows, ok/MISMATCH each\n"
        "  bothear            authoritative shot/step hearing and investigation proof\n"
        "  botweapon          bot weapon-choice/swap/cooldown hysteresis proof\n"
+       "  spawncheck N       N ticks: %% of non-player deaths within 1 s / 3 s of a respawn\n"
        "  meleecheck         knife: hit, thrust, block, parry, rear and flank\n"
        "  blastcheck         grenade: damage falloff, blast edge and cover\n"
        "  botmemory          bot line-of-sight memory proof\n"
@@ -42838,6 +42878,16 @@ static void run_script(char *script, sim_ctx_t *s) {
       bothear_proof();
     } else if (!strcmp(t, "botweapon")) {
       botweapon_proof();
+    } else if (!strcmp(t, "spawncheck")) {
+      // Deaths within 3 s of a respawn, over N ticks of whatever match is set
+      // up (the local player is excluded: in a script it stands still).
+      long n = next_n();
+      memset(g_sc_spawn, 0, sizeof g_sc_spawn);
+      g_sc_deaths = g_sc_quick = g_sc_slow = 0;
+      while (n-- > 0) sim_advance(s);
+      printf("spawncheck deaths=%d within1s=%d pct1=%.1f within3s=%d pct3=%.1f\n",
+             g_sc_deaths, g_sc_quick, g_sc_deaths ? 100.0 * g_sc_quick / g_sc_deaths : 0.0,
+             g_sc_slow, g_sc_deaths ? 100.0 * g_sc_slow / g_sc_deaths : 0.0);
     } else if (!strcmp(t, "meleecheck")) {
       meleecheck_proof();
     } else if (!strcmp(t, "blastcheck")) {

@@ -111,7 +111,11 @@ done
 # placard, clavicle-framed shoulder pauldrons, head-framed NVG shroud): removing
 # the coplanar box faces puts near back to its pre-field-kit baseline; zfight is
 # 0 at all four tiers.
-WANT_NEAR="40 40 46 36"
+# Re-baselined 2026-11-06 for sight-scored spawns (spawn_spot): bot 0 starts
+# somewhere else, so figcheck films a different pose. Proved placement-only:
+# the same tree with the previous spawn_spot alone restored reproduces
+# "40 40 46 36" / "92 92 88 58" exactly; open/flip/zfight/degen stay 0.
+WANT_NEAR="36 36 44 37"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -327,7 +331,8 @@ WANT_NEAR="40 40 46 36"
 # -2 -2 +4 +11 when replacing the pelvis-framed scene_box field kit with
 # fig_chain equipment: close tiers drop 2 pairs, and DIST 30 (k=6) now keeps the
 # scaled kit instead of popping it out behind g_fig_k >= 8.
-WANT_CROSS="92 92 88 58"
+# Re-baselined with WANT_NEAR above (spawn placement, not geometry).
+WANT_CROSS="103 103 82 60"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows
