@@ -1229,6 +1229,234 @@ def knife():
         for v in o.data.vertices:
             q = v.co.copy(); v.co = c + Vector((q.x,0,0)) + sp*q.y + a*q.z
 
+# ------------------------------------------------------------------ knife variants
+# Every variant shares the combat knife's contract: authored +z toward the tip, +y the
+# spine, -y the edge, a ~15 mm round handle from z -.080 to the guard at .056, then
+# carried onto the same grip cylinder as the combat knife so the one closed fist holds
+# them all. Only the blade outline, the furniture and the colours differ.
+KN_GUARD = .0560
+BRASS = (.80,.62,.30); WOOD = (.40,.24,.13); COYOTE = (.52,.44,.32); BLADE_DLC = (.17,.17,.18)
+
+def knife_blade(zs, bands):
+    """bands: [(ring(z) -> [(x, y), ...], col, rough, metal, name)]; each ring a closed
+    convex outline, every band converging on one point at the last z."""
+    for ring, col, rough, metal, name in bands:
+        bm = bmesh.new(); rings = []
+        for z in zs:
+            rings.append([bm.verts.new((x, y, z)) for x, y in ring(z)])
+        n = len(rings[0])
+        for k in range(len(rings)-1):
+            for i in range(n):
+                j = (i+1) % n
+                bm.faces.new((rings[k][i], rings[k][j], rings[k+1][j], rings[k+1][i]))
+        bm.faces.new(rings[0])
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=1e-7)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        finish(from_bm(bm, name), col, rough, metal, 0, 1)
+
+def single_edge(section, lo, hi, n, flat_col, grind_col, edge_col, flat_rough=.30):
+    """Spine/flat, grind and edge bands from section(z) -> (ys, yg, ym, ye, t, tm)."""
+    zs = [lo + (hi-lo)*i/(n-1) for i in range(n)]
+    def flat_r(z):
+        ys, yg, ym, ye, t, tm = section(z); return ((t,ys),(t,yg),(-t,yg),(-t,ys))
+    def grind_r(z):
+        ys, yg, ym, ye, t, tm = section(z); return ((t,yg),(tm,ym),(-tm,ym),(-t,yg))
+    def edge_r(z):
+        ys, yg, ym, ye, t, tm = section(z); return ((tm,ym),(0,ye),(-tm,ym))
+    knife_blade(zs, [(flat_r, flat_col, flat_rough, .92, 'flat'),
+                     (grind_r, grind_col, .22, .98, 'grind'),
+                     (edge_r, edge_col, .15, 1.0, 'edge')])
+
+def knife_handle(col, rough, ribs, rib_col, r0=.0150, swell=.0009, flag=4):
+    rings = []
+    for i in range(32):
+        z = -.0800 + i*.00395
+        rings.append((z, r0 + swell*cos(z/.0120*math.pi)))
+    finish(lathe(rings, 0, 0, 28), col, rough, 0, 0, flag=flag)
+    for z in ribs:
+        finish(lathe([(z-.0026,r0),(z-.0016,r0+.0012),(z+.0016,r0+.0012),(z+.0026,r0)], 0, 0, 28),
+               rib_col, .60, 0, 0, flag=flag)
+
+def knife_place():
+    """The combat knife's own carry onto the grip cylinder."""
+    a = Vector((0,.921,.386)).normalized(); sp = Vector((0,.386,-.921)).normalized()
+    c = Vector((0,-.0500,-.0078)) + a*.0140
+    for o in bpy.context.collection.objects:
+        for v in o.data.vertices:
+            q = v.co.copy(); v.co = c + Vector((q.x,0,0)) + sp*q.y + a*q.z
+
+def knife_tanto():
+    """American tanto: straight spine, a straight primary edge breaking at an angle into
+    the short secondary edge that runs up to a point high on the spine. Black-coated
+    flats, a stonewashed grind, coyote cord-wrap handle."""
+    clear()
+    TIP, KINK = .2400, .2000
+    def section(z):
+        ys = .0120
+        if z > .2240: ys += (.0080-.0120) * (z-.2240)/(TIP-.2240)
+        ye = -.0175
+        if z > KINK: ye += (.0080+.0175) * (z-KINK)/(TIP-KINK)
+        h = .0110 * min(1, max(0, (z-.0640)/.0060))
+        yg = ye + min(h, .60*(ys-ye))
+        ym = ye + min(.0013 if h > 0 else 0, .24*(ys-ye))
+        t = .0024 * min(1, (TIP-z)/.030) ** .55
+        return ys, yg, ym, ye, t, t*.22 if h > 0 else t
+    single_edge(section, KN_GUARD-.002, TIP, 48, BLADE_DLC, (.56,.56,.58), (.90,.91,.93), .40)
+    finish(prof_front([(-.0095,-.0240),(.0095,-.0240),(.0110,-.0200),(.0110,.0150),(.0095,.0185),
+                       (-.0095,.0185),(-.0110,.0150),(-.0110,-.0200)], .0460, KN_GUARD), BLACK, .50, .3, .0012, 2)
+    knife_handle(COYOTE, .84, [-.068 + i*.0098 for i in range(11)], (.42,.35,.25))
+    finish(lathe([(-.0950,.0070),(-.0925,.0128),(-.0845,.0142),(-.0806,.0128)], 0, 0, 28), BLACK, .50, .3, .0008)
+    knife_place()
+
+def knife_dagger():
+    """Double-edged spear-point fighting dagger: a diamond section with a raised centre
+    ridge, both edges bright, a straight brass crossguard and a brass pommel."""
+    clear()
+    TIP = .2550
+    def w(z): return .0148 * max(0.0, (TIP-z)/(TIP-KN_GUARD)) ** .80
+    def t(z): return .0034 * max(0.0, (TIP-z)/(TIP-KN_GUARD)) ** .55
+    def g(z): return min(.0042, .34*w(z))
+    zs = [KN_GUARD-.002 + (TIP-KN_GUARD+.002)*i/47 for i in range(48)]
+    def body(z):
+        a, b, c = t(z), w(z)-g(z), t(z)*.25
+        return ((a,0),(c,b),(-c,b),(-a,0),(-c,-b),(c,-b))
+    def up(z):
+        b, c = w(z)-g(z), t(z)*.25
+        return ((c,b),(0,w(z)),(-c,b))
+    def dn(z):
+        b, c = w(z)-g(z), t(z)*.25
+        return ((c,-b),(-c,-b),(0,-w(z)))
+    knife_blade(zs, [(body, (.60,.60,.62), .26, .96, 'body'),
+                     (up, (.94,.95,.97), .14, 1.0, 'edge_u'),
+                     (dn, (.94,.95,.97), .14, 1.0, 'edge_d')])
+    finish(prof_front([(-.0070,-.0380),(.0070,-.0380),(.0085,-.0330),(.0085,.0330),(.0070,.0380),
+                       (-.0070,.0380),(-.0085,.0330),(-.0085,-.0330)], .0450, KN_GUARD), BRASS, .34, .92, .0015, 2)
+    knife_handle(BLACK, .70, [-.070 + i*.0060 for i in range(19)], DARK, r0=.0142, swell=.0014)
+    finish(lathe([(-.1010,.0040),(-.0990,.0110),(-.0950,.0150),(-.0890,.0155),(-.0840,.0130),(-.0806,.0120)],
+                 0, 0, 28), BRASS, .34, .92, .0008)
+    knife_place()
+
+def knife_kukri():
+    """Kukri: a heavy forward-weighted blade that drops toward the edge and swells into a
+    deep belly, the cho notch at its root, a hardwood handle between brass bolsters."""
+    clear()
+    TIP = .2680
+    def section(z):
+        s = min(1.0, max(0.0, (z-KN_GUARD)/(TIP-KN_GUARD)))
+        c = -.0300 * s*s
+        ws = (.0110 + .0060*s) * (1 - s**3)
+        we = (.0120 + .0180*sin(math.pi*s*.85)) * (1 - s**6)
+        ys, ye = c + ws, c - we
+        k = (z-.0700)/.0050
+        if abs(k) < 1: ye += .0040 * math.sqrt(1-k*k)       # the cho
+        h = .0120 * min(1, max(0, (z-.0780)/.0060))
+        yg = ye + min(h, .55*(ys-ye))
+        ym = ye + min(.0016 if h > 0 else 0, .24*(ys-ye))
+        tt = .0034 * (1-s) ** .45
+        return ys, yg, ym, ye, tt, tt*.22 if h > 0 else tt
+    single_edge(section, KN_GUARD-.002, TIP, 56, (.40,.40,.42), (.68,.68,.70), (.94,.95,.97), .42)
+    finish(lathe([(.0440,.0130),(.0450,.0172),(.0545,.0172),(KN_GUARD+.001,.0130)], 0, 0, 28), BRASS, .34, .92, .0006)
+    knife_handle(WOOD, .64, (-.040, -.004), (.30,.17,.09), r0=.0152, swell=.0016)
+    finish(lathe([(-.0960,.0070),(-.0935,.0150),(-.0835,.0166),(-.0806,.0150)], 0, 0, 28), BRASS, .34, .92, .0008)
+    knife_place()
+
+def knife_talon():
+    """Hawkbill talon: a short blade that hooks down to a claw point, the edge on the
+    inside of the curve; satin steel, black G10 scales with blaze liners."""
+    clear()
+    TIP = .2150
+    def section(z):
+        s = min(1.0, max(0.0, (z-KN_GUARD)/(TIP-KN_GUARD)))
+        c = -.0420 * s ** 2.4
+        ws = .0110 * (1 - s**3)
+        we = .0092 * (1 - s**1.6)
+        ys, ye = c + ws, c - we
+        h = .0080 * min(1, max(0, (z-.0640)/.0060))
+        yg = ye + min(h, .55*(ys-ye))
+        ym = ye + min(.0012 if h > 0 else 0, .24*(ys-ye))
+        tt = .0026 * (1-s) ** .45
+        return ys, yg, ym, ye, tt, tt*.22 if h > 0 else tt
+    single_edge(section, KN_GUARD-.002, TIP, 48, (.56,.56,.58), (.72,.72,.74), (.95,.96,.98), .30)
+    finish(lathe([(.0450,.0125),(.0460,.0160),(.0545,.0160),(KN_GUARD+.001,.0120)], 0, 0, 28), BLACK, .48, .3, .0006)
+    knife_handle(BLACK, .66, (-.060, -.030, .000, .030), ORANGE, r0=.0148, swell=.0010)
+    finish(lathe([(-.0960,.0068),(-.0930,.0132),(-.0840,.0150),(-.0806,.0134)], 0, 0, 28), ORANGE, .50, 0, .0006)
+    finish(pin(-.0156,.0156,0,-.0882,.0026,14), STEEL, .36, .9, .0002, 1)
+    knife_place()
+
+# ------------------------------------------------------------------ open guard hand (HAND_KO)
+def hand_open():
+    """The knife's off hand in the guard: open, fingers together and up, palm turned AWAY
+    from the eye toward the threat, so the camera sees the armoured back of a left hand.
+    Frame: origin at the wrist, +y toward the fingertips, +z the palm normal (forward),
+    +x the thumb side. game.c places it with its own rotations."""
+    clear()
+    D = V3(0, 0, -1)                                   # dorsal: toward the eye
+    cuff = [(V3(0,-.034,-.006), D, .0262, .0205), (V3(0,-.016,-.003), D, .0276, .0214),
+            (V3(0, .002, 0), D, .0290, .0222)]
+    _, s_cuff = loft_tube(cuff, seg_u=10, seg_v=20, palmar_flat=0.94, col=SLATE, rough=.60, flag=2, name='o_cuff')
+    shell_patch(s_cuff, 0.14, 0.80, -25.0, 205.0, thick=.0026, bury=.0010, nu=6, nv=10, rim_u=.06, rim_d=7.0,
+                col=LEATHER, rough=.52, flag=7, sharp=True, name='o_strap')
+    # The palm tapers from the knuckles into the wrist and is slightly cupped:
+    # a flat paddle is what read as a cut-out.
+    palm = [(V3(.003,-.004,.002), D, .0270, .0172), (V3(.003,.024,.003), D, .0350, .0170),
+            (V3(.001,.052,.004), D, .0385, .0158), (V3(-.001,.074,.006), D, .0370, .0130)]
+    _, s_palm = loft_tube(palm, seg_u=14, seg_v=22, palmar_flat=0.78, col=LEATHER, rough=.58, flag=7, name='o_palm')
+    # The back of the hand: slate softshell and ONE moulded knuckle guard across it.
+    shell_patch(s_palm, 0.04, 0.96, 18.0, 162.0, thick=.0016, nu=8, nv=8, rim_u=.04, rim_d=7.0,
+                col=SLATE, rough=.56, flag=2, sharp=True, name='o_dorsal')
+    shell_patch(s_palm, 0.70, 0.97, 32.0, 148.0, thick=.0020, nu=6, nv=8, rim_u=.05, rim_d=8.0,
+                col=PAD_RIM, rough=.52, flag=4, sharp=True, name='o_kn_bezel')
+    shell_patch(s_palm, 0.73, 0.94, 40.0, 140.0, thick=.0034, nu=6, nv=8, rim_u=.05, rim_d=7.0,
+                col=PAD, rough=.40, flag=4, sharp=True, name='o_kn_plate')
+    # A seam from wrist to each knuckle row, the way a real glove is cut.
+    shell_patch(s_palm, 0.10, 0.66, 84.0, 96.0, thick=.0008, nu=5, nv=3, rim_u=.04, rim_d=3.0,
+                col=SEAM, rough=.62, flag=4, name='o_seam')
+    # FOUR FINGERS AS JOINTED CHAINS: proximal, middle and distal phalanx, each
+    # flexed at its own joint toward the palm. A relaxed hand curls more toward
+    # the little finger and fans slightly, so no two fingers share a pose.
+    #   (x at the knuckle, length, radius, splay deg, MCP/PIP/DIP flex deg)
+    FING = ((.0255, .0700, .0094,  5.0, 10.0, 16.0, 10.0),
+            (.0085, .0780, .0099,  1.0, 13.0, 20.0, 12.0),
+            (-.0088, .0730, .0096, -3.0, 17.0, 26.0, 15.0),
+            (-.0250, .0580, .0084, -8.0, 22.0, 32.0, 18.0))
+    for i, (x, L, r, spl, f1, f2, f3) in enumerate(FING):
+        p = V3(x, .072 - abs(x)*.12, .005)
+        ang = 0.0
+        sp = radians(spl)
+        pts = [p.copy()]; ups = []
+        for seg_len, flex in zip((L*.46, L*.30, L*.24), (f1, f2, f3)):
+            ang += radians(flex)
+            d = V3(math.sin(sp)*math.cos(ang), math.cos(sp)*math.cos(ang), math.sin(ang))
+            p = p + d*seg_len; pts.append(p.copy())
+            ups.append(V3(0, math.sin(ang), -math.cos(ang)))
+        ctrl = []
+        rr = (1.06, .98, .90, .78)
+        for k in range(3):
+            for u in ((0.0, .5) if k < 2 else (0.0, .5, 1.0)):
+                q = rr[k] + (rr[k+1]-rr[k])*u
+                kn = 1.0 + .06*math.sin(math.pi*u) if u == 0.0 and k > 0 else 1.0    # joint knuckles
+                ctrl.append((pts[k].lerp(pts[k+1], u), ups[k], r*q*kn, r*q*.90*kn))
+        _, s_f = loft_tube(ctrl, seg_u=20, seg_v=16, palmar_flat=0.80, col=SLATE, rough=.58, flag=2, name=f'o_f{i}')
+        shell_patch(s_f, 0.14, 0.34, 62.0, 118.0, thick=.0013, nu=5, nv=5, rim_u=.04, rim_d=8.0,
+                    col=PAD, rough=.42, flag=4, sharp=True, name=f'o_fpad{i}')
+        shell_patch(s_f, 0.55, 0.99, -150.0, -30.0, thick=.0010, nu=6, nv=6, rim_u=.04, rim_d=8.0,
+                    col=LEATHER, rough=.52, flag=7, name=f'o_ftip{i}')
+        shell_patch(s_f, 0.80, 0.99, 40.0, 140.0, thick=.0010, nu=5, nv=5, rim_u=.04, rim_d=8.0,
+                    col=TIP_CAP, rough=.50, flag=7, name=f'o_fcap{i}')
+    # The thumb: rooted low on the palm's thumb side, rotated toward the palm
+    # (opposition) and lying alongside the index rather than standing out.
+    thenar = [(V3(.016,.002,.010), V3(.5,0,-1), .0165, .0138), (V3(.024,.022,.013), V3(.5,0,-1), .0175, .0142),
+              (V3(.029,.040,.015), V3(.5,0,-1), .0145, .0122)]
+    loft_tube(thenar, seg_u=12, seg_v=18, palmar_flat=0.86, col=LEATHER, rough=.56, flag=7, name='o_thenar')
+    th = [(V3(.027,.026,.012), V3(.45,0,-1), .0148, .0128), (V3(.036,.044,.019), V3(.55,-.1,-1), .0138, .0120),
+          (V3(.040,.060,.026), V3(.7,-.2,-1), .0124, .0108), (V3(.039,.074,.033), V3(.8,-.3,-1), .0110, .0097),
+          (V3(.036,.085,.039), V3(.8,-.4,-1), .0088, .0079)]
+    _, s_th = loft_tube(th, seg_u=18, seg_v=18, palmar_flat=0.84, col=SLATE, rough=.58, flag=2, name='o_thumb')
+    shell_patch(s_th, 0.22, 0.56, 40.0, 140.0, thick=.0024, nu=6, nv=6, rim_u=.04, rim_d=7.0,
+                col=PAD, rough=.40, flag=4, sharp=True, name='o_th_pad')
+    shell_patch(s_th, 0.70, 0.99, -150.0, 150.0, thick=.0012, nu=6, nv=9, rim_u=.035, rim_d=8.0,
+                col=TIP_CAP, rough=.52, flag=7, sharp=True, name='o_th_tip')
+
 # ------------------------------------------------------------------ fragmentation grenade
 NADE_SPOON_TH = -28.0                            # where the lever lies round the body
 NADE_E = Vector((0,-.386,.921)).normalized()    # from the palm toward the fingers
@@ -1405,6 +1633,10 @@ hand_r(fist=True); mirror_x(); emit(store, 'HAND_KL')
 grenade(); assign_finishes()
 emit(store, 'GRENADE')
 hand_g(); emit(store, 'HAND_G')
+for kfn, ktag in ((knife_tanto, 'KNIFE_TANTO'), (knife_dagger, 'KNIFE_DAGGER'),
+                  (knife_kukri, 'KNIFE_KUKRI'), (knife_talon, 'KNIFE_TALON')):
+    kfn(); assign_finishes(); emit(store, ktag)
+hand_open(); emit(store, 'HAND_KO')
 
 with open(OUT, 'w') as f:
     f.write('// Generated by tools/build_models.py. Do not edit by hand.\n')

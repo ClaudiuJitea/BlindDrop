@@ -27,6 +27,9 @@
 - **Five weapons:** rifle, bolt sniper, sidearm, knife and frag grenades on `1`-`5`, with no loadouts or unlocks.
 - **Real grenades:** cook, throw or lob them; they bounce, roll and are stopped by cover.
 - **A knife that fights back:** slash chains, a guard, and parries that stagger.
+- **Armory:** pick one of five knives (combat, tanto, dagger, kukri, talon), one of eleven weapon
+  themes (camo, digital, tiger, fade, gilded and more) and a glove and gauntlet colourway. These
+  choices only change how your weapons and gloves look in first person.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots:** they hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **A detailed world:** physically based materials, soft shadows, ambient occlusion, light shafts,

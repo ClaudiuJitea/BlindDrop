@@ -1114,6 +1114,24 @@ static const param_def_t PAD_DEF[PAD_COUNT] = {
 };
 static const char *const PAD_CURVE_OPTS[3] = {"LINEAR", "STANDARD", "DYNAMIC"};
 
+// THE ARMORY: what the player carries, as opposed to how it handles. All three
+// are COSMETIC and first-person only — the sim, the bots and the wire never
+// read them, so a themed rifle is the same rifle to every proof in the battery.
+// Index 0 of each is the shipped look and is an exact identity in the
+// renderer: an untouched config draws byte-for-byte what it drew before.
+// The tables themselves (models, colours) live beside model_draw.
+#define KNIFE_MODEL_COUNT 5
+static const char *const KNIFE_MODEL_NAMES[KNIFE_MODEL_COUNT] = {
+  "COMBAT", "TANTO", "DAGGER", "KUKRI", "TALON"};
+#define WPN_THEME_COUNT 11
+static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
+  "FACTORY", "DESERT", "WOODLAND", "ARCTIC", "URBAN", "TIGER",
+  "BLACKOUT", "CRIMSON", "COBALT", "FADE", "GILDED"};
+#define GEAR_THEME_COUNT 5
+static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
+  "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC"};
+static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
+
 // Raw controller state, written by the platform pump. Sticks are -1..1 with
 // +x right and +y UP (XInput's convention; the evdev pump negates its
 // down-positive Y axes so no consumer ever sees both conventions). Triggers
@@ -1428,6 +1446,9 @@ typedef struct {
   int   sp_map;              // a MAP_DEFS index, or MAP_ROTATE; next (re)start
   char  name[12];            // player name; glyph policy lives in name_glyph
   int   third_person;        // camera: 0 = first person, 1 = shoulder cam
+  int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
+  int   wpn_theme;           // ARMORY: WPN_THEME_NAMES index, 0 = factory
+  int   gear_theme;          // ARMORY: GEAR_THEME_NAMES index, 0 = slate
   int   devmode;             // show the DEV tab; hard-gated by DEV_MENU, def 0
   float mv[MV_COUNT];        // movement tuning, see MV_DEF
   float wp[WPN_COUNT][WP_COUNT];  // per-weapon tuning, see WP_DEF/WPN_DEF
@@ -1568,6 +1589,8 @@ static void config_emit(FILE *f, const config_t *c) {
           SP_ROUNDS_DEF.key, c->sp_rounds);
   fprintf(f, "sp_map %s\n", map_pick_key(c->sp_map));
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
+  fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
+          c->knife_model, c->wpn_theme, c->gear_theme);
   fprintf(f, "ballistics %d\n", c->ballistics);
   for (int i = 0; i < MV_COUNT; i++)
     fprintf(f, "%s %.2f\n", MV_DEF[i].key, (double)c->mv[i]);
@@ -1735,6 +1758,12 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "third_person")) {
       c->third_person = parse_long(val, c->third_person) ? 1 : 0;
     }
+    else if (!strcmp(key, "knife_model"))
+      c->knife_model = parse_int(val, c->knife_model, 0, KNIFE_MODEL_COUNT - 1);
+    else if (!strcmp(key, "weapon_theme"))
+      c->wpn_theme = parse_int(val, c->wpn_theme, 0, WPN_THEME_COUNT - 1);
+    else if (!strcmp(key, "gear_theme"))
+      c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
     // The DEV tab's runtime opt-in. It stays a config key with no menu toggle
     // on purpose: a knob that can switch itself on from inside the menu is one
     // stray click away from a player standing in the tuning workbench.
@@ -18878,6 +18907,13 @@ static const char *WORLD_FS =
   "uniform vec4 uSurf;\n"
   "uniform int uTown;\n"
   "uniform vec3 uWrist;\n"
+  "uniform vec3 uWristOn;\n"            // wrist display's lit colour (gear LED)
+  // WEAPON THEME (see WPN_THEMES): x = pattern + 1, 0 is the factory finish and
+  // skips the block entirely; y = pattern scale per metre; z = metalness the
+  // themed paint takes on (gold); w unused. A..C are the pattern's display
+  // colours, D the tint for the dark furniture.
+  "uniform vec4 uSkin;\n"
+  "uniform vec3 uSkinA, uSkinB, uSkinC, uSkinD;\n"
   "uniform float uLampOn;\n"             // 0 by day .. 1 at dusk: lanterns lit
   "uniform vec4 uLamp[8];\n"             // the nearest lanterns: position, power               // wrist display: ammo, magazine, clock                 // 0 citadel, 1 harbor, 2 refinery, -1 none
   "uniform vec2 uSmStep;\n"               // one shadow texel in UV
@@ -19352,6 +19388,39 @@ static const char *WORLD_FS =
   "    vec2 cp = vec2(lp.x + lp.y * 0.8, lp.z) * 24.0;\n"
   "    float knit = vnoise2(cp * 30.0);\n"
   "    float ew = clamp(length(fwidth(normalize(vNrm))) * 2.6, 0.0, 1.0);\n"
+  // THE WEAPON THEME, before the finish below: the theme is the PAINT, and the
+  // finish (grain, wear to bare metal, brushing) still happens to it. Only
+  // weapon parts carry a fractional flag — .3 the light primary family, .2 the
+  // dark furniture — and the gloves, drawn in the same pass, stay integral.
+  // The pattern is projected onto the face's own dominant plane IN THE WEAPON'S
+  // FRAME, so it is painted on the gun rather than crawling over it.
+  "    float tk = fract(-mf + 0.0005);\n"
+  "    if (uSkin.x > 0.5 && tk > 0.1) {\n"
+  "      vec3 nw = abs(vec3(dot(vNrm, mx), dot(vNrm, my), dot(vNrm, mz)));\n"
+  "      vec2 pp = (nw.x > nw.y && nw.x > nw.z ? lp.zy : nw.y > nw.z ? lp.zx : lp.xy) * uSkin.y;\n"
+  "      int pat = int(uSkin.x + 0.5) - 1;\n"
+  "      vec3 pc = uSkinA;\n"
+  "      if (pat == 1 || pat == 2) {\n"            // blotch camo; 2 = the same, pixelated
+  "        vec2 q = pat == 2 ? floor(pp * 7.0) / 7.0 : pp;\n"
+  "        float n1 = vnoise2(q) * 0.65 + vnoise2(q * 2.3 + 17.0) * 0.35;\n"
+  "        float n2 = vnoise2(q * 1.3 + 41.0) * 0.6 + vnoise2(q * 3.1 + 5.0) * 0.4;\n"
+  "        pc = mix(pc, uSkinB, step(0.50, n1));\n"
+  "        pc = mix(pc, uSkinC, step(0.60, n2));\n"
+  "      } else if (pat == 3) {\n"                 // tiger stripes, across the bore
+  "        float w = pp.x + (vnoise2(pp * vec2(0.6, 1.4)) - 0.5) * 1.6 + pp.y * 0.35;\n"
+  "        float s = sin(w * 5.2) * 0.5 + 0.5 + (vnoise2(pp * 3.0 + 9.0) - 0.5) * 0.45;\n"
+  "        pc = mix(uSkinA, uSkinB, step(0.62, s));\n"
+  "        pc = mix(pc, uSkinC, step(0.70, vnoise2(pp * 0.9 + 23.0)) * step(s, 0.30));\n"
+  "      } else if (pat == 4) {\n"                 // fade: muzzle-to-butt gradient
+  "        float t = clamp(dot(lp, vec3(0.18, 0.55, 1.0)) * uSkin.y * 0.25 + 0.45, 0.0, 1.0);\n"
+  "        pc = t < 0.5 ? mix(uSkinA, uSkinB, t * 2.0) : mix(uSkinB, uSkinC, t * 2.0 - 1.0);\n"
+  "      }\n"
+  // Relative to the family's own reference albedo, so the baked occlusion and
+  // the step between a dark part and a darker one both survive the repaint.
+  "      float lum = dot(alb, vec3(0.3333));\n"
+  "      if (tk > 0.25) alb = pc * pc * clamp(lum / 0.277, 0.45, 1.5);\n"
+  "      else alb = min(uSkinD * uSkinD * (lum / 0.0361), vec3(0.85));\n"
+  "    }\n"
   // THE WRIST DISPLAY (mf -8): the amber panel on the support gauntlet shows
   // the magazine — two seven-segment digits and a fill bar — in the same
   // backlit acrylic as the inlays, so it reads as part of the glove. UV rides
@@ -19361,7 +19430,7 @@ static const char *WORLD_FS =
   "      float ammo = uWrist.x, mag = max(uWrist.y, 1.0);\n"
   "      float low = step(ammo, mag * 0.25);\n"
   "      float blink = low * step(0.5, fract(uWrist.z * 2.2));\n"
-  "      vec3 on = mix(vec3(1.0, 0.55, 0.12), vec3(1.0, 0.16, 0.06), low);\n"
+  "      vec3 on = mix(uWristOn, vec3(1.0, 0.16, 0.06), low);\n"
   "      vec3 bg = vec3(0.10, 0.045, 0.012);\n"
   "      float lit = 0.0;\n"
   "      int a = int(ammo + 0.5);\n"
@@ -19467,6 +19536,12 @@ static const char *WORLD_FS =
   "    } else {\n"                       // sleeve: plain ripstop
   "      vec2 rg = abs(fract(cp * 1.5) - 0.5);\n"
   "      alb *= (0.86 + 0.28 * knit) * (1.0 - 0.14 * step(0.47, max(rg.x, rg.y)));\n"
+  "    }\n"
+  // A metallic theme (gold) is a plated finish: it overrides what the
+  // polymer and paint branches decided, on the primary family only.
+  "    if (uSkin.x > 0.5 && uSkin.z > 0.0 && tk > 0.25) {\n"
+  "      metal = max(metal, uSkin.z);\n"
+  "      rough = min(rough, 0.26);\n"
   "    }\n"
   "  }\n"
   // --- WEAPON MICRO-STRUCTURE, IN THE WEAPON'S OWN FRAME --------------------
@@ -22187,7 +22262,7 @@ static int nav_focus_lr(void) {
 }
 
 typedef enum { UI_PAGE_ROOT, UI_PAGE_MATCH, UI_PAGE_SETTINGS,
-               UI_PAGE_CONTROLS, UI_PAGE_DEV, UI_PAGE_COUNT } ui_page_t;
+               UI_PAGE_CONTROLS, UI_PAGE_DEV, UI_PAGE_ARMORY, UI_PAGE_COUNT } ui_page_t;
 
 static ui_page_t g_ui_page = UI_PAGE_ROOT;
 
@@ -22309,7 +22384,7 @@ static void ui_kb_nav(int ev) {
 
 [[maybe_unused]] static const char *ui_page_name(ui_page_t page) {
   static const char *const NAME[UI_PAGE_COUNT] = {
-    "root", "match", "settings", "controls", "dev"
+    "root", "match", "settings", "controls", "dev", "armory"
   };
   return page >= 0 && page < UI_PAGE_COUNT ? NAME[page] : "root";
 }
@@ -22893,7 +22968,7 @@ static void ui_home(int click, float cx, float cy) {
   // the eye lands after it, and the block grows UPWARD when DEV TOOLS adds a
   // row so nothing under it ever moves.
   float th = 52, sh2 = 32, qh = 24, gap = 7;
-  float rows = th + gap + sh2 + gap + sh2 + gap + qh + (dev ? sh2 + gap : 0);
+  float rows = th + gap + sh2 + gap + sh2 + gap + sh2 + gap + qh + (dev ? sh2 + gap : 0);
   float y = vh * 0.80f - rows;
   float hw = (rw - gap) * 0.5f;
 
@@ -22963,6 +23038,19 @@ static void ui_home(int click, float cx, float cy) {
     }
   }
   y += sh2 + gap;
+
+  // THE ARMORY: what you carry. Its caption is the current loadout, so the
+  // rail says what you will see in your hands before you open the page.
+  {
+    char asub[64];
+    snprintf(asub, sizeof asub, "%s KNIFE / %s / %s GEAR",
+             KNIFE_MODEL_NAMES[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)],
+             WPN_THEME_NAMES[armory_idx(g_cfg.wpn_theme, WPN_THEME_COUNT)],
+             GEAR_THEME_NAMES[armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT)]);
+    if (ui_tile("ARMORY", asub, rx, y, rw, sh2, 1.25f, click, cx, cy, 0))
+      ui_route(UI_PAGE_ARMORY);
+    y += sh2 + gap;
+  }
 
   if (ui_tile("SETTINGS", "VIDEO / AUDIO", rx, y, hw, sh2, 1.25f, click, cx, cy, 0))
     ui_route(UI_PAGE_SETTINGS);
@@ -23259,7 +23347,7 @@ static void ui_menu(void) {
   // vertices; ui_panel is a hundred). The height cache is per page and the
   // layout is stable per state, so the worst case is one frame of lag after a
   // row appears — invisible, and the hit-tests never read ph.
-  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344};
+  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344, 200};
   ui_page_t drawn_page = g_ui_page;
   float pw = 340, px = g_ui_vw * 0.5f - pw * 0.5f;
   float ph = ph_page[drawn_page];
@@ -23272,7 +23360,7 @@ static void ui_menu(void) {
   // ROOT is not one of these any more: this panel draws FORMS, and the entry
   // screen is not a form. Its slot stays so the array indexes by page.
   static const char *const PAGE_TITLE[UI_PAGE_COUNT] = {
-    "", "SINGLEPLAYER", "SETTINGS", "CONTROLS", "DEV TOOLS"
+    "", "SINGLEPLAYER", "SETTINGS", "CONTROLS", "DEV TOOLS", "ARMORY"
   };
   ui_textb(PAGE_TITLE[drawn_page], px + 16, py + 9, 1.6f, C_BONE, 1);
   ui_rect(px + 16, py + 28, pw - 32, 1, C_BONE, 0.14f);
@@ -23642,6 +23730,29 @@ static void ui_menu(void) {
       ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
       y += 15;
     }
+  } else if (drawn_page == UI_PAGE_ARMORY) {
+    // Cosmetic only, and it says so: nothing here changes how a weapon
+    // handles, and every choice is visible the moment the menu closes.
+    ui_section("KNIFE", px, pw, y);
+    y += 14;
+    ui_cycle("MODEL", KNIFE_MODEL_NAMES, KNIFE_MODEL_COUNT, &g_cfg.knife_model,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    y += 4;
+    ui_section("WEAPONS", px, pw, y);
+    y += 14;
+    ui_cycle("THEME", WPN_THEME_NAMES, WPN_THEME_COUNT, &g_cfg.wpn_theme,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    y += 4;
+    ui_section("GEAR", px, pw, y);
+    y += 14;
+    ui_cycle("GLOVES + GAUNTLET", GEAR_THEME_NAMES, GEAR_THEME_COUNT, &g_cfg.gear_theme,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    y += 4;
+    ui_text("COSMETIC ONLY  /  SHOWN IN FIRST PERSON", px + 16, y + 3, 0.85f, C_DIM, 1);
+    y += 14;
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
     // (movement feel, weapon feel). Lives behind `dev` so an install ships
@@ -30371,6 +30482,91 @@ static float g_gun_sight_r;   // its smaller half-extent (the tighter constraint
 // in, so the game still ships as one file. Each is placed by a rigid frame; the
 // procedural builders stay the authority for where hands and sights go.
 #include "models.h"
+
+// --- THE ARMORY'S TABLES (names and config keys: see KNIFE_MODEL_NAMES) ----
+// Every knife is authored on the combat knife's own grip cylinder, so the one
+// closed fist (HAND_K) holds all of them and the swing timeline is shared.
+typedef struct { const int16_t (*v)[7]; const model_part_t *p; int np; } mdl_ref_t;
+static const mdl_ref_t KNIFE_MODELS[KNIFE_MODEL_COUNT] = {
+  {KNIFE_V, KNIFE_P, KNIFE_NP},             {KNIFE_TANTO_V, KNIFE_TANTO_P, KNIFE_TANTO_NP},
+  {KNIFE_DAGGER_V, KNIFE_DAGGER_P, KNIFE_DAGGER_NP},
+  {KNIFE_KUKRI_V, KNIFE_KUKRI_P, KNIFE_KUKRI_NP},
+  {KNIFE_TALON_V, KNIFE_TALON_P, KNIFE_TALON_NP},
+};
+// A weapon theme is PAINT, applied in the shader's viewmodel finish block
+// (uSkin): `pat` 0 = factory (the block is skipped), 1 solid, 2 blotch camo,
+// 3 digital, 4 tiger, 5 fade. a..c are the pattern's display colours on the
+// light primary family, d the dark furniture's tint (GRAPH = unchanged).
+typedef struct { float pat, scale, metal; float a[3], b[3], c[3], d[3]; } wpn_theme_t;
+static const wpn_theme_t WPN_THEMES[WPN_THEME_COUNT] = {
+  {0, 0, 0, {0}, {0}, {0}, {0}},
+  {2, 15.0f, 0, {0.74f, 0.62f, 0.44f}, {0.55f, 0.42f, 0.28f}, {0.85f, 0.77f, 0.61f}, {0.36f, 0.30f, 0.23f}},
+  {2, 15.0f, 0, {0.36f, 0.39f, 0.24f}, {0.21f, 0.18f, 0.12f}, {0.50f, 0.45f, 0.30f}, {0.21f, 0.23f, 0.17f}},
+  {3, 9.0f, 0, {0.88f, 0.90f, 0.92f}, {0.62f, 0.66f, 0.71f}, {0.40f, 0.43f, 0.48f}, {0.50f, 0.52f, 0.55f}},
+  {3, 9.0f, 0, {0.50f, 0.51f, 0.54f}, {0.22f, 0.23f, 0.25f}, {0.74f, 0.75f, 0.77f}, {0.185f, 0.188f, 0.197f}},
+  {4, 5.0f, 0, {0.96f, 0.50f, 0.12f}, {0.10f, 0.09f, 0.08f}, {0.99f, 0.82f, 0.48f}, {0.14f, 0.12f, 0.11f}},
+  {1, 0, 0,    {0.17f, 0.17f, 0.18f}, {0}, {0}, {0.12f, 0.12f, 0.13f}},
+  {1, 0, 0,    {0.66f, 0.12f, 0.10f}, {0}, {0}, {0.17f, 0.13f, 0.13f}},
+  {1, 0, 0,    {0.20f, 0.37f, 0.72f}, {0}, {0}, {0.15f, 0.16f, 0.21f}},
+  {5, 4.0f, 0, {0.99f, 0.82f, 0.22f}, {0.92f, 0.30f, 0.56f}, {0.30f, 0.42f, 0.96f}, {0.16f, 0.15f, 0.18f}},
+  {1, 0, 0.95f, {1.00f, 0.80f, 0.40f}, {0}, {0}, {0.10f, 0.10f, 0.11f}},
+};
+// A gear colourway re-dyes the gloves and the gauntlet ON THE CPU, per part, by
+// the part's finish flag: each family keeps its own internal steps (a seam is
+// still darker than the plate it frames) because the new colour is scaled by
+// the part's value RELATIVE to its family's authored reference.
+typedef struct { float fab[3], pad[3], hard[3], acc[3], lea[3], led[3]; } gear_theme_t;
+static const gear_theme_t GEAR_THEMES[GEAR_THEME_COUNT] = {
+  {{0}, {0}, {0}, {0}, {0}, {1.00f, 0.62f, 0.10f}},           // SLATE: identity
+  {{0.50f, 0.42f, 0.30f}, {0.42f, 0.37f, 0.29f}, {0.44f, 0.37f, 0.27f},
+   {0.25f, 0.23f, 0.20f}, {0.24f, 0.20f, 0.15f}, {1.00f, 0.62f, 0.10f}},
+  {{0.29f, 0.32f, 0.21f}, {0.33f, 0.34f, 0.27f}, {0.27f, 0.30f, 0.20f},
+   {0.64f, 0.54f, 0.40f}, {0.16f, 0.16f, 0.13f}, {0.45f, 1.00f, 0.30f}},
+  {{0.13f, 0.13f, 0.14f}, {0.22f, 0.22f, 0.23f}, {0.12f, 0.12f, 0.13f},
+   {0.62f, 0.12f, 0.09f}, {0.09f, 0.09f, 0.10f}, {1.00f, 0.16f, 0.08f}},
+  {{0.70f, 0.72f, 0.75f}, {0.50f, 0.52f, 0.56f}, {0.80f, 0.82f, 0.85f},
+   {0.28f, 0.31f, 0.36f}, {0.30f, 0.31f, 0.34f}, {0.25f, 0.80f, 1.00f}},
+};
+static const mdl_ref_t *armory_knife(void) {
+  return &KNIFE_MODELS[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)];
+}
+static const wpn_theme_t *armory_theme(void) {
+  return &WPN_THEMES[armory_idx(g_cfg.wpn_theme, WPN_THEME_COUNT)];
+}
+static const gear_theme_t *armory_gear(void) {
+  int g = armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT);
+  return g ? &GEAR_THEMES[g] : NULL;
+}
+// model_draw's two armory hooks, both scoped by vm_build around the draws they
+// apply to and NULL/0 everywhere else.
+static int g_md_skin;                    // 1: weapon parts carry the theme flag
+static float g_md_scale = 1.0f;          // uniform mesh scale about the origin
+#define KNIFE_FIST_S  0.86f              // the knife fist against the rifle hand
+#define KNIFE_VM_PUSH 1.10f              // the knife assembly's distance factor
+static const gear_theme_t *g_md_gear;    // non-NULL: re-dye glove/gauntlet parts
+
+static v3 gear_dye(int flag, v3 c) {
+  const gear_theme_t *g = g_md_gear;
+  const float *t, *ref;
+  static const float SLATE_R[3] = {0.204f, 0.224f, 0.268f}, SLEEVE_R[3] = {0.132f, 0.138f, 0.152f},
+                     PAD_R[3] = {0.320f, 0.322f, 0.330f}, HARD_R[3] = {0.166f, 0.186f, 0.230f},
+                     TAN_R[3] = {0.64f, 0.54f, 0.40f}, LEA_R[3] = {0.134f, 0.140f, 0.152f},
+                     AMB_R[3] = {1.0f, 0.62f, 0.10f};
+  switch (flag) {
+    case 1: t = g->fab;  ref = SLEEVE_R; break;
+    case 2: t = g->fab;  ref = SLATE_R;  break;
+    case 3: t = g->led;  ref = AMB_R;    break;
+    case 4: t = g->pad;  ref = PAD_R;    break;
+    case 5: t = g->hard; ref = HARD_R;   break;
+    case 6: t = g->acc;  ref = TAN_R;    break;
+    case 7: t = g->lea;  ref = LEA_R;    break;
+    default: return c;
+  }
+  float k = (c.x + c.y + c.z) / (ref[0] + ref[1] + ref[2]);
+  if (flag == 1) k *= (SLEEVE_R[0] + SLEEVE_R[1] + SLEEVE_R[2]) / (SLATE_R[0] + SLATE_R[1] + SLATE_R[2]);
+  return (v3){{f_clamp(t[0] * k, 0, 1), f_clamp(t[1] * k, 0, 1), f_clamp(t[2] * k, 0, 1)}};
+}
+
 static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int group,
                        v3 o, v3 ax, v3 ay, v3 az) {
   // The weapon frame (x right, y up, z forward) is left-handed where the world is
@@ -30381,14 +30577,22 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
     if (P[i].group != group) continue;
     // Only bare steel is metal. Painted parts stay dielectric, or the shader's
     // sky reflection turns the whole weapon to chrome.
-    mat_set(P[i].rough, P[i].flag ? -(float)P[i].flag
-                       : P[i].metal >= 0.8f ? P[i].metal : 0.0f);
+    float mtl = P[i].flag ? -(float)P[i].flag : P[i].metal >= 0.8f ? P[i].metal : 0.0f;
     v3 c = {{P[i].r, P[i].g, P[i].b}};
+    // The theme's two families, as a fraction on the finish flag the shader
+    // already branches on (-4.3 is still polymer, -6.2 still painted alloy):
+    // .3 the light primary paint (the tan family), .2 the dark furniture.
+    if (g_md_skin && P[i].flag >= 4 && P[i].flag <= 6)
+      mtl -= P[i].r > P[i].b * 1.3f ? 0.3f : 0.2f;
+    if (g_md_gear) c = gear_dye(P[i].flag, c);
+    mat_set(P[i].rough, mtl);
     for (int k = P[i].start; k < P[i].start + P[i].count; k++) {
       int t = (k - P[i].start) % 3;
       const int16_t *q = V[flip && t ? k + (t == 1 ? 1 : -1) : k];
-      v3 p = v3_add(o, v3_add(v3_scale(ax, q[0] * MODEL_SCALE),
-             v3_add(v3_scale(ay, q[1] * MODEL_SCALE), v3_scale(az, q[2] * MODEL_SCALE))));
+      v3 lq = v3_add(v3_scale(ax, q[0] * MODEL_SCALE),
+              v3_add(v3_scale(ay, q[1] * MODEL_SCALE), v3_scale(az, q[2] * MODEL_SCALE)));
+      if (g_md_scale != 1.0f) lq = v3_scale(lq, g_md_scale);
+      v3 p = v3_add(o, lq);
       v3 n = v3_add(v3_scale(ax, q[3] * MODEL_NSCALE),
              v3_add(v3_scale(ay, q[4] * MODEL_NSCALE), v3_scale(az, q[5] * MODEL_NSCALE)));
       float ao = (float)q[6] / 255.0f;
@@ -34803,6 +35007,12 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     px = ga_.kn[0] + VLERP(bob_x) + VLERP(lag_x);
     py = ga_.kn[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
     pz = ga_.kn[2] + VLERP(lag_z);
+    // The knife rides a little further out than its timeline says: at the
+    // timeline's own distance the fist was nearly a third of the frame
+    // in the guard and dwarfed the blade it holds. Scaling the offset from the
+    // eye keeps every keyframe's screen position and only shrinks the
+    // assembly. Viewmodel only: the figure keeps the timeline as authored.
+    if (cur == WPN_KN) { px *= KNIFE_VM_PUSH; py *= KNIFE_VM_PUSH; pz *= KNIFE_VM_PUSH; }
   }
   v3 org = v3_add(eye, v3_add(v3_scale(rgt, px),
            v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
@@ -34828,12 +35038,16 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // swings past the lens during a reload, so it is left out for both.
     g_scene_floats = gun_mark;
     int ar = cur == WPN_AR;
+    const mdl_ref_t *kn = armory_knife();
     const int16_t (*mv)[7] = ar ? RIFLE_V : cur == WPN_SR ? SNIPER_V
-                           : cur == WPN_PT ? PISTOL_V : cur == WPN_KN ? KNIFE_V : GRENADE_V;
+                           : cur == WPN_PT ? PISTOL_V : cur == WPN_KN ? kn->v : GRENADE_V;
     const model_part_t *mp = ar ? RIFLE_P : cur == WPN_SR ? SNIPER_P
-                           : cur == WPN_PT ? PISTOL_P : cur == WPN_KN ? KNIFE_P : GRENADE_P;
+                           : cur == WPN_PT ? PISTOL_P : cur == WPN_KN ? kn->p : GRENADE_P;
     int mn = ar ? RIFLE_NP : cur == WPN_SR ? SNIPER_NP
-           : cur == WPN_PT ? PISTOL_NP : cur == WPN_KN ? KNIFE_NP : GRENADE_NP;
+           : cur == WPN_PT ? PISTOL_NP : cur == WPN_KN ? kn->np : GRENADE_NP;
+    // The weapon theme covers the weapon and its magazines; the grenade is
+    // ordnance, not furniture, and keeps its own olive.
+    g_md_skin = cur != WPN_GR && armory_theme()->pat > 0.0f;
     int nade_gone = cur == WPN_GR && ga_.bolt > 0.5f;    // released
     if (!nade_gone) model_draw(mv, mp, mn, 0, org, gx, gy, gz);
     if (ads < 0.5f && rl < 0.2f && !nade_gone && ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
@@ -35240,9 +35454,11 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       // two rotations off the palm axis. NULL elbow, because a viewmodel arm
       // simply leaves the frame at its authored length.
     }
+    g_md_skin = 0;
     // Hands and arms are sculpted around the rifle, in its frame. Each follows the
     // grip point the hold logic worked out, so reloads, the bolt and the sniper's
     // different holds carry them along as one rigid piece.
+    g_md_gear = armory_gear();
     {
       #define VP(a, b, c) v3_add(org, v3_add(v3_scale(gx, a), \
                           v3_add(v3_scale(gy, b), v3_scale(gz, c))))
@@ -35276,14 +35492,45 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                                    : VP(0.0f,  0.0190f,  0.2500f));
       v3 or_p = v3_add(org, ro);
       int knf = fistw;
+      // THE KNIFE FIST IS SMALLER THAN THE RIFLE HAND IT WAS CUT FROM. Sculpted
+      // round a rifle grip in a padded glove, it read twice the girth of the
+      // 30 mm handle it holds. It shrinks about the handle's own axis, so it
+      // still closes on the handle; the fingers' inner face sinks into the
+      // grip by under 2 mm, out of sight inside the fist.
+      float kfs = cur == WPN_KN ? KNIFE_FIST_S : 1.0f;
+      v3 or_h = or_p;
+      if (cur == WPN_KN)
+        or_h = v3_add(or_p, v3_scale(v3_add(v3_scale(ry, -0.0371f), v3_scale(rz, -0.0024f)),
+                                     1.0f - kfs));
       if (cur == WPN_GR) model_draw(HAND_G_V, HAND_G_P, HAND_G_NP, 0, or_p, rx, ry, rz);
-      else if (knf) model_draw(HAND_K_V, HAND_K_P, HAND_K_NP, 0, or_p, rx, ry, rz);
+      else if (knf) {
+        g_md_scale = kfs;
+        model_draw(HAND_K_V, HAND_K_P, HAND_K_NP, 0, or_h, rx, ry, rz);
+        g_md_scale = 1.0f;
+      }
       else     model_draw(HAND_R_V, HAND_R_P, HAND_R_NP, 0, or_p, rx, ry, rz);
       // The knife's off hand is only in frame in the guard: it rises to brace the
       // flat of the blade, palm in, and drops away below the screen otherwise.
       float gk = smooth01(ga_.guard);
       v3 klx = rgt, kly = upv, klz = fwd, klo = eye;
-      if (knf && gk > 0.01f) {
+      // THE KNIFE'S GUARD IS AN OPEN HAND. It used to be the knife fist mirrored
+      // — a closed fist gripping nothing, 30 cm from the eye and low enough that
+      // its gauntlet's amber window was the biggest thing in the frame. A
+      // fighter's lead hand is open: fingers up and together, palm turned toward
+      // the threat, so the camera sees the back of the glove. It rises from
+      // below the frame on the guard ramp and stands well out to the left, where
+      // it frames the blade instead of covering the target.
+      v3 kshoulder = v3_add(eye, v3_add(v3_scale(rgt, -0.22f),
+                     v3_add(v3_scale(upv, -0.46f), v3_scale(fwd, 0.02f))));
+      if (cur == WPN_KN && gk > 0.01f) {
+        float dn = 1.0f - gk;
+        rot2(&kly, &klz, 0.48f - 0.55f * dn);   // fingers lean toward the threat
+        rot2(&klz, &klx, 0.72f);                // palm turned in, toward the centre
+        rot2(&klx, &kly, -0.16f);               // fingertips cant toward the blade
+        klo = v3_add(eye, v3_add(v3_scale(rgt, -0.165f + 0.03f * dn),
+              v3_add(v3_scale(upv, -0.200f - 0.22f * dn), v3_scale(fwd, 0.40f - 0.06f * dn))));
+        model_draw(HAND_KO_V, HAND_KO_P, HAND_KO_NP, 0, klo, klx, kly, klz);
+      } else if (knf && gk > 0.01f) {
         rot2(&klz, &kly, -0.60f + 0.30f * (1.0f - gk));
         rot2(&klx, &klz, 0.20f);
         rot2(&klx, &kly, -0.45f);
@@ -35303,8 +35550,12 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
           ? cur == WPN_GR
             ? v3_add(or_p, v3_add(v3_scale(rx, -0.0355f),     // the grenade hand's own wrist
                            v3_add(v3_scale(ry, -0.0816f), v3_scale(rz, -0.0358f))))
+            : cur == WPN_KN
+            ? v3_add(or_h, v3_scale(v3_add(v3_scale(rx, 0.018f),
+                           v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))), kfs))
             : v3_add(or_p, v3_add(v3_scale(rx, 0.018f),
                            v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))))
+          : cur == WPN_KN ? v3_add(klo, v3_add(v3_scale(kly, -0.024f), v3_scale(klz, -0.003f)))
           : knf ? v3_add(klo, v3_add(v3_scale(klx, -0.018f),
                          v3_add(v3_scale(kly, -0.080f), v3_scale(klz, -0.066f))))
           : ptl ? v3_add(VP(-0.038f, -0.102f, -0.018f), lo)
@@ -35316,11 +35567,14 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
           ? (knf ? v3_sub(v3_add(eye, v3_add(v3_scale(rgt, 0.30f),
                                  v3_add(v3_scale(upv, -0.42f), v3_scale(fwd, -0.10f)))), wr)
                  : v3_add(v3_scale(rx, 0.32f), v3_add(v3_scale(ry, -0.66f), v3_scale(rz, -0.68f))))
+          : cur == WPN_KN ? v3_sub(kshoulder, wr)
           : knf ? v3_add(v3_scale(klx, -0.32f), v3_add(v3_scale(kly, -0.66f), v3_scale(klz, -0.68f)))
           : ptl ? VD(-0.50f, -0.52f, -0.69f) : VD(-0.41f, -0.82f, -0.39f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));
+        if (h == 0) g_md_scale = kfs;            // the knife arm shrinks with its fist
         model_draw(BRACER_V, BRACER_P, BRACER_NP, 0, wr, ax, on, v3_cross(ax, on));
+        g_md_scale = 1.0f;
         if (h == 1 && !knf && cur != WPN_GR) {
           // The wrist display, laid over the bracer's amber window (that part
           // spans x 41..61 mm, z +-10.8 mm, its top at 40.8 mm in model units).
@@ -35341,6 +35595,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       #undef VP
       #undef VD
     }
+    g_md_gear = NULL;
     mat_set(MAT_PARK_R, MAT_PARK_M);
     probe(NULL);
   }
@@ -37368,6 +37623,22 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // that was just emitted rather than the previous frame's.
     glUniform3f(uloc(R.prog_world, "uWrist"), (float)p->wp.ammo[p->wp.cur],
                 (float)WPN_DEF[p->wp.cur].mag, g_ui_time);
+    {
+      // The armory: the weapon theme's paint and the gear's LED colour, which
+      // the wrist display shares with the gauntlet's inlays.
+      const wpn_theme_t *th = armory_theme();
+      const gear_theme_t *gt = &GEAR_THEMES[armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT)];
+      glUniform4f(uloc(R.prog_world, "uSkin"), th->pat, th->scale, th->metal, 0.0f);
+      glUniform3fv(uloc(R.prog_world, "uSkinA"), 1, th->a);
+      glUniform3fv(uloc(R.prog_world, "uSkinB"), 1, th->b);
+      glUniform3fv(uloc(R.prog_world, "uSkinC"), 1, th->c);
+      glUniform3fv(uloc(R.prog_world, "uSkinD"), 1, th->d);
+      // The display's "on" colour at the shipped amber is (1, .55, .12): the
+      // LED's authored colour pushed redder the way the inlay shader does.
+      if (gt == GEAR_THEMES) glUniform3f(uloc(R.prog_world, "uWristOn"), 1.0f, 0.55f, 0.12f);
+      else glUniform3f(uloc(R.prog_world, "uWristOn"), gt->led[0], gt->led[1] * 0.887f,
+                       gt->led[2] * 1.2f);
+    }
     glUniform3f(R.u_mdlo, g_vm_mdl_o.x, g_vm_mdl_o.y, g_vm_mdl_o.z);
     glUniform3f(R.u_mdlx, g_vm_mdl_x.x, g_vm_mdl_x.y, g_vm_mdl_x.z);
     glUniform3f(R.u_mdlz, g_vm_mdl_z.x, g_vm_mdl_z.y, g_vm_mdl_z.z);
@@ -39775,6 +40046,7 @@ static void usage(void) {
        "                   joint travel per case + how far apart the 6 films are\n"
        "  hud on|off         show/hide gameplay HUD (menus remain visible)\n"
        "  showfps on|off     show/hide the FPS counter idempotently\n"
+       "  armory knife|theme|gear N  cosmetic loadout (ARMORY page) by index\n"
        "  puppet on|off      drive bot 0 by script instead of AI (anim testbed)\n"
        "  puppet move DX DZ | speed S | face DEG | crouch 0|1 | lean -1..1 |\n"
        "                     ads 0|1 | jump | slide | warp X Z\n"
@@ -44182,6 +44454,21 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_cfg.devmode = next_on_off("dev");
     } else if (!strcmp(t, "showfps")) {
       g_cfg.show_fps = next_on_off("showfps");
+    } else if (!strcmp(t, "armory")) {
+      // armory knife|theme|gear N — the ARMORY page's three cycles, by index.
+      const char *what = next_tok();
+      long n = next_n();
+      int *dst = !strcmp(what, "knife") ? &g_cfg.knife_model
+               : !strcmp(what, "theme") ? &g_cfg.wpn_theme
+               : !strcmp(what, "gear")  ? &g_cfg.gear_theme : NULL;
+      int cnt = dst == &g_cfg.knife_model ? KNIFE_MODEL_COUNT
+              : dst == &g_cfg.wpn_theme   ? WPN_THEME_COUNT : GEAR_THEME_COUNT;
+      if (!dst || n < 0 || n >= cnt) {
+        fprintf(stderr, "script: armory knife 0-%d | theme 0-%d | gear 0-%d\n",
+                KNIFE_MODEL_COUNT - 1, WPN_THEME_COUNT - 1, GEAR_THEME_COUNT - 1);
+        exit(1);
+      }
+      *dst = (int)n;
     } else if (!strcmp(t, "bots")) {
       long n = next_n();
       g_cfg.sp_bots = parse_int_def(n, &SP_BOTS_DEF);
