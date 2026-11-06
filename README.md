@@ -108,6 +108,9 @@ chmod +x ./blinddrop-linux-amd64
 
 Check a download with `sha256sum -c SHA256SUMS`. If the frame rate is low, turn off **Post Effects**
 in Settings > Video (it switches off SSAO, contact shadows, volumetric light, bloom and motion blur).
+Settings > HUD has **Perf Stats** (frame, CPU and GPU milliseconds on screen), plus crosshair style,
+colour and size, HUD scale and opacity, and optional **Enemy Markers** (a shape over enemies you can
+see, for players who can't rely on the red helmet).
 
 **Ballistics** in the Match tab makes rounds fly: they have a travel time, lose speed to drag, drop
 under gravity and can ricochet off steel. It is off by default and only applies offline, or on a server
