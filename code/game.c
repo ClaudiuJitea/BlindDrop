@@ -32417,6 +32417,20 @@ typedef struct {
   v3 vest, sleeve, glove, bala;                // derived / balaclava
 } kit_t;
 
+// THE OPPOSING FORCE IS NOT ONE MAN. Every bot wore the identical kit, so a
+// crowd of eight read as clones. g_fig_var picks one of four carrier colours
+// per entity, and they differ in HUE ONLY: each sits at the sand carrier's own
+// luminance (0.571), so the light-carrier-on-dark-fatigues value step the 25 m
+// silhouette depends on is untouched, and the red helmet — the hostile cue —
+// never varies. 0 is the shipped sand kit (bot 0 keeps it). Set by the figure
+// draw sites from the entity id, so a corpse keeps the colour it fell in.
+static int g_fig_var;
+static const float FIG_CARRIER_VAR[4][3] = {
+  {0.660f, 0.560f, 0.415f},   // sand (shipped)
+  {0.520f, 0.600f, 0.440f},   // ranger green
+  {0.720f, 0.550f, 0.360f},   // khaki brown
+  {0.570f, 0.575f, 0.560f},   // urban grey
+};
 static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   // Kit palette. What was here was two tones — one olive, one dark — scaled by a
   // constant per part, so helmet, carrier, pads, boots and gloves all measured
@@ -32498,7 +32512,8 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   olive = (v3){{0.335f, 0.335f, 0.365f}};
   dark  = (v3){{0.365f, 0.345f, 0.350f}};
   helm  = (v3){{0.760f, 0.205f, 0.150f}};
-  nyl   = (v3){{0.660f, 0.560f, 0.415f}};
+  { const float *cv = FIG_CARRIER_VAR[g_fig_var & 3];
+    nyl = (v3){{cv[0], cv[1], cv[2]}}; }
   web   = (v3){{0.235f, 0.225f, 0.235f}};
   rub   = (v3){{0.255f, 0.255f, 0.270f}};
   gm2   = (v3){{1.900f, 0.420f, 0.180f}};   // lit goggles
@@ -33993,8 +34008,10 @@ static void scene_draw_bot(const bot_t *b, float alpha) {
   // b->wp.cur, not a hardwired WPN_AR (A.1): today masked by bot_spawn always
   // issuing the AR — but any figure drawn through this path holding the SR
   // would render an AR, and the far SR report bake becomes reachable with it.
+  g_fig_var = (int)(b - g_bots) & 3;              // entity id - 1
   scene_draw_figure(&b->anim, pos, yaw, &dth, alpha, flash01, fc, 0, b->wp.cur,
                     gun_anim(&b->wp, alpha));
+  g_fig_var = 0;
 }
 
 // Perpendicular frame for marks/tracers whose only anchor is one direction.
@@ -34603,8 +34620,10 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_diss_o = cpos;
     g_fig_diss_seed = cp->seed;
     g_fig_kcap = CORPSE_K;
+    g_fig_var = cp->owner > 0 ? (cp->owner - 1) & 3 : 0;
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
+    g_fig_var = 0;
   }
   g_fig_diss = 0.0f;
   g_fig_kcap = 0;
