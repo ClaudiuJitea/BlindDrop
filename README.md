@@ -6,11 +6,11 @@
 
 <p align="center">
   <b>A free, private arena FPS in one C file.</b><br>
-  Six modes, eight maps, bots that push, and no telemetry.
+  Seven modes, eight maps, team play with friends, bots that push, and no telemetry.
 </p>
 
 <p align="center">
-  <a href="https://github.com/ClaudiuJitea/BlindDrop/releases/latest"><b>Download for Linux</b></a>
+  <a href="https://github.com/ClaudiuJitea/BlindDrop/releases/latest"><b>Download for Linux and Windows</b></a>
 </p>
 
 <p align="center">
@@ -22,6 +22,9 @@
 
 ## The game
 
+- **Play with friends:** one click hosts a game, and everyone on your network sees it listed and
+  joins with another click. **Team Deathmatch** up to 9 v 9: ALPHA in red, BRAVO in blue, players
+  choose their side and bots fill the empty places.
 - **A hostage-rescue mission:** sneak into a guarded compound, free three hostages and walk them
   out to a helicopter.
 - **Five weapons:** rifle, bolt sniper, sidearm, knife and frag grenades on `1`-`5`, with no loadouts or unlocks.
@@ -37,6 +40,8 @@
 - **Bots:** they hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **A detailed world:** physically based materials, soft shadows, ambient occlusion, light shafts,
   bloom, lamps and lit windows at dusk, and vehicles, palms and props modelled with curved bodies.
+- **Tracers:** every gun draws its rounds from the muzzle to the impact, and the barrel lines up
+  with the crosshair from the hip.
 - **Weapon handling:** realistic magazine changes (the old one drops, the hand fetches a fresh one
   from the pouch), aim-down-sights scopes, weapon sway and inertia, and a mantle over low walls.
 - **No engine and no asset files:** maps, models and every sound are generated in code.
@@ -63,9 +68,11 @@
 | **Snipers Only** | The bolt sniper and nothing else. |
 | **Knives + Nades** | The knife, with grenades that regrow. |
 | **Last Man Standing** | No respawns; the last one alive takes the round, and you spectate once you're out. |
+| **Team Deathmatch** | ALPHA (red) against BRAVO (blue), 1 v 1 up to 9 v 9; the first side to the frag limit wins. |
 | **Hostage Rescue** | Operation Nightfall, a single-player stealth mission on Compound (details below). |
 
-Pick the mode and map under **Singleplayer**. They apply on the next restart.
+Pick the mode and map under **Singleplayer**. They apply on the next restart. A game you host has
+its own mode and map under **Multiplayer > Host settings**.
 
 ### Hostage Rescue
 
@@ -106,6 +113,10 @@ chmod +x ./blinddrop-linux-amd64
 ./blinddrop-linux-amd64
 ```
 
+Windows 10 or 11 (64-bit): run `blinddrop-windows-amd64.exe`. It is not code-signed, so SmartScreen
+may ask you to confirm (More info > Run anyway). Windows players can play offline and join games;
+hosting needs Linux.
+
 Check a download with `sha256sum -c SHA256SUMS`. If the frame rate is low, turn off **Post Effects**
 in Settings > Video (it switches off SSAO, contact shadows, volumetric light, bloom and motion blur).
 Settings > HUD has **Perf Stats** (frame, CPU and GPU milliseconds on screen), plus crosshair style,
@@ -120,13 +131,42 @@ started with `--ballistics`.
 
 Anyone can host; up to 8 players per arena, and bots fill the empty slots. The default port is UDP 31415.
 
+<p align="center">
+  <img src="media/teams.jpg" alt="An ALPHA rifleman in red pushing past two downed BRAVO soldiers in blue on Citadel" width="49%">
+  <img src="media/host.jpg" alt="The Host settings page: Team Deathmatch, 5 v 5, bots fill the teams, friendly fire off" width="49%">
+</p>
+
+From the menu, open **MULTIPLAYER**:
+
+- **Host a game** starts a server on your PC and puts you in it. **Host settings** (the row under it)
+  picks that game's mode, map, bots, difficulty and frag limit, separately from SINGLEPLAYER.
+  Leaving the match or closing the game shuts it down. Hosting needs the Linux build; Windows
+  players can join.
+- **Games on your network** lists every game on your LAN, refreshed every second. Click one to join.
+- **Join by address** takes an IP (or `host:port`) for games outside your network. The address is
+  remembered. Over the internet the host has to forward UDP 31415 on their router.
+
+A dedicated server works from the command line too:
+
 ```sh
-./blinddrop-linux-amd64 --server --mode lms --map citadel   # host
-./blinddrop-linux-amd64 --connect 192.168.1.50              # join
+./blinddrop-linux-amd64 --server --mode lms --map citadel --name "friday night"   # host
+./blinddrop-linux-amd64 --connect 192.168.1.50                                    # join
 ```
 
-Modes: `dm gun sniper blades lms`. Maps: `arena foundry bazaar outpost citadel harbor refinery compound rotate`.
-Set `mp_host` in `config.cfg` to use **Quick Join** from the menu.
+**Team Deathmatch** (`tdm`) puts everyone on ALPHA or BRAVO; the first side to the frag limit wins.
+The host sets **TEAM SIZE** (1v1 to 9v9), **FILL TEAMS WITH BOTS** and **FRIENDLY FIRE** (off by
+default) in MULTIPLAYER > HOST SETTINGS. With filling on, bots take every place no player holds and
+step aside as players join. Joining players get the **CHOOSE TEAM** page (a full side refuses), and
+the **TEAM** tile in the menu switches sides mid-match. ALPHA wears red and BRAVO blue; teammates
+carry a marker in their team colour over their heads, and names in the kill feed and scoreboard
+take their team's colour. Offline, SINGLEPLAYER has Team Deathmatch too, with just TEAM SIZE and
+YOUR TEAM: bots fill both sides and friendly fire is off.
+
+```sh
+./blinddrop-linux-amd64 --server --mode tdm --team-size 5 --team-fill 1 --friendly-fire 0   # 5v5, bots fill
+```
+
+Modes: `dm gun sniper blades lms tdm`. Maps: `arena foundry bazaar outpost citadel harbor refinery compound rotate`.
 
 ## Privacy
 

@@ -775,8 +775,12 @@ static const wpn_def_t WPN_DEF[WPN_COUNT] = {
 // THE GRENADE. A fragmentation grenade on a 3.5 s fuse that starts as the pin comes
 // out: hold FIRE to pull it and cook, release to throw, and hold AIM as you release
 // to lob it underhand. Hold it past the fuse and it goes off in your hand.
-#define NADE_FUSE      420      // ticks
-#define NADE_PIN_T     20       // the pin takes this long; a tap still pulls it
+#define NADE_FUSE      448      // ticks from the press: NADE_PIN_T, then 3.33 s
+// The pin takes this long; a tap still pulls it. 0.4 s, not the 0.17 s it was:
+// at 20 ticks the off hand had to reach, hook and draw in under two frames of a
+// 60 Hz screen, which no hand does and which read as the pin vanishing. The
+// fuse grew by the same 28 ticks, so spoon-to-blast is unchanged.
+#define NADE_PIN_T     48
 #define NADE_THROW_T   56       // the whole throw
 #define NADE_RELEASE_T 16       // ...and the tick the hand opens
 #define NADE_SPEED     16.5f    // m/s overhand, about a soldier's throw
@@ -928,6 +932,9 @@ static int g_server;
 static struct {   // consumed by the Linux server half only
   int port, cap_bots, cap_public, skill, fraglimit, lobbies, mode, rounds, map;
   long ticks;          // 0 = run forever; N = exit after N ticks (test/RSS runs)
+  char name[24];       // --name: what a LAN scan lists this server as
+  int team_size, team_fill;   // --team-size N, --team-fill 0|1 (TEAM DEATHMATCH)
+  int team_ff;                // --friendly-fire 0|1
 // DESIGNATED, and not merely as a style preference. This was positional, and
 // adding `lobbies` to the int line above put it BEFORE `ticks` while the
 // initializer still carried the old order — so the default became lobbies = 0,
@@ -942,7 +949,7 @@ static struct {   // consumed by the Linux server half only
 // is edited is a silent trap, and this one only has to be sprung once.
 } g_srv = {.port = NET_PORT_DEF, .cap_bots = 2, .cap_public = 6,
            .skill = 1, .fraglimit = 12, .lobbies = 1, .mode = 0, .rounds = 3,
-           .ticks = 0};
+           .ticks = 0, .team_size = 5, .team_fill = 1};
 
 // WHICH entity is "me" — the one identity that is allowed to differ per
 // process: 0 in singleplayer, the own id on a networked client,
@@ -999,7 +1006,7 @@ static int ent_next(int e) {
 // outlasts the point at which a new player has decided. Both are one slider
 // away in the MATCH tab, and the difficulty default carries the challenge
 // instead (see config_defaults' sp_diff).
-static const param_def_t SP_BOTS_DEF = {"sp_bots",      "BOTS",        1, 1, MAX_BOTS, 1};
+static const param_def_t SP_BOTS_DEF = {"sp_bots",      "BOTS",        1, 0, MAX_BOTS, 1};
 static const param_def_t SP_FRAG_DEF = {"sp_fraglimit", "FRAG LIMIT", 10, 1, 1000,     1};
 // LAST MAN STANDING plays to rounds, not frags: a frag limit of 10 read as "ten
 // rounds" is a forty-minute match. Its own slider, its own key.
@@ -1010,11 +1017,16 @@ static const param_def_t SP_ROUNDS_DEF = {"sp_rounds",  "ROUNDS TO WIN", 3, 1, 2
 // changes is asked through the mode_* helpers next to match_t, never by
 // comparing g_match.mode at a call site — that is how the weapon gate, the
 // respawn gate and the win condition stay in one place.
-typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE, GM_COUNT } game_mode_t;
+typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE, GM_TDM, GM_COUNT } game_mode_t;
 static const char *const GM_NAMES[GM_COUNT] = {
   "DEATHMATCH", "GUN GAME", "SNIPERS ONLY", "KNIVES + NADES", "LAST MAN STANDING",
-  "HOSTAGE RESCUE"};
-static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms", "rescue"};
+  "HOSTAGE RESCUE", "TEAM DEATHMATCH"};
+static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms", "rescue", "tdm"};
+// TEAM DEATHMATCH: two sides, ALPHA and BRAVO. A winner >= MAX_ENTS is a TEAM
+// (MAX_ENTS + team), which is how EV_END, NP_SCORES and the banner carry it.
+#define TEAM_SIZE_MAX 9
+static const char *const TEAM_NAMES[2] = {"ALPHA", "BRAVO"};
+static int won_by_me(int winner);   // with the team state, by match_t
 // GUN GAME's ladder: GG_RUNG_KILLS kills with each weapon promote you to the
 // next, and one kill with the last (the knife) wins — nine kills, about a
 // deathmatch's ten. At one kill a rung a six-bot match was over in fifteen
@@ -1481,6 +1493,17 @@ typedef struct {
   int   sp_mode;             // game_mode_t; applies at the next (re)start
   int   sp_rounds;           // LAST MAN STANDING rounds to win, SP_ROUNDS_DEF
   int   sp_map;              // a MAP_DEFS index, or MAP_ROTATE; next (re)start
+  int   sp_team_size;        // TEAM DEATHMATCH: places per side, 1..TEAM_SIZE_MAX
+  int   sp_team_fill;        // ...bots fill the empty places (0 = humans only)
+  int   sp_team;             // ...the side this player picks offline (0 ALPHA)
+  int   sp_team_ff;          // ...friendly fire: 1 = teammates can hurt each other
+  // sp_team_fill and sp_team_ff are RUNTIME, not settings: offline they stay
+  // at fill on / friendly fire off (a solo team game IS its bots), and a
+  // server sets them from its --team-fill / --friendly-fire. The player's
+  // choices for a game they host live in the host_* fields, on the
+  // MULTIPLAYER page's HOST SETTINGS, apart from the SINGLEPLAYER rules.
+  int   host_mode, host_map, host_bots;
+  int   host_team_size, host_team_fill, host_team_ff;
   char  name[12];            // player name; glyph policy lives in name_glyph
   int   third_person;        // camera: 0 = first person, 1 = shoulder cam
   int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
@@ -1574,6 +1597,9 @@ static config_t config_defaults(void) {
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
                 .sp_frag = (int)SP_FRAG_DEF.def, .name = "PLAYER",
                 .sp_mode = GM_DM, .sp_rounds = (int)SP_ROUNDS_DEF.def, .sp_map = 0,
+                .sp_team_size = 5, .sp_team_fill = 1, .sp_team = 0, .sp_team_ff = 0,
+                .host_mode = GM_TDM, .host_map = 0, .host_bots = 3,
+                .host_team_size = 5, .host_team_fill = 1, .host_team_ff = 0,
                 // LINEAR (0), changed from STANDARD 2026-08-19. The power curve
                 // was chosen to widen the precision band most thumbs live in —
                 // but it does that by making the stick's OUTPUT non-linear in
@@ -1639,6 +1665,12 @@ static void config_emit(FILE *f, const config_t *c) {
                                              ? c->sp_mode : GM_DM],
           SP_ROUNDS_DEF.key, c->sp_rounds);
   fprintf(f, "sp_map %s\n", map_pick_key(c->sp_map));
+  fprintf(f, "sp_team_size %d\nsp_team %d\n", c->sp_team_size, c->sp_team);
+  fprintf(f, "host_mode %s\nhost_map %s\nhost_bots %d\n",
+          GM_KEYS[c->host_mode >= 0 && c->host_mode < GM_COUNT ? c->host_mode : GM_DM],
+          map_pick_key(c->host_map), c->host_bots);
+  fprintf(f, "host_team_size %d\nhost_team_fill %d\nhost_friendly_fire %d\n",
+          c->host_team_size, c->host_team_fill, c->host_team_ff);
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
@@ -1863,10 +1895,24 @@ static void config_load_or_create(const char *path, config_t *c) {
       int m = gm_parse(val);
       if (m >= 0) c->sp_mode = m;
     }
+    else if (!strcmp(key, "host_mode")) {
+      int m = gm_parse(val);
+      if (m >= 0 && m != GM_RESCUE) c->host_mode = m;
+    }
     else if (!strcmp(key, "sp_map")) {
       int m = map_parse(val);
       if (m >= 0) c->sp_map = m;
     }
+    else if (!strcmp(key, "sp_team_size")) c->sp_team_size = parse_int(val, c->sp_team_size, 1, TEAM_SIZE_MAX);
+    else if (!strcmp(key, "sp_team")) c->sp_team = parse_int(val, c->sp_team, 0, 1);
+    else if (!strcmp(key, "host_map")) {
+      int m = map_parse(val);
+      if (m >= 0) c->host_map = m;
+    }
+    else if (!strcmp(key, "host_bots")) c->host_bots = parse_int(val, c->host_bots, 0, MAX_BOTS);
+    else if (!strcmp(key, "host_team_size")) c->host_team_size = parse_int(val, c->host_team_size, 1, TEAM_SIZE_MAX);
+    else if (!strcmp(key, "host_team_fill")) c->host_team_fill = parse_int(val, c->host_team_fill, 0, 1);
+    else if (!strcmp(key, "host_friendly_fire")) c->host_team_ff = parse_int(val, c->host_team_ff, 0, 1);
     else if (!strcmp(key, SP_ROUNDS_DEF.key)) {
       c->sp_rounds = parse_int_def(parse_long(val, c->sp_rounds), &SP_ROUNDS_DEF);
     }
@@ -2027,6 +2073,19 @@ static int      net_udp_send(int fd, uint32_t ip, uint16_t port, const void *b, 
 static int      net_udp_recv(int fd, uint32_t *ip, uint16_t *port, void *b, int cap);
 static uint32_t net_resolve(const char *host);  // name/IP -> network-order s_addr, 0 fail
 static uint32_t net_now_ms(void);               // monotonic ms for timeouts/RTT
+// LAN discovery and HOST GAME, below the split for the same reason: a socket
+// option, the interface list and a child process are all platform calls.
+static int      net_udp_bcast_on(int fd);       // allow sends to broadcast addresses
+static int      net_bcast_targets(uint32_t *out, int max);  // where a LAN scan goes
+static int      net_local_addrs(uint32_t *out, int max);    // this machine's LAN IPs
+static int      host_spawn(char *const argv[]); // start a --server child; 0 = failed
+static int      host_alive(void);               // that child is still running
+static void     host_kill(void);                // stop it (and reap it)
+#ifdef _WIN32
+#define HOST_SUPPORTED 0   // the Windows build has no --server mode
+#else
+#define HOST_SUPPORTED 1
+#endif
 
 // ---------------------------------------------------------------------------
 // (Netcode wire layer moved below player_t — it needs PITCH_MAX/IN_COUNT.)
@@ -4149,6 +4208,7 @@ static const char *BOT_NAMES[MAX_BOTS] = {
 // name. Negative e (server's g_local_ent, `bot`'s "no target") is explicit.
 static const char *ent_name(int e) {
   if (e < 0) return "none";
+  if (e >= MAX_ENTS) return e - MAX_ENTS < 2 ? TEAM_NAMES[e - MAX_ENTS] : "none";  // a team won
   if (e == 0) return g_cfg.name;
   if (e <= MAX_BOTS) return BOT_NAMES[e - 1];
   int h = e - MAX_BOTS;
@@ -6934,7 +6994,7 @@ static void audio_on_event(const event_t *e) {
     // neither ducks the arena nor congratulates anybody.
     // g_local_ent, not a literal 0: EV_END.k is the WINNER's entity id, and on
     // a client that id is the own slot, never 0.
-    if (e->k == g_local_ent)
+    if (won_by_me(e->k))
       audio_play(SFX_KILL_HEAD, SFX_LEAD_GAIN, 0.85f, 0.0f,
                  WPN_DEF[g_last_wpn].sfx_hit_t + 0.38f);
     else
@@ -7658,7 +7718,7 @@ typedef struct {
 // fail the world hash on the first snapshot instead — a clean refusal, but at
 // the wrong boundary and with the wrong message. The version is what the
 // handshake is for.
-#define NET_PROTO 11   // 11: game modes (NP_SCORES mode block + mscore column)
+#define NET_PROTO 12   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -7690,6 +7750,9 @@ typedef enum {
                     // breaks on any loss burst past the resend window and for
                     // every late joiner, so it rides its own low-rate packet
                     // (the hot snapshot stays inside the MTU at full roster).
+  NP_TEAM,          // client->server: token + side (0/1). The server refuses a
+                    // full side in silence; the next NP_SCORES says which side
+                    // the client is really on.
 } np_type_t;
 
 // Values are pinned: they ride the NP_REJECT payload, and 3/4 (bad cookie /
@@ -11333,6 +11396,57 @@ static int game_mode(void) {
   return m >= 0 && m < GM_COUNT ? m : GM_DM;
 }
 
+// ---- TEAMS (TEAM DEATHMATCH) ------------------------------------------------
+// One side per entity, per lobby, OUTSIDE match_t for the same reason the
+// human roster is (match_restart memsets it; a side survives a rematch). The
+// server/offline sim owns it: humans pick theirs (NP_TEAM online, the TEAM page
+// offline), bots are dealt to keep each side at the chosen size. A client
+// adopts every entity's side from NP_SCORES. The team score is its own counter
+// rather than a sum of kills: bots leave as humans join, and a departing bot
+// must not take its side's frags with it.
+static signed char g_team_all[SRV_LOBBIES][MAX_ENTS];
+#define g_team (g_team_all[g_lobby])
+static int g_team_score_all[SRV_LOBBIES][2];
+#define g_team_score (g_team_score_all[g_lobby])
+static int g_net_team_size;   // client: the server's team size (NP_SCORES)
+static int g_net_team_fill;   // client: ...and whether bots fill it
+static int teams_on(void) { return game_mode() == GM_TDM; }
+static int team_of(int e) { return e >= 0 && e < MAX_ENTS ? g_team[e] : -1; }
+// Friend, not foe: two DIFFERENT entities on one side of a team game.
+static int team_mates(int a, int b) {
+  return teams_on() && a != b && a >= 0 && b >= 0 && a < MAX_ENTS && b < MAX_ENTS &&
+         g_team[a] == g_team[b];
+}
+static int team_size(void) {
+  int n = g_online && g_net_team_size ? g_net_team_size : g_cfg.sp_team_size;
+  return n < 1 ? 1 : n > TEAM_SIZE_MAX ? TEAM_SIZE_MAX : n;
+}
+static int team_fill(void) { return g_online ? g_net_team_fill : g_cfg.sp_team_fill; }
+static int g_net_team_ff;     // client: the server's friendly-fire rule
+static int team_ff(void) { return g_online ? g_net_team_ff : g_cfg.sp_team_ff; }
+static int team_humans(int t) {
+  int n = 0;
+  ENT_FOREACH(e) if (human_of_ent(e) >= 0 && g_team[e] == t) n++;
+  return n;
+}
+// Bots a side needs to reach its size: the humans on it take their places.
+static int tdm_bot_want(int t) {
+  if (!g_cfg.sp_team_fill) return 0;
+  int w = team_size() - team_humans(t);
+  return w < 0 ? 0 : w;
+}
+// The side with more free human places (ALPHA on a tie): an auto-pick.
+static int team_auto(void) {
+  int fa = team_size() - team_humans(0), fb = team_size() - team_humans(1);
+  return fb > fa ? 1 : 0;
+}
+// Did the local player's side (or the local player) take the match?
+static void tdm_deal_bots(int respawn);   // with the bot roster, below
+static int won_by_me(int winner) {
+  if (winner >= MAX_ENTS) return winner - MAX_ENTS == team_of(g_local_ent);
+  return winner == g_local_ent;
+}
+
 // mscore in GUN GAME is POINTS (kills on the ladder); the rung is derived.
 static int gg_level(int ent) {
   int l = ent >= 0 && ent < MAX_ENTS ? g_match.mscore[ent] / GG_RUNG_KILLS : 0;
@@ -11367,6 +11481,8 @@ static int mode_primary(int ent) {
 
 // LAST MAN STANDING's rounds to win: the server's on a client, ours otherwise.
 static int g_net_rounds;
+static int g_cl_team_asked;   // this connection has already offered the TEAM page
+static int g_ui_team_prompt;  // ...and the menu should open on it at the next frame
 static int mode_round_goal(void) { return g_online && g_net_rounds ? g_net_rounds : g_cfg.sp_rounds; }
 
 // LAST MAN STANDING: the dead stay down until the round resets everyone.
@@ -11570,6 +11686,7 @@ static void bot_hear_update(bot_t *b, int bi) {
       const bot_noise_t *n = &g_match.noise[kind][src];
       if (n->tick == 0 || n->tick >= g_tick || n->src == bi + 1) continue;
       if (rescue_on() && n->src >= 1 && n->src <= MAX_BOTS) continue;   // a comrade
+      if (team_mates(bi + 1, n->src)) continue;     // a teammate's boots and shots
       if (g_tick - n->tick > bot_hear_life((bot_noise_kind_t)kind)) continue;
       float dist = v3_len(v3_sub(n->pos, b->pos));
       // RELATIVE loudness — how much of its own reach the sound has left, not
@@ -11945,10 +12062,11 @@ static int net_snapshot_read(const unsigned char *buf, size_t len, uint32_t *ser
 // for every client, so the caller builds it once and sends it per conn.
 // ping is measured per connection (g_tick - input view tick, smoothed) and
 // rides here because it is scoreboard furniture, not hot-path state.
-typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping, mscore; } net_score_t;
+typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping, mscore, team; } net_score_t;
 // The mode block: the rules a client predicts under, and LAST MAN STANDING's
 // between-rounds state for its HUD. round_win 0xFF = nobody.
-typedef struct { uint8_t mode, round_secs, round_win, rounds, round_no; } net_mode_t;
+typedef struct { uint8_t mode, round_secs, round_win, rounds, round_no;
+                 uint8_t team_size, team_fill; uint16_t tscore[2]; } net_mode_t;
 static size_t net_scores_build(unsigned char *buf, size_t cap,
                                const uint8_t ping[MAX_ENTS]) {
   np_wr w = {buf, cap, 0, 0};
@@ -11962,6 +12080,10 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
   np_w8(&w, (uint8_t)(g_match.round_win < 0 ? 0xFF : g_match.round_win));
   np_w8(&w, (uint8_t)g_cfg.sp_rounds);
   np_w8(&w, (uint8_t)(g_match.round_no & 0xFF));
+  np_w8(&w, (uint8_t)g_cfg.sp_team_size);     // the team block
+  np_w8(&w, (uint8_t)((g_cfg.sp_team_fill ? 1 : 0) | (g_cfg.sp_team_ff ? 2 : 0)));
+  np_w16(&w, (uint16_t)g_team_score[0]);
+  np_w16(&w, (uint16_t)g_team_score[1]);
   size_t cnt_at = w.at;
   np_w8(&w, 0);
   int cnt = 0;
@@ -11973,6 +12095,7 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
     np_w16(&w, (uint16_t)g_match.hits[e]);
     np_w8(&w, ping ? ping[e] : 0);
     np_w8(&w, (uint8_t)g_match.mscore[e]);
+    np_w8(&w, (uint8_t)(g_team[e] ? 1 : 0));
     cnt++;
   }
   // Name section: every present HUMAN's display name (bots derive theirs from
@@ -12018,7 +12141,10 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   net_mode_t md;
   md.mode = np_r8(&r); md.round_secs = np_r8(&r); md.round_win = np_r8(&r);
   md.rounds = np_r8(&r); md.round_no = np_r8(&r);
+  md.team_size = np_r8(&r); md.team_fill = np_r8(&r) & 3;
+  md.tscore[0] = np_r16(&r); md.tscore[1] = np_r16(&r);
   if (md.mode >= GM_COUNT) return -1;        // hostile mode: refuse the packet
+  if (md.team_size > TEAM_SIZE_MAX) md.team_size = TEAM_SIZE_MAX;
   if (md.round_win != 0xFF && md.round_win >= MAX_ENTS) return -1;
   int cnt = np_r8(&r);
   if (r.bad) return -1;
@@ -12031,6 +12157,7 @@ static int net_scores_read(const unsigned char *buf, size_t len,
     s.shots = np_r16(&r); s.hits = np_r16(&r);
     s.ping = np_r8(&r);
     s.mscore = np_r8(&r);
+    s.team = np_r8(&r) ? 1 : 0;
     if (r.bad) break;
     if (s.id >= MAX_ENTS) return -1;         // hostile id: refuse the packet
     out[got++] = s;
@@ -12096,6 +12223,7 @@ static v3 spawn_spot(int self) {
     v3 head = {{c.x, c.y + 1.5f, c.z}};
     ENT_FOREACH(e) {
       if (e == self) continue;
+      if (team_mates(self, e)) continue;   // a teammate is no threat to a spawn
       int h = human_of_ent(e);
       if (h >= 0) { if (!g_players[h].alive) continue; }
       else if (!g_bots[e - 1].alive || !g_bots[e - 1].active) continue;
@@ -12107,8 +12235,15 @@ static v3 spawn_spot(int self) {
       if (dd > 0.25f && los_clear(eye, head)) seen++;
     }
     float sc = fminf(sqrtf(d), SPAWN_FAR) - SPAWN_SEEN_PEN * (float)seen;
+    // TEAM GROUND: ALPHA deploys on the -z half, BRAVO on the +z half, so a
+    // side starts together and the fight has a front. Strong enough to decide
+    // between safe spots, never enough to choose a seen one.
+    if (teams_on() && self >= 0 && self < MAX_ENTS) {
+      float side = g_team[self] ? 1.0f : -1.0f;
+      sc += 14.0f * f_clamp(side * c.z / ARENA_HALF, -1.0f, 1.0f);
+    }
     if (sc > best_s) { best_s = sc; best = c; }
-    if (!seen && d >= SPAWN_FAR * SPAWN_FAR) return c;   // unseen and far: done
+    if (!seen && d >= SPAWN_FAR * SPAWN_FAR && !teams_on()) return c;   // unseen and far: done
   }
   return best;
 }
@@ -12510,6 +12645,8 @@ static void bot_damage_remember(bot_t *b, int src) {
 
 static void bot_damage_reveal(bot_t *b, int src, int score) {
   const bot_skill_t *sk = &BOT_SKILL[g_cfg.sp_diff];
+  // Hit by a teammate (friendly fire on): an accident, not an enemy to turn on.
+  if (team_mates((int)(b - g_bots) + 1, src)) return;
   if (b->tgt != src) bot_focus_invalidate(b);
   b->tgt = src;
   bot_damage_remember(b, src);
@@ -12678,6 +12815,14 @@ static void match_on_kill(int src, int dst, int hs) {
       break;                              // rounds decide it (lms_tick)
     case GM_RESCUE:
       rescue_on_kill(src, dst, hs);       // the mission decides it (rescue_tick)
+      break;
+    case GM_TDM:
+      // The SIDE scores. A suicide is nobody's frag; friendly fire is off, so
+      // a teammate can never be the killer.
+      if (src != dst && src >= 0 && src < MAX_ENTS && g_team[src] != g_team[dst]) {
+        int t = g_team[src] ? 1 : 0;
+        if (++g_team_score[t] >= sp_frag_limit()) match_end(MAX_ENTS + t);
+      }
       break;
     default:
       if (g_match.kills[src] >= sp_frag_limit()) match_end(src);
@@ -12880,6 +13025,10 @@ static void ent_damage(int ent, int dmg, int part, int src, v3 from, v3 at) {
   // limit is lifted to match (sp_frag_limit) so the match cannot end under the
   // menu, and the HUD is off, so no killfeed reports any of it.
   if (g_home && human_of_ent(ent) >= 0) return;
+  // FRIENDLY FIRE IS THE HOST'S CHOICE, off by default: then a teammate's
+  // round, blade or grenade does nothing and is not a hit on anyone's
+  // accuracy either. Your own grenade still hurts you either way.
+  if (team_mates(src, ent) && !team_ff()) return;
   if (rescue_on() && human_of_ent(ent) < 0) {
     if (human_of_ent(src) < 0) return;            // guards never hurt guards
     g_resc.detect[ent - 1] = 1.0f;                // ...and a hit guard knows
@@ -13751,7 +13900,10 @@ static void grenade_anim(const weapon_t *w, float alpha, gunanim_t *g) {
     if (t < (float)NADE_RELEASE_T) g->spoon = g->slide = 1.0f;   // pin and lever stay gone
   } else if (w->gr_cook > 0) {
     pb = NADE_COCK;
-    u = smooth01(f_clamp(((float)w->gr_cook - 8.0f + alpha) / 22.0f, 0.0f, 1.0f));
+    // The wind-up waits for the pin: a hand coming up to the shoulder while the
+    // other one is still reaching for the ring drags the ring out of its reach.
+    u = smooth01(f_clamp(((float)w->gr_cook - (float)NADE_PIN_T + 6.0f + alpha) / 26.0f,
+                         0.0f, 1.0f));
     // The off hand reaches in, takes the ring, and draws away.
     g->guard = sinf(f_clamp(((float)w->gr_cook + alpha) / (float)(NADE_PIN_T + 10), 0.0f, 1.0f) * F_PI);
     g->slide = w->gr_cook >= NADE_PIN_T / 2 ? 1.0f : 0.0f;    // pin is out
@@ -15147,6 +15299,14 @@ static void bot_tick(int bi) {
   b->fl_y *= flk;
   b->fl_p *= flk;
 
+  // A TEAMMATE IS NEVER HELD. The scan below refuses teammates, but a lock
+  // taken while he was an enemy (he switched sides, or joined onto ours) used
+  // to be kept by the hold logic — the bot went on shooting its own side.
+  if (b->tgt >= 0 && team_mates(bi + 1, b->tgt)) {
+    b->tgt = -1;
+    b->lose_t = 0;
+    bot_belief_clear(b);
+  }
   // Perception: keep the current target while it stays visible, remember it
   // briefly when line of sight breaks, rescan on a per-bot stagger.
   float tdist = 1e9f;
@@ -15215,6 +15375,7 @@ static void bot_tick(int bi) {
     bot_target_choice_t best = {.ent = -1, .score = -1.0e30f, .dist = 1.0e9f};
     ENT_FOREACH(e) {   // P1-54: without the human range, humans are invisible to the whole AI
       if (e == bi + 1 || !ent_alive(e)) continue;
+      if (team_mates(bi + 1, e)) continue;          // a teammate is not a target
       if (rescue_on() && !rescue_may_target(b, bi, e)) continue;
       // Cheap rejects FIRST: most candidates fail the cone/heard gate, and the
       // LOS trace is the expensive test. The range gate and the distance are
@@ -16054,6 +16215,10 @@ static void match_restart(void) {
   memset(&g_match, 0, sizeof g_match);   // the human roster lives OUTSIDE
   g_match.nbots = n;                     // g_match and survives this on purpose
   g_match.mode = g_cfg.sp_mode;          // the MATCH tab's choice lands HERE
+  g_team_score[0] = g_team_score[1] = 0;
+  // A team game started from a deathmatch roster: deal the bots that are
+  // already standing to their sides before anyone spawns.
+  tdm_deal_bots(0);
   g_match.round_win = -1;
   g_match.round_no = 1;
   g_ballistics = g_ballistics_srv || g_cfg.ballistics;   // latches per match
@@ -16197,7 +16362,7 @@ static void lms_tick(void) {
       int best = -1;
       float bd = 1e9f;
       ENT_FOREACH(e) {
-        if (e == i + 1 || !ent_alive(e)) continue;
+        if (e == i + 1 || !ent_alive(e) || team_mates(i + 1, e)) continue;
         v3 d = v3_sub(ent_pos(e), b->pos);
         float dd = v3_dot(d, d);
         if (dd < bd) { bd = dd; best = e; }
@@ -16524,17 +16689,45 @@ static void rescue_on_kill(int src, int dst, int hs) {
   }
 }
 
+// TEAM DEATHMATCH bot count: both sides topped up to the team size.
+static int match_bot_want(void) {
+  return teams_on() ? tdm_bot_want(0) + tdm_bot_want(1) : sp_bot_count();
+}
+// Deal the bots to the sides. Bots retire from the TOP of the range, so when a
+// human takes a place the count per side can come out wrong by one; the
+// highest-index bot of the over-full side changes sides and redeploys on its
+// new side's ground. A fresh bot simply joins whichever side is short.
+static void tdm_deal_bots(int respawn) {
+  if (!teams_on()) return;
+  int wa = tdm_bot_want(0), ca = 0;
+  for (int i = 0; i < g_match.nbots; i++) ca += g_team[i + 1] == 0;
+  for (int i = g_match.nbots - 1; i >= 0 && ca > wa; i--)
+    if (g_team[i + 1] == 0) { g_team[i + 1] = 1; ca--; if (respawn) bot_spawn(i); }
+  for (int i = g_match.nbots - 1; i >= 0 && ca < wa; i--)
+    if (g_team[i + 1] != 0) { g_team[i + 1] = 0; ca++; if (respawn) bot_spawn(i); }
+}
+static int tdm_new_bot_team(void) {
+  int ca = 0;
+  for (int i = 0; i < g_match.nbots; i++) ca += g_team[i + 1] == 0;
+  return ca < tdm_bot_want(0) ? 0 : 1;
+}
+
 // Runs once per sim tick: live-applies the BOTS slider (fresh bots spawn,
 // extras retire), services a queued restart, then ticks every active bot.
 static void match_tick(void) {
-  int want = sp_bot_count();
+  // Offline the local player's side is the TEAM page's choice.
+  if (!g_server && !g_online && g_humans_on[0]) g_team[0] = (signed char)(g_cfg.sp_team ? 1 : 0);
+  int want = match_bot_want();
   while (g_match.nbots < want) {
     int i = g_match.nbots++;
     g_match.kills[i + 1] = g_match.deaths[i + 1] = 0;
     g_match.shots[i + 1] = g_match.hits[i + 1] = 0;
+    // The side BEFORE the spawn: spawn_spot places a fighter on his side.
+    if (teams_on()) { g_match.nbots--; g_team[i + 1] = (signed char)tdm_new_bot_team(); g_match.nbots++; }
     bot_spawn(i);
   }
   while (g_match.nbots > want) g_bots[--g_match.nbots].active = 0;
+  tdm_deal_bots(1);
 
   // The server's half of the over countdown (see match_over_countdown): this
   // is the caller that owns the restart. Offline it returns immediately.
@@ -16559,7 +16752,10 @@ static void match_init(void) {
   g_match.round_no = 1;
   memset(g_bots, 0, sizeof g_bots);
   rescue_reset();
-  g_match.nbots = sp_bot_count();
+  g_team_score[0] = g_team_score[1] = 0;
+  if (!g_server && g_humans_on[0]) g_team[0] = (signed char)(g_cfg.sp_team ? 1 : 0);
+  g_match.nbots = match_bot_want();
+  tdm_deal_bots(0);
   for (int i = 0; i < g_match.nbots; i++) bot_spawn(i);
   for (int h = 0; h < MAX_HUMANS; h++)   // P1-62: every human starts with a
     if (g_humans_on[h])                  // solved skeleton, not garbage
@@ -17548,6 +17744,9 @@ static int net_srv_admit(uint32_t ip, uint16_t port, const char *name) {
   for (int i = 1; i < MAX_HUMANS; i++) if (!g_humans_on[i]) { h = i; break; }
   if (h < 0) return -1;
   g_humans_on[h] = 1;
+  // A side before the spawn (spawn_spot deploys on it): the emptier one. The
+  // player can change it from the TEAM page that opens on join.
+  if (teams_on()) { g_team[ent_of_human(h)] = -1; g_team[ent_of_human(h)] = (signed char)team_auto(); }
   net_srv_rebalance();               // fighter count stays constant
   net_srv_slot_reset(h, name);
   int conn = -1;
@@ -17666,6 +17865,17 @@ static void net_srv_packet(const unsigned char *b, int n, uint32_t ip, uint16_t 
       for (int i = 0; i < WP_COUNT; i++) np_wf(&w, g_cfg.wp[wp][i]);
     if (w.bad) slog("ACCEPT overflow at %d of %d bytes", (int)w.at, (int)sizeof out);
     net_udp_send(g_srv_fd, ip, port, out, (int)w.at);
+  } else if (type == NP_TEAM) {
+    int conn = net_conn_find(ip, port);     // token-gated, like LEAVE
+    if (conn < 0 || np_r32(&r) != g_conns[conn].token) return;
+    int t = np_r8(&r);
+    if (r.bad || t > 1 || !teams_on()) return;
+    int h = g_conns[conn].human, e = ent_of_human(h);
+    if (g_team[e] == t || team_humans(t) >= team_size()) return;   // same, or full
+    g_team[e] = (signed char)t;
+    // Changing sides is a redeploy on the new side's ground, not a death.
+    player_respawn(&g_players[h], e);
+    g_conns[conn].last_recv_ms = net_now_ms();
   } else if (type == NP_LEAVE) {
     int conn = net_conn_find(ip, port);     // token-gated: a bare LEAVE
     if (conn >= 0 && np_r32(&r) == g_conns[conn].token)
@@ -17805,6 +18015,43 @@ static int net_srv_lobby_pick(void) {
   return best;
 }
 
+// LAN DISCOVERY. A client looking for games broadcasts NET_SCAN_LEN bytes
+// starting with NET_SCAN_MAGIC; every server that hears it answers with a
+// NET_HERE_LEN-byte card (name, mode, map, players, version). Neither packet
+// carries NET_PROTO in bytes 0-1 — "BD" is 0x4442, never a protocol number —
+// so a scan reaches servers of ANY version and the card says which one it is,
+// and the list can show "UPDATE NEEDED" instead of a game that fails to join.
+// The answer is smaller than the question (44 < 64) and the question is
+// dropped below its floor, so the card can never be used as a reflector.
+#define NET_SCAN_LEN 64
+#define NET_HERE_LEN 44
+static const char NET_SCAN_MAGIC[8] = "BDSCAN1";
+static const char NET_HERE_MAGIC[8] = "BDHERE1";
+static uint32_t g_srv_uid;   // per-process id, so one server heard on two
+                             // interfaces is listed once
+static void net_srv_scan_reply(uint32_t ip, uint16_t port) {
+  int save = g_lobby, humans = 0;
+  for (int l = 0; l < g_srv.lobbies; l++) {
+    g_lobby = l;
+    for (int h = 0; h < MAX_HUMANS; h++) if (g_humans_on[h]) humans++;
+  }
+  g_lobby = 0;
+  int map = g_map_id;
+  g_lobby = save;
+  unsigned char out[NET_HERE_LEN] = {0};
+  np_wr w = {out, sizeof out, 0, 0};
+  for (int i = 0; i < 8; i++) np_w8(&w, (uint8_t)NET_HERE_MAGIC[i]);
+  np_w16(&w, NET_PROTO);
+  np_w16(&w, (uint16_t)g_srv.port);
+  np_w32(&w, g_srv_uid);
+  np_w8(&w, (uint8_t)humans);
+  np_w8(&w, (uint8_t)(g_srv.cap_public * g_srv.lobbies));
+  np_w8(&w, (uint8_t)g_srv.mode);
+  np_w8(&w, (uint8_t)map);
+  for (int i = 0; i < 24; i++) np_w8(&w, (uint8_t)g_srv.name[i]);
+  net_udp_send(g_srv_fd, ip, port, out, NET_HERE_LEN);
+}
+
 [[maybe_unused]] static void net_srv_poll(void) {
   if (g_srv_fd < 0) return;
   uint32_t epoch = (uint32_t)(time(NULL) / 30);
@@ -17812,6 +18059,10 @@ static int net_srv_lobby_pick(void) {
   uint32_t ip; uint16_t port;
   int n, guard = 0;
   while ((n = net_udp_recv(g_srv_fd, &ip, &port, b, sizeof b)) > 0 && guard++ < 256) {
+    if (n >= NET_SCAN_LEN && !memcmp(b, NET_SCAN_MAGIC, 8)) {   // a LAN scan
+      net_srv_scan_reply(ip, port);
+      continue;
+    }
     // ROUTE FIRST, DECODE SECOND. A known address goes to its own arena; a
     // stranger goes to the one the packing rule chose. Everything below this
     // line is the single-arena server that was here before, unchanged.
@@ -18037,8 +18288,19 @@ static int net_cl_connect(uint32_t ip, uint16_t port, const char *name) {
   snprintf(g_cl.name, sizeof g_cl.name, "%s", name && name[0] ? name : "PLAYER");
   g_cl.state = NC_CONNECTING;
   g_cl.connect_start_ms = net_now_ms();
+  g_cl_team_asked = 0;
   net_cl_send_connect();
   return 1;
+}
+// Ask the server for a side (TEAM page). Unacknowledged: NP_SCORES is the
+// answer, 4 Hz, and a lost request is simply a second press.
+static void net_cl_send_team(int t) {
+  if (g_cl.fd < 0 || g_cl.state != NC_PLAYING) return;
+  unsigned char b[8]; np_wr w = {b, sizeof b, 0, 0};
+  np_w16(&w, NET_PROTO); np_w8(&w, NP_TEAM);
+  np_w32(&w, g_cl.token);
+  np_w8(&w, (uint8_t)(t ? 1 : 0));
+  net_udp_send(g_cl.fd, g_cl.ip, g_cl.port, b, (int)w.at);
 }
 static void net_cl_disconnect(void) {
   // The sim tuning goes back to the player's own config BEFORE g_cl is wiped
@@ -18698,8 +18960,17 @@ static int net_cl_poll(void) {
           g_match.hits[e] = rows[i].hits;
           g_net_ping[e] = rows[i].ping;
           g_match.mscore[e] = rows[i].mscore;
+          g_team[e] = (signed char)rows[i].team;
         }
         g_match.mode = nm.mode;
+        g_net_team_size = nm.team_size;
+        g_net_team_fill = nm.team_fill & 1;
+        g_net_team_ff = (nm.team_fill >> 1) & 1;
+        g_team_score[0] = nm.tscore[0];
+        g_team_score[1] = nm.tscore[1];
+        // FIRST WORD OF A TEAM GAME: the player picks a side. The server has
+        // already put us on one (team_auto), so this is a choice, not a gate.
+        if (nm.mode == GM_TDM && !g_cl_team_asked) { g_cl_team_asked = 1; g_ui_team_prompt = 1; }
         g_match.round_t = nm.round_secs * TICK_HZ;   // display only on a client
         g_match.round_win = nm.round_win == 0xFF ? -1 : nm.round_win;
         g_match.round_no = nm.round_no;
@@ -20458,6 +20729,10 @@ static const char *AO_FS =
   GLSL_DEPTH
   "in vec2 vUV; uniform sampler2D uDepth; uniform vec2 uPix;\n"
   "uniform vec3 uSunV;\n"     // sun direction in VIEW space
+  // The sun shadow map, for the catch-light below: a glint is the SUN on a
+  // chamfer, and a chamfer in shade has none. uSmOn 0 = no map bound.
+  "uniform sampler2DShadow uSm; uniform mat4 uInvVP, uLightVP; uniform vec3 uSunW;\n"
+  "uniform float uSmOn;\n"
   "out vec4 oCol;\n"
   // Reconstruct at the depth TEXEL's centre, never at the sample's own uv: a
   // nearest-filtered depth paired with an off-centre position is a sawtooth on
@@ -20524,6 +20799,25 @@ static const char *AO_FS =
   "    if (e > edge) { edge = e; en = normalize(n + normalize(a - n * dot(a, n))); }\n"
   "  }\n"
   "  edge *= max(dot(en, uSunV), 0.0) * (1.0 - smoothstep(6.0, 22.0, z));\n"
+  // ...AND ONLY WHERE THE SUN ACTUALLY REACHES. The term was gated on the
+  // facing alone, so a figure standing in a building's shade had every bevel
+  // of every limb outlined in sunlight — and with the crease found from
+  // quantized depth, the outline came out as a dashed rule along each edge
+  // (the refinery's grazing sun made it the whole figure). The point is pulled
+  // 6 cm toward the sun first: the edge pixel IS a front face in the map, and
+  // testing it at its own depth would shadow every lit corner by itself.
+  "  if (edge > 0.0 && uSmOn > 0.5) {\n"
+  "    vec4 w = uInvVP * vec4(cuv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);\n"
+  "    vec4 l = uLightVP * vec4(w.xyz / w.w + uSunW * 0.06, 1.0);\n"
+  "    vec3 lp = l.xyz / l.w * 0.5 + 0.5;\n"
+  "    if (lp.z < 1.0) {\n"
+  "      vec2 t = 1.0 / vec2(textureSize(uSm, 0));\n"
+  "      edge *= 0.25 * (texture(uSm, vec3(lp.xy + vec2(-t.x, -t.y), lp.z))\n"
+  "                    + texture(uSm, vec3(lp.xy + vec2( t.x, -t.y), lp.z))\n"
+  "                    + texture(uSm, vec3(lp.xy + vec2(-t.x,  t.y), lp.z))\n"
+  "                    + texture(uSm, vec3(lp.xy + vec2( t.x,  t.y), lp.z)));\n"
+  "    }\n"
+  "  }\n"
   "  oCol = vec4(ao, cs, edge, 1.0);\n"
   "}\n";
 
@@ -22235,6 +22529,9 @@ static void ui_flush(void) {
 // Wrap a comma-triple palette macro + alpha into the float[4] the _c
 // primitives take: C4(C_BLAZE, 0.8f).
 #define C4(...) ((float[4]){__VA_ARGS__})
+// TEAM COLOURS, the HUD's half of the kit: ALPHA red, BRAVO blue, bright
+// enough to read as text on sky or wall. TEAM_RGB(t) expands to three floats.
+#define TEAM_RGB(t) ((t) ? 0.345f : 1.000f), ((t) ? 0.620f : 0.345f), ((t) ? 1.000f : 0.290f)
 
 static int   g_menu_open;
 static int   g_ui_backdrop;   // frosted blur layer was painted this frame
@@ -22417,8 +22714,145 @@ static int nav_focus_lr(void) {
   return g_ui_focus >= 0 && g_ui_focus < g_focus_rn && g_focus_r[g_ui_focus].lr;
 }
 
+// ---- MULTIPLAYER: host a game, find games on the LAN, join one -------------
+// The MULTIPLAYER page drives all three. Scanning runs only while that page is
+// on screen: one 64-byte broadcast a second per interface, and a game drops off
+// the list 3.5 s after its last answer.
+static int start_connect(const char *host, int port);
+#define MP_GAMES_MAX 8
+typedef struct {
+  uint32_t ip, uid, seen_ms, rtt_ms;
+  uint16_t port, proto;
+  uint8_t humans, cap, mode, map;
+  char name[25];
+} mp_game_t;
+static struct {
+  int fd;
+  uint32_t sent_ms;
+  int n;
+  mp_game_t g[MP_GAMES_MAX];
+} g_mp = {.fd = -1};
+static int g_mp_hosting;     // this process started the server it is on
+static int g_mp_host_fail;     // the last HOST GAME's server exited (port in use?)
+static int g_mp_host_req;      // HOST SETTINGS asked the MULTIPLAYER page to host
+
+static void mp_scan_stop(void) {
+  if (g_mp.fd >= 0) net_udp_close(g_mp.fd);
+  g_mp.fd = -1;
+  g_mp.n = 0;
+}
+static void mp_scan_tick(void) {
+  uint32_t now = net_now_ms();
+  if (g_mp.fd < 0) {
+    g_mp.fd = net_udp_open(0);
+    if (g_mp.fd < 0) return;
+    net_udp_bcast_on(g_mp.fd);
+    g_mp.sent_ms = now - 5000;
+  }
+  if (now - g_mp.sent_ms >= 1000) {
+    unsigned char q[NET_SCAN_LEN] = {0};
+    memcpy(q, NET_SCAN_MAGIC, 8);
+    uint32_t t[16];
+    int nt = net_bcast_targets(t, 16);
+    uint16_t ports[2] = {NET_PORT_DEF, (uint16_t)g_cfg.mp_port};
+    int np = g_cfg.mp_port != NET_PORT_DEF ? 2 : 1;
+    for (int i = 0; i < nt; i++)
+      for (int k = 0; k < np; k++) net_udp_send(g_mp.fd, t[i], ports[k], q, sizeof q);
+    g_mp.sent_ms = now;
+  }
+  unsigned char b[128];
+  uint32_t ip; uint16_t port;
+  int n, guard = 0;
+  while ((n = net_udp_recv(g_mp.fd, &ip, &port, b, sizeof b)) > 0 && guard++ < 64) {
+    if (n < NET_HERE_LEN || memcmp(b, NET_HERE_MAGIC, 8)) continue;
+    np_rd r = {b, (size_t)n, 8, 0};
+    mp_game_t g = {.ip = ip, .seen_ms = now, .rtt_ms = now - g_mp.sent_ms};
+    g.proto = np_r16(&r);
+    g.port = np_r16(&r);
+    g.uid = np_r32(&r);
+    g.humans = np_r8(&r);
+    g.cap = np_r8(&r);
+    g.mode = np_r8(&r);
+    g.map = np_r8(&r);
+    for (int i = 0; i < 24; i++) {          // hostile input: glyph policy, as names
+      char c = (char)np_r8(&r);
+      g.name[i] = c == ' ' ? ' ' : c ? name_glyph(c) : 0;
+      if (c && !g.name[i]) g.name[i] = '?';
+    }
+    g.name[24] = '\0';
+    if (r.bad || !g.port) continue;
+    if (!g.name[0]) snprintf(g.name, sizeof g.name, "BLINDDROP");
+    int slot = -1;
+    for (int i = 0; i < g_mp.n; i++)
+      if (g_mp.g[i].uid == g.uid && g_mp.g[i].port == g.port) { slot = i; break; }
+    if (slot >= 0) {
+      // Heard on two interfaces (loopback and the LAN for a server on this
+      // machine): keep the address it was first found at, refresh the rest.
+      g.ip = g_mp.g[slot].ip;
+      g_mp.g[slot] = g;
+    } else if (g_mp.n < MP_GAMES_MAX) {
+      g_mp.g[g_mp.n++] = g;
+    }
+  }
+  for (int i = 0; i < g_mp.n; )
+    if (now - g_mp.g[i].seen_ms > 3500) g_mp.g[i] = g_mp.g[--g_mp.n];
+    else i++;
+}
+static void mp_ip_str(uint32_t ip, char *out, size_t n) {
+  const unsigned char *q = (const unsigned char *)&ip;   // network order
+  snprintf(out, n, "%u.%u.%u.%u", q[0], q[1], q[2], q[3]);
+}
+static int mp_join(uint32_t ip, uint16_t port) {
+  g_net_secret = 0;                        // client uses the server's cookie
+  return net_cl_connect(ip, port, g_cfg.name);
+}
+// HOST GAME: the HOST SETTINGS (host_*) served; difficulty, frag limit,
+// rounds and ballistics are shared with SINGLEPLAYER. Rescue is a
+// single-player mission, so a host on it serves deathmatch instead.
+static int mp_host_start(void) {
+  if (!HOST_SUPPORTED) return 0;
+  char port[8], bots[8], skill[8], frag[8], rounds[8], name[24];
+  int mode = g_cfg.host_mode == GM_RESCUE || g_cfg.host_mode < 0 || g_cfg.host_mode >= GM_COUNT
+             ? 0 : g_cfg.host_mode;
+  int bc = g_cfg.host_bots < 0 ? 0 : g_cfg.host_bots > MAX_BOTS ? MAX_BOTS : g_cfg.host_bots;
+  snprintf(port, sizeof port, "%d", g_cfg.mp_port);
+  snprintf(bots, sizeof bots, "%d", bc);
+  snprintf(skill, sizeof skill, "%d", g_cfg.sp_diff);
+  snprintf(frag, sizeof frag, "%d", g_cfg.sp_frag);
+  snprintf(rounds, sizeof rounds, "%d", g_cfg.sp_rounds);
+  snprintf(name, sizeof name, "%s", g_cfg.name[0] ? g_cfg.name : "PLAYER");
+  char capp[8], tsz[8], tfl[8], tff[8];
+  snprintf(tff, sizeof tff, "%d", g_cfg.host_team_ff ? 1 : 0);
+  snprintf(capp, sizeof capp, "%d", MAX_HUMANS);
+  snprintf(tsz, sizeof tsz, "%d", g_cfg.host_team_size);
+  snprintf(tfl, sizeof tfl, "%d", g_cfg.host_team_fill ? 1 : 0);
+  char *argv[] = {"blinddrop", "--server", "--port", port,
+                  "--mode", (char *)GM_KEYS[mode], "--map", (char *)map_pick_key(g_cfg.host_map),
+                  "--cap-public", capp, "--cap-bots", bots, "--skill", skill,
+                  "--fraglimit", frag, "--rounds", rounds, "--name", name,
+                  "--team-size", tsz, "--team-fill", tfl, "--friendly-fire", tff,
+                  g_cfg.ballistics ? "--ballistics" : NULL, NULL};
+  g_mp_host_fail = 0;
+  // The port must be FREE first: with another server already on it, the
+  // child would fail its bind and exit while this client happily joined the
+  // stranger at 127.0.0.1 and called it hosting.
+  int probe = net_udp_open(g_cfg.mp_port);
+  if (probe < 0) { g_mp_host_fail = 1; return 0; }
+  net_udp_close(probe);
+  if (!host_spawn(argv)) { g_mp_host_fail = 1; return 0; }
+  g_mp_hosting = 1;
+  // The handshake resends every 250 ms for 4 s, which covers the server's own
+  // start-up (map generation) without a wait here.
+  return start_connect("127.0.0.1", g_cfg.mp_port);
+}
+static void mp_host_stop(void) {
+  host_kill();
+  g_mp_hosting = 0;
+}
+
 typedef enum { UI_PAGE_ROOT, UI_PAGE_MATCH, UI_PAGE_SETTINGS,
-               UI_PAGE_CONTROLS, UI_PAGE_DEV, UI_PAGE_ARMORY, UI_PAGE_COUNT } ui_page_t;
+               UI_PAGE_CONTROLS, UI_PAGE_DEV, UI_PAGE_ARMORY, UI_PAGE_ONLINE,
+               UI_PAGE_TEAM, UI_PAGE_HOST, UI_PAGE_COUNT } ui_page_t;
 
 static ui_page_t g_ui_page = UI_PAGE_ROOT;
 
@@ -22443,6 +22877,24 @@ static void platform_menu_changed(void);
 static void platform_vsync_changed(void);
 
 static int g_ui_name_edit;  // Settings page: the name field is capturing keys
+static int g_ui_addr_edit;  // MULTIPLAYER page: the address field is capturing keys
+// The address field rides the name field's whole key path (both backends, the
+// harness `key`), so ui_name_key hands its keys over while it has focus. An
+// address is a dotted quad or a host name, optionally :port — lower case, digits,
+// '.', '-' and ':' — and it is stored in mp_host, so it is remembered.
+static void ui_addr_key(const char *tok) {
+  size_t l = strlen(g_cfg.mp_host);
+  if (!strcmp(tok, "enter") || !strcmp(tok, "escape")) { g_ui_addr_edit = 0; return; }
+  if (!strcmp(tok, "back")) { if (l) g_cfg.mp_host[l - 1] = '\0'; return; }
+  if (!tok[0] || tok[1] || l >= sizeof g_cfg.mp_host - 1) return;
+  char c = tok[0];
+  if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+  if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-' || c == ':') {
+    g_cfg.mp_host[l] = c;
+    g_cfg.mp_host[l + 1] = '\0';
+  }
+}
+#define UI_TEXT_EDIT (g_ui_name_edit || g_ui_addr_edit)
 
 // THE ONE FIELD IN THE GAME THAT NEEDS A KEYBOARD, ON THE ONE DEVICE THAT HAS
 // NONE. The name editor took keys and nothing else, so a pad player reached it,
@@ -22471,6 +22923,7 @@ static int ui_kb_cols(int r) { return r < UI_KB_GROWS ? UI_KB_COLS : 2; }
 // Feed a token to the name editor: single chars append (A-Z/0-9), "back"
 // deletes, "enter"/"escape" finish. An empty name falls back to PLAYER.
 static void ui_name_key(const char *tok) {
+  if (g_ui_addr_edit) { ui_addr_key(tok); return; }
   size_t l = strlen(g_cfg.name);
   if (!strcmp(tok, "enter") || !strcmp(tok, "escape")) {
     if (!l) snprintf(g_cfg.name, sizeof g_cfg.name, "PLAYER");
@@ -22541,14 +22994,15 @@ static void ui_kb_nav(int ev) {
 
 [[maybe_unused]] static const char *ui_page_name(ui_page_t page) {
   static const char *const NAME[UI_PAGE_COUNT] = {
-    "root", "match", "settings", "controls", "dev", "armory"
+    "root", "match", "settings", "controls", "dev", "armory", "online", "team", "host"
   };
   return page >= 0 && page < UI_PAGE_COUNT ? NAME[page] : "root";
 }
 
 static void ui_route(ui_page_t page) {
   if (page < 0 || page >= UI_PAGE_COUNT) page = UI_PAGE_ROOT;
-  if (g_ui_name_edit) ui_name_key("enter");
+  if (UI_TEXT_EDIT) ui_name_key("enter");
+  if (page != UI_PAGE_ONLINE && page != UI_PAGE_HOST) mp_scan_stop();   // the scan lives with its page
   g_ui_rebind = -1;
   g_ui_drag = 0;
   // THE RAIL REMEMBERS WHERE YOU WERE. Coming back from SETTINGS used to land
@@ -22580,7 +23034,8 @@ static void ui_audio_pause(int on) {
 }
 
 static void ui_close_menu(void) {
-  if (g_ui_name_edit) ui_name_key("enter");
+  if (UI_TEXT_EDIT) ui_name_key("enter");
+  mp_scan_stop();
   g_menu_open = 0;
   g_ui_root_focus = 0;   // next session's rail is not the same rows
   // ...and the BOOT SCREEN is gone for the session. Every later menu open is a
@@ -22611,8 +23066,9 @@ static void ui_open_menu(void) {
 
 // ESC: finish name entry / cancel a rebind, else close (and save), else open.
 static void ui_on_escape(void) {
-  if (g_ui_name_edit) ui_name_key("escape");
+  if (UI_TEXT_EDIT) ui_name_key("escape");
   else if (g_ui_rebind >= 0) g_ui_rebind = -1;
+  else if (g_menu_open && g_ui_page == UI_PAGE_HOST) ui_route(UI_PAGE_ONLINE);
   else if (g_menu_open && g_ui_page != UI_PAGE_ROOT) ui_route(UI_PAGE_ROOT);
   else if (g_menu_open) ui_close_menu();
   else ui_open_menu();
@@ -23178,24 +23634,33 @@ static void ui_home(int click, float cx, float cy) {
                     : g_cl.reject == NR_PROTO ? "VERSION MISMATCH"
                     : g_cl.reject == NR_WORLD ? "ARENA MISMATCH"
                                               : "SERVER UNREACHABLE")
-                   : g_cfg.mp_host[0] ? "QUICK JOIN" : "SET MP_HOST IN CONFIG";
+                   : "HOST / FIND GAMES / JOIN";
     // ...and online the same slot is the way OUT of the match, which is the one
     // destination a live session has and a boot screen does not. It keeps the
     // full width the mode tile has: it is the same slot, not a smaller one.
     if (g_online) {
       int armed = g_ui_arm == UI_ARM_LEAVE;
       if (ui_tile(armed ? "CONFIRM LEAVE" : "LEAVE MATCH",
-                  armed ? "THE MATCH ENDS FOR YOU" : "BACK TO SINGLEPLAYER",
+                  armed ? (g_mp_hosting ? "THE GAME ENDS FOR EVERYONE" : "THE MATCH ENDS FOR YOU")
+                        : g_mp_hosting ? "YOU ARE HOSTING - LEAVING ENDS IT" : "BACK TO SINGLEPLAYER",
                   rx, y, rw, sh2, 1.25f, click, cx, cy, 1)) {
         if (ui_arm_take(UI_ARM_LEAVE)) { leave_match(); ui_close_menu(); }
       }
-    } else if (ui_tile(ml, ms, rx, y, rw, sh2, 1.25f, click, cx, cy, 0) && !busy &&
-               g_cfg.mp_host[0]) {
+    } else if (ui_tile(ml, ms, rx, y, rw, sh2, 1.25f, click, cx, cy, 0)) {
       g_ui_arm = UI_ARM_NONE;
-      if (start_connect(g_cfg.mp_host, g_cfg.mp_port)) ui_close_menu();
+      ui_route(UI_PAGE_ONLINE);
     }
   }
   y += sh2 + gap;
+
+  // A TEAM GAME has a side to change: its own tile while one is running.
+  if (teams_on() && !g_home && g_local_ent >= 0) {
+    char tsub[48];
+    snprintf(tsub, sizeof tsub, "YOU ARE %s \x05 CHANGE SIDE", TEAM_NAMES[team_of(g_local_ent) == 1]);
+    if (ui_tile("TEAM", tsub, rx, y, rw, sh2, 1.25f, click, cx, cy, 0))
+      ui_route(UI_PAGE_TEAM);
+    y += sh2 + gap;
+  }
 
   // THE ARMORY: what you carry. Its caption is the current loadout, so the
   // rail says what you will see in your hands before you open the page.
@@ -23444,7 +23909,7 @@ static void ui_menu(void) {
         break;
       case NAV_BACK:
         if (g_ui_page == UI_PAGE_ROOT) ui_close_menu();
-        else ui_route(UI_PAGE_ROOT);
+        else ui_route(g_ui_page == UI_PAGE_HOST ? UI_PAGE_ONLINE : UI_PAGE_ROOT);
         break;
       default: g_nav_act = ev; break;
     }
@@ -23505,7 +23970,7 @@ static void ui_menu(void) {
   // vertices; ui_panel is a hundred). The height cache is per page and the
   // layout is stable per state, so the worst case is one frame of lag after a
   // row appears — invisible, and the hit-tests never read ph.
-  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344, 200};
+  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344, 200, 260, 200, 300};
   ui_page_t drawn_page = g_ui_page;
   float pw = 340, px = g_ui_vw * 0.5f - pw * 0.5f;
   float ph = ph_page[drawn_page];
@@ -23518,7 +23983,8 @@ static void ui_menu(void) {
   // ROOT is not one of these any more: this panel draws FORMS, and the entry
   // screen is not a form. Its slot stays so the array indexes by page.
   static const char *const PAGE_TITLE[UI_PAGE_COUNT] = {
-    "", "SINGLEPLAYER", "SETTINGS", "CONTROLS", "DEV TOOLS", "ARMORY"
+    "", "SINGLEPLAYER", "SETTINGS", "CONTROLS", "DEV TOOLS", "ARMORY", "MULTIPLAYER",
+    "CHOOSE TEAM", "HOST SETTINGS"
   };
   ui_textb(PAGE_TITLE[drawn_page], px + 16, py + 9, 1.6f, C_BONE, 1);
   ui_rect(px + 16, py + 28, pw - 32, 1, C_BONE, 0.14f);
@@ -23894,6 +24360,23 @@ static void ui_menu(void) {
       ui_text("GUARDS", px + 16, y + 3, 1, C_TEXT, 1);
       ui_text(gl, px + pw - 16 - ui_text_width(gl, 1), y + 4, 1, C_HAZE, 1);
       y += 15;
+    } else if (g_cfg.sp_mode == GM_TDM) {
+      // TEAM DEATHMATCH offline: places per side (1v1 .. 9v9, bots fill them
+      // all) and which side this player starts on. Bot fill and friendly fire
+      // are a HOST's choices: they live on MULTIPLAYER > HOST SETTINGS.
+      static const char *const TSZ[TEAM_SIZE_MAX] = {
+        "1 V 1", "2 V 2", "3 V 3", "4 V 4", "5 V 5", "6 V 6", "7 V 7", "8 V 8", "9 V 9"};
+      int ti = g_cfg.sp_team_size - 1;
+      ui_cycle("TEAM SIZE", TSZ, TEAM_SIZE_MAX, &ti, px, pw, y, click, cx, cy);
+      g_cfg.sp_team_size = ti + 1;
+      y += 15;
+      int was = g_cfg.sp_team;
+      ui_cycle("YOUR TEAM", TEAM_NAMES, 2, &g_cfg.sp_team, px, pw, y, click, cx, cy);
+      if (g_cfg.sp_team != was && teams_on() && !g_online && !g_home) {
+        g_team[0] = (signed char)g_cfg.sp_team;     // redeploy on the new side
+        player_respawn(&g_players[0], 0);
+      }
+      y += 15;
     } else {
       float v = (float)g_cfg.sp_bots;
       y = ui_param_row(&SP_BOTS_DEF, &v, DRAG_BOTS, px, y, click, cx, cy);
@@ -23924,6 +24407,243 @@ static void ui_menu(void) {
       ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
       y += 15;
     }
+  } else if (drawn_page == UI_PAGE_TEAM) {
+    // CHOOSE TEAM. Each side's button says how many of its places humans
+    // hold; a side whose places are all taken by humans is FULL and refuses
+    // the press (the server refuses it too). Choosing redeploys you on that
+    // side's ground and closes the menu. Online the request is a packet and
+    // the next score update is the answer.
+    y += 4;
+    int mine = g_local_ent >= 0 ? team_of(g_local_ent) : -1;
+    for (int t = 0; t < 2; t++) {
+      char lb[64];
+      int hu = team_humans(t), sz = team_size();
+      int full = t != mine && hu >= sz;
+      snprintf(lb, sizeof lb, "%s%s   %d/%d PLAYERS%s", TEAM_NAMES[t],
+               t == mine ? "  (YOU)" : "", hu, sz, full ? "  FULL" : "");
+      if (ui_button(lb, px + 16, y, pw - 32, 18, click, cx, cy, 0) && !full) {
+        if (g_online) net_cl_send_team(t);
+        else {
+          g_cfg.sp_team = t;
+          if (g_team[0] != t) { g_team[0] = (signed char)t; player_respawn(&g_players[0], 0); }
+        }
+        ui_close_menu();
+      }
+      y += 22;
+      // Who is on it: humans first, bots after — the names a player will see
+      // over the teammate chevrons.
+      char roster[96];
+      int k = 0, cnt = 0;
+      roster[0] = '\0';
+      for (int pass = 0; pass < 2; pass++)
+        ENT_FOREACH(e) {
+          if (team_of(e) != t || (human_of_ent(e) >= 0) != (pass == 0)) continue;
+          const char *nm = ent_name(e);
+          int l = (int)strlen(nm);
+          if (k + l + 2 >= (int)sizeof roster - 4) { cnt++; continue; }
+          k += snprintf(roster + k, sizeof roster - (size_t)k, "%s%s", k ? "  " : "", nm);
+        }
+      if (cnt) snprintf(roster + k, sizeof roster - (size_t)k, " +%d", cnt);
+      if (!roster[0]) snprintf(roster, sizeof roster, "EMPTY");
+      ui_text_ex(roster, px + 16, y, 0.75f, TXT_REG, 1.0f, C4(C_HAZE, 0.9f));
+      y += 14;
+    }
+    ui_text_ex(team_fill() ? "BOTS TAKE THE PLACES NO PLAYER HOLDS" : "NO BOTS IN THIS GAME",
+               px + 16, y, 0.8f, TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
+    y += 11;
+    ui_text_ex(team_ff() ? "FRIENDLY FIRE ON" : "FRIENDLY FIRE OFF",
+               px + 16, y, 0.8f, TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
+    y += 18;
+    if (ui_button("PLAY", px + 16, y, pw - 32, 15, click, cx, cy, 0)) ui_close_menu();
+    y += 18;
+  } else if (drawn_page == UI_PAGE_ONLINE) {
+    // MULTIPLAYER: host, find, join — in that order, because the first person
+    // of a group to open this page is the one who hosts, and everyone after
+    // them finds the game already listed under it. A join keeps the page up
+    // with its status line until the server lets us in, then the menu closes
+    // on its own; a refusal stays on screen with its reason.
+    static int s_wait, s_badaddr;
+    mp_scan_tick();
+    int st = g_cl.state;
+    int busy = st == NC_CONNECTING || st == NC_JOINING;
+    if (g_mp_hosting && !g_online && !busy && !host_alive()) {
+      g_mp_hosting = 0;          // its server exited: the port is taken, usually
+      g_mp_host_fail = 1;
+    }
+    if (s_wait && g_online) { s_wait = 0; ui_close_menu(); }
+    if (s_wait && st == NC_FAILED) s_wait = 0;
+    y += 4;
+    {
+      int gm = g_cfg.host_mode == GM_RESCUE || g_cfg.host_mode < 0 ||
+               g_cfg.host_mode >= GM_COUNT ? 0 : g_cfg.host_mode;
+      int mi = g_cfg.host_map >= 0 && g_cfg.host_map <= MAP_ROTATE ? g_cfg.host_map : 0;
+      const char *hl = !HOST_SUPPORTED ? "HOSTING NEEDS THE LINUX BUILD"
+                     : busy && g_mp_hosting ? "STARTING SERVER..." : "HOST A GAME";
+      int go = ui_button(hl, px + 16, y, pw - 32, 18, click, cx, cy, 0);
+      if (g_mp_host_req) { g_mp_host_req = 0; go = 1; }   // HOST SETTINGS' own button
+      if (go && HOST_SUPPORTED && !busy && !g_online) {
+        if (UI_TEXT_EDIT) ui_name_key("enter");
+        s_badaddr = 0;
+        if (mp_host_start()) s_wait = 1;
+      }
+      y += 22;
+      // The game this player would host, in one line; the row opens its page.
+      char hs[80];
+      if (gm == GM_TDM)
+        snprintf(hs, sizeof hs, "TEAM DM / %s / %dV%d%s%s", MAP_PICK_NAMES[mi],
+                 g_cfg.host_team_size, g_cfg.host_team_size,
+                 g_cfg.host_team_fill ? " + BOTS" : "", g_cfg.host_team_ff ? " / FF" : "");
+      else
+        snprintf(hs, sizeof hs, "%s / %s / %d BOT%s", GM_NAMES[gm],
+                 MAP_PICK_NAMES[mi], g_cfg.host_bots, g_cfg.host_bots == 1 ? "" : "S");
+      if (ui_pill("HOST SETTINGS", hs, px, pw, y, 0, 0, click, cx, cy) && !g_online)
+        ui_route(UI_PAGE_HOST);
+      y += 17;
+      uint32_t la[4];
+      int nla = net_local_addrs(la, 4);
+      if (nla > 0) {
+        char ab[24], al[64];
+        mp_ip_str(la[0], ab, sizeof ab);
+        snprintf(al, sizeof al, "YOUR ADDRESS  %s", ab);
+        ui_text_ex(al, px + 16, y, 0.85f, TXT_REG, 1.0f, C4(C_HAZE, 0.9f));
+        y += 11;
+      }
+      y += 8;
+    }
+    ui_section("GAMES ON YOUR NETWORK", px, pw, y);
+    y += 14;
+    if (!g_mp.n) {
+      static const char *const DOTS[4] = {"SEARCHING", "SEARCHING.", "SEARCHING..", "SEARCHING..."};
+      ui_text(DOTS[(int)(g_ui_time * 2.0f) & 3], px + 16, y + 3, 1, C_DIM, 1);
+      y += 15;
+    }
+    for (int i = 0; i < g_mp.n; i++, y += 15) {
+      const mp_game_t *g = &g_mp.g[i];
+      char info[48];
+      if (g->proto != NET_PROTO) snprintf(info, sizeof info, "UPDATE NEEDED");
+      else snprintf(info, sizeof info, "%s / %s  %d/%d",
+                    GM_NAMES[g->mode < GM_COUNT ? g->mode : 0],
+                    MAP_PICK_NAMES[g->map <= MAP_COUNT ? g->map : 0], g->humans, g->cap);
+      if (ui_pill(g->name, info, px, pw, y, 0, 0, click, cx, cy) && !busy && !g_online &&
+          g->proto == NET_PROTO) {
+        if (UI_TEXT_EDIT) ui_name_key("enter");
+        s_badaddr = 0;
+        if (mp_join(g->ip, g->port)) s_wait = 1;
+      }
+    }
+    y += 8;
+    ui_section("JOIN BY ADDRESS", px, pw, y);
+    y += 14;
+    {
+      char shown[72];
+      snprintf(shown, sizeof shown, "%s%s",
+               g_cfg.mp_host[0] ? g_cfg.mp_host : g_ui_addr_edit ? "" : "TYPE AN IP",
+               g_ui_addr_edit ? "-" : "");
+      if (ui_pill("ADDRESS", shown, px, pw, y, g_ui_addr_edit, 60, click, cx, cy)) {
+        if (g_ui_addr_edit) ui_name_key("enter");
+        else { if (g_ui_name_edit) ui_name_key("enter"); g_ui_addr_edit = 1; }
+      }
+      y += 17;
+      if (ui_button("JOIN", px + 16, y, pw - 32, 15, click, cx, cy, 0) &&
+          g_cfg.mp_host[0] && !busy && !g_online) {
+        if (UI_TEXT_EDIT) ui_name_key("enter");
+        char host[64]; int port = g_cfg.mp_port;
+        snprintf(host, sizeof host, "%s", g_cfg.mp_host);
+        char *colon = strchr(host, ':');
+        if (colon) { *colon = '\0'; port = atoi(colon + 1); }
+        s_badaddr = !start_connect(host, port > 0 && port < 65536 ? port : g_cfg.mp_port);
+        if (!s_badaddr) s_wait = 1;
+      }
+      y += 20;
+    }
+    {
+      char sl[96];
+      sl[0] = '\0';
+      if (busy) snprintf(sl, sizeof sl, "CONNECTING...");
+      else if (s_badaddr) snprintf(sl, sizeof sl, "ADDRESS NOT FOUND");
+      else if (g_mp_host_fail)
+        snprintf(sl, sizeof sl, "COULD NOT HOST - IS PORT %d IN USE?", g_cfg.mp_port);
+      else if (st == NC_FAILED)
+        snprintf(sl, sizeof sl, "%s", g_cl.reject == NR_FULL  ? "GAME FULL"
+                                    : g_cl.reject == NR_PROTO ? "VERSION MISMATCH - UPDATE"
+                                    : g_cl.reject == NR_WORLD ? "ARENA MISMATCH"
+                                                              : "NO ANSWER FROM THAT ADDRESS");
+      if (sl[0]) {
+        if (busy) ui_text(sl, px + 16, y, 1, C_TEXT, 1);
+        else      ui_text(sl, px + 16, y, 1, C_ACCENT, 1);
+        y += 12;
+      }
+      char nt[96];
+      snprintf(nt, sizeof nt, "OVER THE INTERNET THE HOST FORWARDS UDP %d", g_cfg.mp_port);
+      ui_text_ex(nt, px + 16, y, 0.8f, TXT_REG, 1.0f, C4(C_HAZE, 0.7f));
+      y += 9;
+    }
+  } else if (drawn_page == UI_PAGE_HOST) {
+    // HOST SETTINGS: the game this player serves when they press HOST A GAME.
+    // Apart from SINGLEPLAYER's mode/map/bots, so setting up a team game for
+    // friends never rewrites the solo match (and the reverse). Difficulty,
+    // the frag limit / rounds and ballistics are the shared match rules.
+    static const int HMODES[] = {GM_DM, GM_TDM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS};
+    enum { NHM = (int)(sizeof HMODES / sizeof HMODES[0]) };
+    const char *hmn[NHM];
+    int hi = 0;
+    for (int i = 0; i < NHM; i++) {
+      hmn[i] = GM_NAMES[HMODES[i]];
+      if (HMODES[i] == g_cfg.host_mode) hi = i;
+    }
+    ui_section("GAME", px, pw, y);
+    y += 14;
+    ui_cycle("MODE", hmn, NHM, &hi, px, pw, y, click, cx, cy);
+    g_cfg.host_mode = HMODES[hi];
+    y += 15;
+    ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.host_map, px, pw, y, click, cx, cy);
+    y += 15;
+    ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
+    y += 15;
+    static const char *const DIFF_OPTS[3] = {"EASY", "NORMAL", "HARD"};
+    ui_cycle("BOT DIFFICULTY", DIFF_OPTS, 3, &g_cfg.sp_diff, px, pw, y, click, cx, cy);
+    y += 15;
+    if (g_cfg.host_mode == GM_LMS) {
+      float v = (float)g_cfg.sp_rounds;
+      y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
+      g_cfg.sp_rounds = (int)v;
+    } else if (g_cfg.host_mode != GM_GUN) {
+      float v = (float)g_cfg.sp_frag;
+      y = ui_param_row(&SP_FRAG_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
+      g_cfg.sp_frag = (int)v;
+    }
+    y += 4;
+    if (g_cfg.host_mode == GM_TDM) {
+      ui_section("TEAMS", px, pw, y);
+      y += 14;
+      static const char *const TSZ[TEAM_SIZE_MAX] = {
+        "1 V 1", "2 V 2", "3 V 3", "4 V 4", "5 V 5", "6 V 6", "7 V 7", "8 V 8", "9 V 9"};
+      int ti = g_cfg.host_team_size - 1;
+      if (ti < 0 || ti >= TEAM_SIZE_MAX) ti = 4;
+      ui_cycle("TEAM SIZE", TSZ, TEAM_SIZE_MAX, &ti, px, pw, y, click, cx, cy);
+      g_cfg.host_team_size = ti + 1;
+      y += 15;
+      ui_toggle("FILL TEAMS WITH BOTS", &g_cfg.host_team_fill, px, pw, y, click, cx, cy);
+      y += 15;
+      ui_toggle("FRIENDLY FIRE", &g_cfg.host_team_ff, px, pw, y, click, cx, cy);
+      y += 15;
+      ui_text_ex("PLAYERS WHO JOIN CHOOSE ALPHA OR BRAVO", px + 16, y + 1, 0.8f, TXT_REG,
+                 1.0f, C4(C_HAZE, 0.75f));
+      y += 12;
+    } else {
+      ui_section("BOTS", px, pw, y);
+      y += 14;
+      float v = (float)g_cfg.host_bots;
+      y = ui_param_row(&SP_BOTS_DEF, &v, DRAG_BOTS, px, y, click, cx, cy);
+      g_cfg.host_bots = (int)v;
+    }
+    y += 6;
+    if (HOST_SUPPORTED &&
+        ui_button("HOST A GAME", px + 16, y, pw - 32, 18, click, cx, cy, 0) && !g_online) {
+      g_mp_host_req = 1;
+      ui_route(UI_PAGE_ONLINE);
+    }
+    y += 14;
   } else if (drawn_page == UI_PAGE_ARMORY) {
     // Cosmetic only, and it says so: nothing here changes how a weapon
     // handles, and every choice is visible the moment the menu closes.
@@ -24055,7 +24775,7 @@ static void ui_menu(void) {
   if (drawn_page != UI_PAGE_ROOT) {
     y += 8;
     if (ui_button("BACK", px + 16, y, pw - 32, 16, click, cx, cy, 0))
-      ui_route(UI_PAGE_ROOT);
+      ui_route(drawn_page == UI_PAGE_HOST ? UI_PAGE_ONLINE : UI_PAGE_ROOT);
     y += 18;
   }
 
@@ -24207,6 +24927,15 @@ static void ui_scoreboard(void) {
     }
     idx[j] = v;
   }
+  // TEAM DEATHMATCH: my side first, then theirs, each in score order (a
+  // stable partition of the sorted list).
+  if (teams_on() && g_local_ent >= 0) {
+    int tmp[MAX_ENTS], k = 0, mt = team_of(g_local_ent);
+    for (int pass = 0; pass < 2; pass++)
+      for (int i = 0; i < n; i++)
+        if ((team_of(idx[i]) == mt) == (pass == 0)) tmp[k++] = idx[i];
+    memcpy(idx, tmp, sizeof(int) * (size_t)n);
+  }
   // A FULL ROSTER DOES NOT FIT, and it must not be allowed to try. 28 entities
   // at 11 units plus the header is 354 against a 360-unit screen, and the
   // winner banner pushes the panel down another 40 — so the bottom rows were
@@ -24252,7 +24981,9 @@ static void ui_scoreboard(void) {
   // (added in the UI phase); here the composition is what matters.
   int nh = 0, nb = 0;
   ENT_FOREACH(e) { if (human_of_ent(e) >= 0) nh++; else nb++; }
-  if (nh > 1) snprintf(sub, sizeof sub, "%d PLAYERS \x05 %d BOTS", nh & 63, nb & 63);
+  if (gm == GM_TDM) snprintf(sub, sizeof sub, "ALPHA %d \x05 BRAVO %d",
+                            g_team_score[0] & 0xFFFF, g_team_score[1] & 0xFFFF);
+  else if (nh > 1) snprintf(sub, sizeof sub, "%d PLAYERS \x05 %d BOTS", nh & 63, nb & 63);
   else if (gm == GM_GUN) snprintf(sub, sizeof sub, "KNIFE KILL WINS");
   else if (gm == GM_LMS) snprintf(sub, sizeof sub, "FIRST TO %d ROUNDS", mode_round_goal());
   else        snprintf(sub, sizeof sub, "FIRST TO %d",
@@ -24302,11 +25033,18 @@ static void ui_scoreboard(void) {
     } else if ((i & 1) == 0) {
       ui_rect(px + 6, y - 2, pw - 12, 11, C_BONE, 0.03f);
     }
+    // The side, in its kit colour: a bar and the name, ALPHA red, BRAVO blue.
+    int st = teams_on() ? team_of(e) : -1;
+    if (st >= 0 && e != g_local_ent) ui_rect(px + 6, y - 2, 2, 11, TEAM_RGB(st), 0.9f);
     snprintf(buf, sizeof buf, "%d", i + 1);
     ui_text_ex(buf, px + 26 - ui_text_width(buf, 0.9f), y + 0.5f, 0.9f, TXT_REG, 0,
                e == g_local_ent ? C4(C_BLAZE, 1) : C4(C_HAZE, 0.8f));
     float nx = xn + (marked ? 8.0f : 0.0f);
-    if (e == g_local_ent) {
+    if (st >= 0) {
+      if (marked) ui_text("\x01", xn, y, 1, TEAM_RGB(st), 1);
+      if (e == g_local_ent) ui_textb(ent_name(e), nx, y, 1, TEAM_RGB(st), 1);
+      else                  ui_text(ent_name(e), nx, y, 1, TEAM_RGB(st), 1);
+    } else if (e == g_local_ent) {
       if (marked) ui_text("\x01", xn, y, 1, C_BLAZE, 1);
       ui_textb(ent_name(e), nx, y, 1, C_BLAZE, 1);
     } else if (marked) {
@@ -24366,6 +25104,9 @@ static void hud_enemy_marks(const player_t *p) {
   v3 eye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
   ENT_FOREACH(e) {
     if (e == g_local_ent || !ent_alive(e)) continue;
+    // A teammate is not an enemy: he already carries the team chevron, and
+    // a second, hostile one over the same head said both things at once.
+    if (team_mates(g_local_ent, e)) continue;
     v3 head = ent_aimpoint(e);
     head.y += 0.62f;
     v3 d = v3_sub(head, eye);
@@ -24379,8 +25120,16 @@ static void hud_enemy_marks(const player_t *p) {
     // Outline first, then the core: readable on sky and on shadow alike.
     ui_capsule(sx - w, y0 - hgt, sx, y0, 1.7f, 0.02f, 0.03f, 0.04f, 0.55f * a);
     ui_capsule(sx, y0, sx + w, y0 - hgt, 1.7f, 0.02f, 0.03f, 0.04f, 0.55f * a);
-    ui_capsule(sx - w, y0 - hgt, sx, y0, 0.85f, C_THREAT, a);
-    ui_capsule(sx, y0, sx + w, y0 - hgt, 0.85f, C_THREAT, a);
+    // In TEAM DEATHMATCH the core is the ENEMY SIDE's colour: an ALPHA
+    // player's own chevrons are red, so a red enemy mark would read as a mate.
+    int et = teams_on() ? team_of(e) : -1;
+    if (et >= 0) {
+      ui_capsule(sx - w, y0 - hgt, sx, y0, 0.85f, TEAM_RGB(et), a);
+      ui_capsule(sx, y0, sx + w, y0 - hgt, 0.85f, TEAM_RGB(et), a);
+    } else {
+      ui_capsule(sx - w, y0 - hgt, sx, y0, 0.85f, C_THREAT, a);
+      ui_capsule(sx, y0, sx + w, y0 - hgt, 0.85f, C_THREAT, a);
+    }
   }
 }
 
@@ -24972,6 +25721,8 @@ typedef struct {
   int delay;        // ticks before the bolt starts (a ricochet waits for its parent)
   int rico;         // 1 = a skip off a face: starts at `a`, no 3 m lead, thinner
   int smoke;        // muzzle smoke still to be released at the anchored muzzle
+  int seen;         // a frame has drawn it: `base` holds the age it was first seen at
+  float base;
 } tracer_t;
 // `fresh` is a render latch, not a lifetime: it marks a flash no frame has
 // shown yet and is cleared by the first draw. Tick counting alone cannot
@@ -25668,7 +26419,8 @@ static void vfx_on_event(const event_t *e) {
         float mv = tl->v;
         float sl = v3_len(v3_sub(e->a, muz));
         float fly = (sl + fmaxf(tl->len, tl->span * sl)) / mv;
-        int life = (int)fly + 2;
+        // +2 for the ticks before the first frame that draws it (see `base`).
+        int life = (int)fly + 4;
         life = life < 3 ? 3 : life > TRACER_TICKS ? TRACER_TICKS : life;
         // A miss into the open sky has no line worth leaving a wake on.
         int wake = e->k != 0 || sl < GUN_RANGE * 0.5f ? tl->wake : 0;
@@ -25827,7 +26579,7 @@ static void vfx_on_event(const event_t *e) {
             float pl = v3_len(v3_sub(pt->b, pt->a));
             int delay = (int)fmaxf(0.0f, (pl - 3.0f) / pt->v);
             float v = pt->v * 0.75f;
-            int life = delay + (int)((L + 2.2f) / v) + 2;
+            int life = delay + (int)((L + 2.2f) / v) + 4;
             g_tracers[slot] = (tracer_t){.a = o, .b = v3_add(o, v3_scale(r, L)), .d = r,
                                          .life = life, .life0 = life, .src = e->src,
                                          .wpn = pt->wpn, .v = v, .delay = delay, .rico = 1};
@@ -26065,7 +26817,7 @@ static void vfx_on_event(const event_t *e) {
     if (!g_home && !rescue_on() && !g_ms.counted) {
       g_ms.counted = 1;
       g_cfg.st_matches++;
-      if (e->k == g_local_ent) g_cfg.st_wins++;
+      if (won_by_me(e->k)) g_cfg.st_wins++;
     }
     break;
   case EV_RESPAWN:
@@ -32426,6 +33178,11 @@ typedef struct {
 // never varies. 0 is the shipped sand kit (bot 0 keeps it). Set by the figure
 // draw sites from the entity id, so a corpse keeps the colour it fell in.
 static int g_fig_var;
+// TEAM KIT: in a team game the side IS the uniform. -1 = no team (the palette
+// decides as always); 0 ALPHA wears RED, 1 BRAVO wears BLUE — helmet, carrier
+// and fatigues, the three biggest masses, so a side reads at any range and
+// from behind. Set by the draw sites from the entity's side.
+static int g_fig_team = -1;
 static const float FIG_CARRIER_VAR[4][3] = {
   {0.660f, 0.560f, 0.415f},   // sand (shipped)
   {0.520f, 0.600f, 0.440f},   // ranger green
@@ -32543,6 +33300,26 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     nyl   = (v3){{0.700f, 0.610f, 0.470f}};
     rub   = (v3){{0.160f, 0.168f, 0.190f}};
     bala  = (v3){{0.260f, 0.275f, 0.305f}};
+  }
+  if (g_fig_team == 0) {        // ALPHA: red
+    olive = (v3){{0.335f, 0.320f, 0.330f}};
+    dark  = (v3){{0.330f, 0.300f, 0.305f}};
+    helm  = (v3){{0.820f, 0.160f, 0.120f}};
+    nyl   = (v3){{0.720f, 0.330f, 0.270f}};
+    web   = (v3){{0.235f, 0.200f, 0.200f}};
+    rub   = (v3){{0.250f, 0.230f, 0.235f}};
+    gm2   = (v3){{1.900f, 0.420f, 0.180f}};
+    bala  = (v3){{0.270f, 0.255f, 0.260f}};
+  } else if (g_fig_team == 1) { // BRAVO: blue
+    olive = (v3){{0.320f, 0.370f, 0.460f}};
+    dark  = (v3){{0.275f, 0.315f, 0.395f}};
+    helm  = (v3){{0.180f, 0.420f, 0.920f}};
+    nyl   = (v3){{0.450f, 0.580f, 0.780f}};
+    web   = (v3){{0.150f, 0.165f, 0.200f}};
+    boot  = (v3){{0.130f, 0.130f, 0.150f}};
+    rub   = (v3){{0.160f, 0.170f, 0.200f}};
+    gm2   = (v3){{0.360f, 1.700f, 2.000f}};
+    bala  = (v3){{0.255f, 0.275f, 0.315f}};
   }
   if (flash01 > 0) {  // hit flash: every surface washes toward the flash color
     olive = v3_lerp(olive, flash_col, flash01);
@@ -34010,9 +34787,11 @@ static void scene_draw_bot(const bot_t *b, float alpha) {
   // issuing the AR — but any figure drawn through this path holding the SR
   // would render an AR, and the far SR report bake becomes reachable with it.
   g_fig_var = (int)(b - g_bots) & 3;              // entity id - 1
+  g_fig_team = teams_on() ? team_of((int)(b - g_bots) + 1) : -1;
   scene_draw_figure(&b->anim, pos, yaw, &dth, alpha, flash01, fc, 0, b->wp.cur,
                     gun_anim(&b->wp, alpha));
   g_fig_var = 0;
+  g_fig_team = -1;
 }
 
 // Perpendicular frame for marks/tracers whose only anchor is one direction.
@@ -34593,10 +35372,12 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     int local = ent_of_human(h) == g_local_ent;
     if (local && !show_player) continue;
     if (!hp->alive) continue;
+    g_fig_team = teams_on() ? team_of(ent_of_human(h)) : -1;
     scene_draw_figure(&g_player_anim[h], v3_lerp(hp->prev_pos, hp->pos, alpha),
                       hp->yaw, NULL, alpha, ent_flash01(hp->flash, hp->flash_head),
                       hp->flash_head ? (v3){{1.0f, 0.22f, 0.14f}} : (v3){{1, 1, 1}},
                       1, hp->wp.cur, gun_anim(&hp->wp, alpha));
+    g_fig_team = -1;
   }
   for (int i = 0; i < g_match.nbots; i++)
     if (g_bots[i].active) scene_draw_bot(&g_bots[i], alpha);
@@ -34622,9 +35403,11 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_diss_seed = cp->seed;
     g_fig_kcap = CORPSE_K;
     g_fig_var = cp->owner > 0 ? (cp->owner - 1) & 3 : 0;
+    g_fig_team = teams_on() ? team_of(cp->owner) : -1;
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
     g_fig_var = 0;
+    g_fig_team = -1;
   }
   g_fig_diss = 0.0f;
   g_fig_kcap = 0;
@@ -34695,10 +35478,30 @@ static void fx_build(v3 eye) {
       float len = v3_len(d);
       if (len < 0.6f && !tr->rico) continue;
       if (len < 0.05f) continue;
+      // THE LINE RUNS FROM THE BARREL AS DRAWN NOW TO THE HIT. Anchored once in
+      // the world, its near end sits half a metre from the eye: the gun then
+      // recoils under it, and a strafe at 4-5 cm per tick swings that end ~35 px
+      // per tick by parallax — a bolt slowed for the eye and held on the barrel
+      // for metres turns the shooter's own motion into a line that misses both
+      // the gun and the hit. The far end keeps the world (that is where the round
+      // went); the correction falls off linearly to it, so the streak stays one
+      // straight line from the drawn muzzle to the impact in every frame.
+      v3 glue = {{0, 0, 0}};
+      if (!tr->rico && tr->src == g_local_ent && g_fx_muz_live)
+        glue = v3_sub(g_fx_muzzle, tr->a);
+      #define TR_AT(u) v3_add(v3_add(tr->a, v3_scale(d, (u))), v3_scale(glue, 1.0f - (u)))
       // Where the bolt is along the line. It starts 3 m out so the very first
       // frame shows which way it went, then the tail lets go of the barrel. A
       // skip starts AT the face it skipped off, after its parent arrives.
-      float age = (float)(tr->life0 - tr->life) + g_fx_alpha - (float)tr->delay;
+      // THE FLIGHT CLOCK STARTS ON THE FIRST FRAME THAT SHOWS IT. Counted from the
+      // tick the shot was simulated, the bolt was already 1-2 ticks old (plus the
+      // 3 m lead: 8-10 m out) when it was first drawn, so on anything nearer —
+      // a wall across a street, a man at a corner — the round was never seen
+      // leaving the gun, only a stub collapsing into the hit by the crosshair.
+      // A skip spawned on the same tick shares its parent's offset.
+      float clk = (float)(tr->life0 - tr->life) + g_fx_alpha;
+      if (!tr->seen) { tr->seen = 1; tr->base = clk; }
+      float age = clk - tr->base - (float)tr->delay;
       if (age < 0.0f) continue;
       float lead = tr->rico ? 0.0f : 3.0f;
       float nose = lead + tr->v * age;
@@ -34718,7 +35521,7 @@ static void fx_build(v3 eye) {
           const int WN = 8;
           for (int sgi = 0; sgi < WN; sgi++) {
             float ua = wt1 * (float)sgi / WN, ub = wt1 * (float)(sgi + 1) / WN;
-            v3 pa = v3_add(tr->a, v3_scale(d, ua)), pb = v3_add(tr->a, v3_scale(d, ub));
+            v3 pa = TR_AT(ua), pb = TR_AT(ub);
             // Starts 1.5 m off the barrel: the shooter's own wake is not a bar
             // across his sight picture.
             float ra = f_clamp((ua * len - 1.5f) * 0.4f, 0.0f, 1.0f);
@@ -34746,7 +35549,7 @@ static void fx_build(v3 eye) {
       for (int sgi = 0; sgi < N; sgi++) {
         float ua = t0 + (t1 - t0) * (float)sgi / N;
         float ub = t0 + (t1 - t0) * (float)(sgi + 1) / N;
-        v3 pa = v3_add(tr->a, v3_scale(d, ua)), pb = v3_add(tr->a, v3_scale(d, ub));
+        v3 pa = TR_AT(ua), pb = TR_AT(ub);
         // Colour runs on absolute distance, as it always has; the new term is the
         // comet: brightest at the nose, gone at the tail.
         float ka = f_clamp(ua * len * (1.0f / 14.0f), 0.0f, 1.0f);
@@ -34767,6 +35570,7 @@ static void fx_build(v3 eye) {
         fx_seg(pa, pb, eye, wha, whb, v3_scale(ha, fa * fa), v3_scale(hb, fb * fb));
         fx_seg(pa, pb, eye, wca, wcb, v3_scale(ca, fa), v3_scale(cb, fb));
       }
+      #undef TR_AT
     }
   // THE THROW PREVIEW: the real flight, stepped ahead from the real launch while the
   // pin is out, in dots that fade to where it first lands, with a ring on that spot.
@@ -35233,6 +36037,30 @@ static float ads_bezier(float x) {
   return 3.0f * it * it * t * y1 + 3.0f * it * t * t * y2 + t * t * t;
 }
 
+// THE PIN CLOCK: ticks since the press, continuous through the release. A tap
+// lets go at NADE_PIN_T, gr_cook resets and gr_t starts, so the off hand's
+// pull-and-carry would freeze mid-air on any clock that only read gr_cook.
+// gr_fuse is NADE_FUSE minus the cook at release, which is what stitches the two
+// halves together. -1 = no pull in progress (idle, or the next grenade is up).
+#define NPIN_REACH   20.0f   // off hand arrives at the ring
+#define NPIN_PULL0   27.0f   // ...the finger has it, and draws
+#define NPIN_PULL1   44.0f   // pin clear
+#define NPIN_SPOON0  ((float)NADE_PIN_T)   // the sim lets the spoon go
+#define NPIN_SPOON1  (NPIN_SPOON0 + 7.0f)  // ...and the viewmodel's has swung away
+#define NPIN_GONE    88.0f   // off hand and pin are out of frame
+#define VM_CONVERGE  3.0f    // m: where the hip-held bore crosses the crosshair's line
+#define GP_SKY       0.5f    // pin hand roll: palm-down weight...
+#define GP_THB       0.8f    // ...and thumb side toward the eye, so the hooked index shows
+static float nade_clock(const weapon_t *w, float alpha) {
+  if (w->cur != WPN_GR) return -1.0f;
+  if (w->gr_cook > 0) return (float)w->gr_cook - 1.0f + alpha;
+  if (w->gr_t > 0) {
+    float c = (float)(NADE_FUSE - w->gr_fuse) - 1.0f + (float)w->gr_t + alpha;
+    return c < NPIN_GONE ? c : -1.0f;
+  }
+  return -1.0f;
+}
+
 static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 fwd) {
   const vm_t *v = &p->vm;
   const weapon_t *w = &p->wp;
@@ -35367,6 +36195,23 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
            - 0.17f * wallk;
   float twist = VLERP(twist);
 
+  // THE BARREL POINTS AT THE CROSSHAIR. The hip hold is angled in (yaw) and up
+  // (pitch) so the receiver's side reads; those two were fixed numbers, 6.4 and
+  // 1.3 deg, unrelated to where the gun sits, so the bore crossed the view axis
+  // in neither plane at once: on screen the barrel ran off left of the T while
+  // the round flew from its tip to the T — a shot that visibly bent out of the
+  // muzzle. Both angles are now SOLVED to aim the bore at the crosshair's own
+  // line VM_CONVERGE metres out, so the barrel's screen line passes through the
+  // T and the tracer leaves along it. Same inward look, about half the yaw.
+  // Positions are the hold's static terms plus whatever bob/lag is in flight —
+  // the solve follows the gun, it does not fight the sway or the kick, which
+  // are added on top below. Knife and grenade keep their authored hold.
+  float aim_y = 0.112f, aim_p = 0.022f;
+  if (cur != WPN_KN && cur != WPN_GR) {
+    float dz = fmaxf(VM_CONVERGE - (pz + GUN_MUZ[cur][2]), 0.5f);
+    aim_y = atanf(px / dz);
+    aim_p = atanf(-(py + GUN_MUZ[cur][1]) / dz);
+  }
   v3 gx = rgt, gy = upv, gz = fwd;
   // sw * 0.42, not 0.7: 0.7 rad of muzzle-down put the barrel tip a further
   // 0.32 m below an already-off-frame origin — see the note on py above.
@@ -35381,10 +36226,10 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
   rot2(&gz, &gy, -(VLERP(sway_p) + kick * (6.0f + 3.2f * hip)
                  + rl * 0.055f - rch * 0.045f
-                 - rk * 0.075f + sw * 0.42f) + 0.022f * hip
+                 - rk * 0.075f + sw * 0.42f) + aim_p * hip
                  + 0.62f * wallk);                                         // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (0.112f + lean_d * 0.22f) * hip + twist * 0.25f
+                 + (aim_y + lean_d * 0.22f) * hip + twist * 0.25f
                  - 0.20f * wallk);                                         // yaw
   // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
   // or about the top rail. A positive roll swings the magwell AWAY from the eye
@@ -35410,22 +36255,192 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   int fistw = cur == WPN_KN || cur == WPN_GR;
   if (fistw) {
     // The knife IS its timeline: every other spring only rides on top of it.
+    // THE GRENADE IS HELD LIKE THE KNIFE. The grenade hand is sculpted in the
+    // knife fist's own frame (the body sits where the handle would), and the
+    // knife's hold is the one that reads as a relaxed hand: palm behind, finger
+    // backs to the eye, forearm straight in from the corner. The grenade's
+    // timeline still drives the cook and the throw — as offsets from its own
+    // hold, re-based on the knife's — so only the resting pose moves. The
+    // ROTATIONS only: the knife sits low because its blade rises out of the
+    // fist, and at the knife's height the grenade was cut by the frame edge.
+    // Viewmodel only: the figure keeps NADE_HOLD.
+    static const float KH[6] = KNIFE_HOLD;
+    float kk[6];
+    for (int i = 0; i < 6; i++)
+      kk[i] = ga_.kn[i] + (cur == WPN_GR && i >= 3 ? KH[i] - NADE_HOLD[i] : 0.0f);
     gx = rgt; gy = upv; gz = fwd;
-    rot2(&gz, &gy, ga_.kn[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
-    rot2(&gx, &gz, ga_.kn[4] + VLERP(sway_y));
-    rot2(&gx, &gy, ga_.kn[5] + VLERP(roll));
-    px = ga_.kn[0] + VLERP(bob_x) + VLERP(lag_x);
-    py = ga_.kn[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
-    pz = ga_.kn[2] + VLERP(lag_z);
+    rot2(&gz, &gy, kk[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
+    rot2(&gx, &gz, kk[4] + VLERP(sway_y));
+    rot2(&gx, &gy, kk[5] + VLERP(roll));
+    px = kk[0] + VLERP(bob_x) + VLERP(lag_x);
+    py = kk[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
+    pz = kk[2] + VLERP(lag_z);
     // The knife rides a little further out than its timeline says: at the
     // timeline's own distance the fist was nearly a third of the frame
     // in the guard and dwarfed the blade it holds. Scaling the offset from the
     // eye keeps every keyframe's screen position and only shrinks the
     // assembly. Viewmodel only: the figure keeps the timeline as authored.
-    if (cur == WPN_KN) { px *= KNIFE_VM_PUSH; py *= KNIFE_VM_PUSH; pz *= KNIFE_VM_PUSH; }
+    // The grenade rides the same push: same hand, same distance, same scale.
+    px *= KNIFE_VM_PUSH; py *= KNIFE_VM_PUSH; pz *= KNIFE_VM_PUSH;
+    if (cur == WPN_GR && (w->gr_cook > 0 || w->gr_t > 0)) {
+      // PRESENT THE RING: the wrist rolls the grenade about its own fuze axis
+      // to offer the ring to the off hand for the reach and the pull, and rolls
+      // back as the hand leaves. Turned about the body's centre, so the grenade
+      // stays where it is in the palm and on screen.
+      float nc = nade_clock(w, alpha);
+      float pr = smooth01(f_clamp(nc / NPIN_REACH, 0.0f, 1.0f)) *
+                 (1.0f - smooth01(f_clamp((nc - NPIN_PULL1) / 24.0f, 0.0f, 1.0f)));
+      float ang = -0.6f * pr;
+      if (ang != 0.0f) {
+        v3 o0 = v3_add(eye, v3_add(v3_scale(rgt, px), v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
+        v3 ax = v3_norm(v3_add(v3_scale(gy, 0.921f), v3_scale(gz, 0.386f)));
+        v3 cn = v3_add(o0, v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f)));
+        #define RODR(v) v3_add(v3_add(v3_scale(v, cosf(ang)), v3_scale(v3_cross(ax, v), sinf(ang))), \
+                               v3_scale(ax, v3_dot(ax, v) * (1.0f - cosf(ang))))
+        gx = RODR(gx); gy = RODR(gy); gz = RODR(gz);
+        v3 o1 = v3_add(cn, RODR(v3_sub(o0, cn)));
+        #undef RODR
+        v3 dd = v3_sub(o1, eye);
+        px = v3_dot(dd, rgt); py = v3_dot(dd, upv); pz = v3_dot(dd, fwd);
+      }
+      // ...and BRINGS IT IN toward the chest, so the left hand meets it in the
+      // middle of the frame and its arm reaches in from the left, instead of the
+      // left hand crossing the whole screen to the bottom-right corner.
+      px -= 0.120f * pr; py += 0.030f * pr; pz -= 0.010f * pr;
+    }
   }
   v3 org = v3_add(eye, v3_add(v3_scale(rgt, px),
            v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
+  // ---- THE PIN PULL (grenade, viewmodel only) --------------------------------
+  // The off hand used to be the knife fist bobbing up beside the grenade while
+  // the pin and the lever simply stopped being drawn. Now the ring is TAKEN: the
+  // left fist's index finger goes through the ring's far side, the ring swivels
+  // on the pin to meet it (a real ring does), the pin draws straight out along
+  // its own axis riding the finger, and the hand carries it down out of frame.
+  // The fist's orientation is SOLVED from the ring rather than keyframed, so the
+  // finger stays on the wire however the grenade hand sways.
+  float pin_c = cur == WPN_GR ? nade_clock(w, alpha) : -1.0f;
+  int pin_on = pin_c >= 0.0f;          // the pull owns groups 2 and 3 and the off hand
+  v3 pin_o = org, pin_x = gx, pin_y = gy, pin_z = gz;   // group 3's frame
+  v3 sp_o = org, sp_x = gx, sp_y = gy, sp_z = gz;       // group 2's frame (the spoon)
+  v3 ph_o = org, ph_x = gx, ph_y = gy, ph_z = gz;       // the left fist
+  v3 rg_o = org, rg_x = gx, rg_y = gy, rg_z = gz;       // group 4's frame (the ring)
+  int sp_draw = 1;
+  if (pin_on) {
+    #define MP(a, b, c) v3_add(org, v3_add(v3_scale(gx, a), v3_add(v3_scale(gy, b), v3_scale(gz, c))))
+    v3 Am = v3_add(v3_scale(gy, 0.921f), v3_scale(gz, 0.386f));    // NADE_A in the world
+    v3 Em = v3_add(v3_scale(gy, -0.386f), v3_scale(gz, 0.921f));   // NADE_E
+    v3 d = v3_scale(gx, -1.0f);                   // out along the pin, ring side
+    float reach = ui_easeout(f_clamp(pin_c / NPIN_REACH, 0.0f, 1.0f));
+    float pull = smooth01(f_clamp((pin_c - NPIN_PULL0) / (NPIN_PULL1 - NPIN_PULL0), 0.0f, 1.0f));
+    float away = f_clamp((pin_c - NPIN_PULL1) / (NPIN_GONE - NPIN_PULL1), 0.0f, 1.0f);
+    away = away * away * (3.0f - 2.0f * away);
+    // The fist's own grip cylinder (the knife handle's, HAND_KL is the knife fist
+    // mirrored): axis a, the palm on side s. The index finger's inner face sits
+    // NPIN_FR off the axis on the finger side, a little toward the guard end.
+    // THE PIN HAND (HAND_GP) IS PLACED BY ITS CROOK. The model exports the point
+    // inside the hooked index (HOOK), the line the wire takes through it (WIRE)
+    // and the hook's opening (OPEN, toward what it holds). The frame maps
+    // WIRE -> the ring's wire tangent, -OPEN -> the pull, so the wire sits in the
+    // crook in every pose and the hand pulls knuckle-first, as a hooked finger
+    // does. (Model frames are mapped into the LEFT-handed camera convention,
+    // so the third axis is d x A, not A x d.)
+    const v3 Lh = HAND_GP_HOOK, Lw0 = HAND_GP_WIRE, Lo0 = HAND_GP_OPEN;
+    v3 LW = v3_norm(Lw0);
+    v3 LP = v3_norm(v3_sub(Lo0, v3_scale(LW, v3_dot(Lo0, LW))));
+    v3 LN = v3_cross(LW, LP);
+    // THE ARM DECIDES, THE RING FOLLOWS. A hooked finger pulls in line with its
+    // forearm — the wrist straight, the pull coming from the elbow — and a pull
+    // ring swings freely on the pin's eye. So the ring's line (eye -> far wire) is
+    // aimed back at the left elbow, the hand lies along that same line, and the
+    // forearm (below) continues it: no wrist bend can appear. The ring may only
+    // swing so far off the pin's axis; past that the arm takes the difference.
+    // The elbow sits low and forward of the left hip of the frame, so the forearm
+    // rises steeply from the bottom edge instead of bridging across the screen.
+    v3 elb = v3_add(eye, v3_add(v3_scale(rgt, -0.22f),
+                    v3_add(v3_scale(upv, -0.60f), v3_scale(fwd, 0.16f))));
+    v3 eye0 = MP(-0.0190f, -0.02446f, 0.04622f);  // the pin's eye: the ring hangs here
+    v3 u = v3_norm(v3_sub(elb, eye0));
+    {
+      const float cm = 0.42f;                      // ~65 deg off the pin axis at most
+      float c = v3_dot(u, d);
+      if (c < cm) {
+        v3 pp = v3_norm(v3_sub(u, v3_scale(d, c)));
+        u = v3_add(v3_scale(d, cm), v3_scale(pp, sqrtf(1.0f - cm * cm)));
+      }
+    }
+    // Roll about that line: the back of the glove to the eye and a little
+    // skyward — a pronated pull, knuckles leading the hand home.
+    v3 e1 = v3_norm(v3_sub(Am, v3_scale(u, v3_dot(Am, u))));
+    v3 e2 = v3_cross(u, e1);
+    v3 hook0 = v3_add(eye0, v3_scale(u, 0.0250f));
+    v3 look = v3_norm(v3_sub(hook0, eye));
+    #define GP_FRAME(Ah_, X, Y, Z) do {                                             \
+      v3 Nw = v3_cross(u, (Ah_));                                                 \
+      X = v3_add(v3_scale((Ah_), LW.x), v3_add(v3_scale(u, LP.x), v3_scale(Nw, LN.x))); \
+      Y = v3_add(v3_scale((Ah_), LW.y), v3_add(v3_scale(u, LP.y), v3_scale(Nw, LN.y))); \
+      Z = v3_add(v3_scale((Ah_), LW.z), v3_add(v3_scale(u, LP.z), v3_scale(Nw, LN.z))); \
+    } while (0)
+    float best = -9.0f, th = 0.0f;
+    for (int i = 0; i < 72; i++) {
+      float t = -F_PI + (float)i * (2.0f * F_PI / 72.0f);
+      v3 Ah = v3_add(v3_scale(e1, cosf(t)), v3_scale(e2, sinf(t)));
+      v3 kx, ky, kz;
+      GP_FRAME(Ah, kx, ky, kz);
+      (void)ky;
+      float sc = v3_dot(kz, look) + GP_SKY * v3_dot(kz, v3_scale(upv, -1.0f))
+               - GP_THB * v3_dot(kx, look);
+      if (sc > best) { best = sc; th = t; }
+    }
+    v3 Ah = v3_add(v3_scale(e1, cosf(th)), v3_scale(e2, sinf(th)));
+    GP_FRAME(Ah, ph_x, ph_y, ph_z);
+    #undef GP_FRAME
+    // The pin draws straight out along its own axis; the hand comes up its own
+    // forearm's line to the ring and, with the pin clear, goes back down it.
+    v3 pl = v3_scale(d, 0.046f * pull);
+    v3 back = v3_sub(elb, hook0);
+    v3 mv = v3_add(v3_scale(back, 0.70f * away), v3_scale(upv, -0.05f * away));
+    v3 Lw = v3_add(v3_scale(ph_x, Lh.x), v3_add(v3_scale(ph_y, Lh.y), v3_scale(ph_z, Lh.z)));
+    ph_o = v3_add(v3_sub(v3_add(hook0, pl), Lw),
+                  v3_add(mv, v3_scale(back, 0.60f * (1.0f - reach))));
+    // The pin keeps its own frame; the ring swings on its eye from where it lay
+    // (out along d, in the A plane) to the hand's line, as the finger takes it.
+    float hk = smooth01(f_clamp((pin_c - (NPIN_REACH - 6.0f)) / 6.0f, 0.0f, 1.0f));
+    v3 Ar = v3_dot(Ah, Am) >= 0.0f ? Ah : v3_scale(Ah, -1.0f);   // the ring is symmetric
+    v3 ub = v3_norm(v3_add(v3_scale(d, 1.0f - hk), v3_scale(u, hk)));
+    v3 ab = v3_add(v3_scale(Am, 1.0f - hk), v3_scale(Ar, hk));
+    ab = v3_norm(v3_sub(ab, v3_scale(ub, v3_dot(ab, ub))));
+    float hs = v3_dot(Em, v3_cross(d, Am)) >= 0.0f ? 1.0f : -1.0f;
+    v3 eb = v3_scale(v3_cross(ub, ab), hs);
+    #define RV(v) v3_add(v3_scale(ub, v3_dot(v, d)), \
+                  v3_add(v3_scale(ab, v3_dot(v, Am)), v3_scale(eb, v3_dot(v, Em))))
+    rg_x = RV(gx); rg_y = RV(gy); rg_z = RV(gz);
+    v3 oe = v3_sub(org, eye0);
+    rg_o = v3_add(v3_add(eye0, RV(oe)), pl);
+    #undef RV
+    pin_o = v3_add(org, pl);
+    if (pin_c >= NPIN_PULL1) { pin_o = v3_add(pin_o, mv); rg_o = v3_add(rg_o, mv); }
+    // The spoon: the moment the pin clears it is no longer held, and it swings
+    // open on the hinge at the fuze cap — outward, away from the body — before
+    // the world's own spoon takes over.
+    float sw2 = f_clamp((pin_c - NPIN_SPOON0) / (NPIN_SPOON1 - NPIN_SPOON0), 0.0f, 1.0f);
+    sp_draw = pin_c < NPIN_SPOON1;
+    if (sw2 > 0.0f) {
+      v3 out = v3_norm(v3_add(v3_scale(Em, -0.883f), v3_scale(gx, 0.469f)));   // th -28, mirrored x
+      v3 hax = v3_norm(v3_cross(Am, out));
+      v3 hinge = MP(0.0f, -0.0116f, 0.0484f);
+      float ang = -1.9f * sw2 * sw2;
+      // Rodrigues on the three basis vectors; the origin turns about the hinge.
+      #define RODR(v) v3_add(v3_add(v3_scale(v, cosf(ang)), v3_scale(v3_cross(hax, v), sinf(ang))), \
+                             v3_scale(hax, v3_dot(hax, v) * (1.0f - cosf(ang))))
+      sp_x = RODR(gx); sp_y = RODR(gy); sp_z = RODR(gz);
+      v3 r0 = v3_sub(org, hinge);
+      sp_o = v3_add(hinge, RODR(r0));
+      sp_o = v3_add(sp_o, v3_scale(out, 0.012f * sw2));
+      #undef RODR
+    }
+    #undef MP
+  }
 
   ao_off();                               // a gun at arm's length sees open sky
   g_fig_k = FIG_KMAX;                     // ...and always at full resolution
@@ -35460,7 +36475,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     g_md_skin = cur != WPN_GR && armory_theme()->pat > 0.0f;
     int nade_gone = cur == WPN_GR && ga_.bolt > 0.5f;    // released
     if (!nade_gone) model_draw(mv, mp, mn, 0, org, gx, gy, gz);
-    if (ads < 0.5f && rl < 0.2f && !nade_gone && ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
+    if (pin_on) { if (sp_draw) model_draw(mv, mp, mn, 2, sp_o, sp_x, sp_y, sp_z); }
+    else if (ads < 0.5f && rl < 0.2f && !nade_gone && ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
     float md = mdrop * GUN_MAG_TRAVEL[cur][0], mx = mdrop * -GUN_MAG_TRAVEL[cur][1];
     {
       // Old and fresh magazines (see gun_anim_t.pair): each sits at the well's
@@ -35501,7 +36517,13 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       g_gun_sight_p = v3_add(org, v3_add(v3_scale(gy, sight_y), v3_scale(gz, gun_sight_z(cur))));
       g_gun_sight_r = 0.0026f;
     } else if (cur == WPN_GR) {
-      if (!nade_gone && ga_.slide < 0.5f) model_draw(mv, mp, mn, 3, org, gx, gy, gz);
+      if (pin_on) {
+        model_draw(mv, mp, mn, 3, pin_o, pin_x, pin_y, pin_z);
+        model_draw(mv, mp, mn, 4, rg_o, rg_x, rg_y, rg_z);
+      } else if (!nade_gone && ga_.slide < 0.5f) {
+        model_draw(mv, mp, mn, 3, org, gx, gy, gz);
+        model_draw(mv, mp, mn, 4, org, gx, gy, gz);
+      }
       g_vm_muzzle = org;
     } else if (cur == WPN_KN) {
       g_vm_muzzle = v3_add(org, v3_scale(gy, GUN_MUZ[WPN_KN][1]));
@@ -35569,7 +36591,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // rendered mean luminance of the bluish pixels, 95 on the body against 75
     // on the viewmodel before this was compensated at all). That factor lives
     // here, once, instead of in a second set of colours that can drift.
+    g_fig_team = teams_on() && g_local_ent >= 0 ? team_of(g_local_ent) : -1;
     kit_t vkt = fig_kit(1, 0.0f, (v3){{1, 1, 1}});
+    g_fig_team = -1;
     v3 glove  = v3_scale(vkt.glove, 1.055f);    // ...and his own gloves
     // The cuff belongs to the GLOVE, not to the sleeve. In the sleeve's own
     // slate it read as a stripe painted on the arm; in the glove's leather two
@@ -35940,14 +36964,18 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         klo = v3_add(eye, v3_add(v3_scale(rgt, -0.165f + 0.03f * dn),
               v3_add(v3_scale(upv, -0.200f - 0.22f * dn), v3_scale(fwd, 0.40f - 0.06f * dn))));
         model_draw(HAND_KO_V, HAND_KO_P, HAND_KO_NP, 0, klo, klx, kly, klz);
+      } else if (cur == WPN_GR) {
+        // The pin hand: its frame was solved from the ring above (pin_o / ph_*).
+        if (pin_on) {
+          klx = ph_x; kly = ph_y; klz = ph_z; klo = ph_o;
+          model_draw(HAND_GP_V, HAND_GP_P, HAND_GP_NP, 0, klo, klx, kly, klz);
+        }
       } else if (knf && gk > 0.01f) {
         rot2(&klz, &kly, -0.60f + 0.30f * (1.0f - gk));
         rot2(&klx, &klz, 0.20f);
         rot2(&klx, &kly, -0.45f);
-        // For the grenade this same rise is the hand coming in for the pin ring.
-        klo = v3_add(eye, v3_add(v3_scale(rgt, cur == WPN_GR ? 0.105f : -0.080f),
-              v3_add(v3_scale(upv, (cur == WPN_GR ? -0.072f : -0.080f) - 0.230f * (1.0f - gk)),
-                     v3_scale(fwd, cur == WPN_GR ? 0.345f : 0.300f))));
+        klo = v3_add(eye, v3_add(v3_scale(rgt, -0.080f),
+              v3_add(v3_scale(upv, -0.080f - 0.230f * (1.0f - gk)), v3_scale(fwd, 0.300f))));
         model_draw(HAND_KL_V, HAND_KL_P, HAND_KL_NP, 0, klo, klx, kly, klz);
       } else if (cur == WPN_PT) {
         model_draw(HAND_P_V, HAND_P_P, HAND_P_NP, 0, v3_add(org, lo), gx, gy, gz);
@@ -35955,7 +36983,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
       }
       for (int h = 0; h < 2; h++) {
-        if (h == 1 && knf && (gk <= 0.01f || cur == WPN_GR)) continue;
+        if (h == 1 && knf && (cur == WPN_GR ? !pin_on : gk <= 0.01f)) continue;
         v3 wr = h == 0
           ? cur == WPN_GR
             ? v3_add(or_p, v3_add(v3_scale(rx, -0.0355f),     // the grenade hand's own wrist
@@ -35965,7 +36993,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                            v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))), kfs))
             : v3_add(or_p, v3_add(v3_scale(rx, 0.018f),
                            v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))))
-          : cur == WPN_KN ? v3_add(klo, v3_add(v3_scale(kly, -0.024f), v3_scale(klz, -0.003f)))
+          : (cur == WPN_KN || cur == WPN_GR) ? v3_add(klo, v3_add(v3_scale(kly, -0.024f), v3_scale(klz, -0.003f)))
           : knf ? v3_add(klo, v3_add(v3_scale(klx, -0.018f),
                          v3_add(v3_scale(kly, -0.080f), v3_scale(klz, -0.066f))))
           : ptl ? v3_add(VP(-0.038f, -0.102f, -0.018f), lo)
@@ -35978,6 +37006,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                                  v3_add(v3_scale(upv, -0.42f), v3_scale(fwd, -0.10f)))), wr)
                  : v3_add(v3_scale(rx, 0.32f), v3_add(v3_scale(ry, -0.66f), v3_scale(rz, -0.68f))))
           : cur == WPN_KN ? v3_sub(kshoulder, wr)
+          : cur == WPN_GR ? v3_scale(kly, -1.0f)      // the pin hand's wrist is straight
           : knf ? v3_add(v3_scale(klx, -0.32f), v3_add(v3_scale(kly, -0.66f), v3_scale(klz, -0.68f)))
           : ptl ? VD(-0.50f, -0.52f, -0.69f) : VD(-0.41f, -0.82f, -0.39f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
@@ -37084,6 +38113,12 @@ static void post_pass(int fx) {
     v3 sn = atm_sun();
     glUniform3f(uloc(R.prog_ao, "uSunV"), v3_dot(sn, R.cam_rgt), v3_dot(sn, R.cam_up),
                 -v3_dot(sn, R.cam_fwd));
+    glUniform1i(uloc(R.prog_ao, "uSm"), 1);
+    glUniform1f(uloc(R.prog_ao, "uSmOn"), R.sm_fbo ? 1.0f : 0.0f);
+    glUniformMatrix4fv(uloc(R.prog_ao, "uInvVP"), 1, GL_FALSE, R.inv_vp.m);
+    glUniformMatrix4fv(uloc(R.prog_ao, "uLightVP"), 1, GL_FALSE, R.light_vp.m);
+    glUniform3f(uloc(R.prog_ao, "uSunW"), sn.x, sn.y, sn.z);
+    tex_on(1, R.sm_tex);
     glBindTexture(GL_TEXTURE_2D, R.z_tex[0]);
     fs_tri(R.ao_fbo, (R.width + 1) / 2, (R.height + 1) / 2);
 
@@ -38480,6 +39515,36 @@ static void render_frame(const player_t *p, float alpha, int fps,
       }
     }
 
+    // Just joined a team game: offer the side choice once.
+    if (g_ui_team_prompt && g_online && teams_on()) {
+      g_ui_team_prompt = 0;
+      if (!g_menu_open) ui_open_menu();
+      ui_route(UI_PAGE_TEAM);
+    }
+    // TEAMMATES ARE MARKED. Two sides in the same kit is a game of guessing
+    // who to shoot, so every living teammate carries a small SIGNAL chevron
+    // over his head, and his name while he is near; enemies carry nothing.
+    if (teams_on() && !g_match.over && g_local_ent >= 0) {
+      v3 me_p = ent_pos(g_local_ent);
+      ENT_FOREACH(e) {
+        if (!team_mates(g_local_ent, e) || !ent_alive(e)) continue;
+        v3 hp = ent_pos(e);
+        float dd = v3_len(v3_sub(hp, me_p));
+        hp.y += 2.05f;
+        float sx, sy;
+        if (!rescue_proj(hp, &sx, &sy)) continue;
+        float a = 0.95f - 0.45f * f_clamp((dd - 10.0f) / 40.0f, 0.0f, 1.0f);
+        int tc = team_of(e);
+        ui_line(sx - 4.0f, sy - 3.0f, sx, sy + 1.5f, 1.3f, TEAM_RGB(tc), a);
+        ui_line(sx, sy + 1.5f, sx + 4.0f, sy - 3.0f, 1.3f, TEAM_RGB(tc), a);
+        if (dd < 22.0f) {
+          const char *nm = ent_name(e);
+          ui_text_sh(nm, sx - ui_text_width_tr(nm, 0.6f, 1.2f) * 0.5f, sy - 12.0f, 0.6f,
+                     TXT_REG, 1.2f, C4(TEAM_RGB(tc), a));
+        }
+      }
+    }
+
     // THE SCORELINE, top centre: my frags against my best RIVAL — the whole
     // match state a player needs mid-fight. My number pulses on my own kill,
     // growing DOWN from a fixed cap line: a HUD element that moves when you
@@ -38499,6 +39564,9 @@ static void render_frame(const player_t *p, float alpha, int fps,
       ENT_FOREACH(i)
         if (i != g_local_ent && HUD_SC(i) > lead) lead = HUD_SC(i);
 #undef HUD_SC
+      // TEAM DEATHMATCH: my side against theirs.
+      int mt = team_of(g_local_ent) == 1;
+      if (hgm == GM_TDM) { me = g_team_score[mt]; lead = g_team_score[!mt]; }
       char msc[8], lsc[8];
       snprintf(msc, sizeof msc, "%d", me);
       snprintf(lsc, sizeof lsc, "%d", lead);
@@ -38530,8 +39598,14 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  g_match.round_no, al, mode_round_goal());
       } else if (hgm == GM_SNIPER || hgm == GM_BLADES) {
         snprintf(cap, sizeof cap, "%s", GM_NAMES[hgm]);
+      } else if (hgm == GM_TDM) {
+        snprintf(cap, sizeof cap, "TEAM %s \x05 FIRST TO %d", TEAM_NAMES[mt],
+                 g_online && g_net_fraglimit ? g_net_fraglimit : g_cfg.sp_frag);
       }
-      if (cap[0])
+      if (cap[0] && hgm == GM_TDM)
+        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 22, 0.7f,
+                   TXT_REG, 1.2f, C4(TEAM_RGB(mt), 0.9f));
+      else if (cap[0])
         ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 22, 0.7f,
                    TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
       // LAST MAN STANDING intermission: who took the round, and when the next.
@@ -38593,7 +39667,13 @@ static void render_frame(const player_t *p, float alpha, int fps,
         // color alone carries who did what to whom.
         float rw = knw + 4 + chev + 3 + hsw + vnw;
         float tx = g_ui_vw - 10 - rw + slide, ty2 = fy;
-        if (meK)        ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BLAZE, 0.9f * fa));
+        // TEAM DEATHMATCH: every name in its side's colour, so a row reads
+        // as red-on-blue or blue-on-red at a glance (a team kill, with
+        // friendly fire on, is one colour twice).
+        int tk = teams_on() ? team_of(g_feed[i].src) : -1;
+        int td = teams_on() ? team_of(g_feed[i].dst) : -1;
+        if (tk >= 0)    ui_text_sh(kn, tx, ty2, 0.8f, meK ? TXT_BOLD : TXT_REG, 0, C4(TEAM_RGB(tk), 0.95f * fa));
+        else if (meK)   ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BLAZE, 0.9f * fa));
         else if (src_h) ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
         else            ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BONE, 0.85f * fa));
         tx += knw + 4;
@@ -38603,7 +39683,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
           ui_text_sh("\x04", tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.9f * fa));
           tx += hsw;
         }
-        if (meD)        ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.9f * fa));
+        if (td >= 0)    ui_text_sh(vn, tx, ty2, 0.8f, meD ? TXT_BOLD : TXT_REG, 0, C4(TEAM_RGB(td), 0.95f * fa));
+        else if (meD)   ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.9f * fa));
         else if (dst_h) ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
         else            ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BONE, 0.8f * fa));
         fy += rowh + 2;
@@ -38615,18 +39696,23 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // progress capsule instead of a decimal readout.
     // SPECTATING (LAST MAN STANDING, out of the round): the fight being
     // watched IS the picture, so the death frame's scrim and centre caption
-    // step aside for one quiet line along the bottom.
+    // step aside for ONE quiet line hugging the bottom edge. Not two lines
+    // higher up: the follow camera frames the target in the lower third, and
+    // a caption at vh-44 sat right on their legs whenever a wall pulled the
+    // camera in. The strip below the feet is the only band that is never
+    // the subject.
     int spec_on = !p->alive && !g_match.over ? spec_target() : -1;
     if (spec_on >= 0) {
-      ui_vgrad(0, g_ui_vh - 64, g_ui_vw, 64, C4(0, 0, 0, 0), C4(0, 0, 0, 0.55f));
-      char s1[40];
-      snprintf(s1, sizeof s1, "SPECTATING %s", ent_name(spec_on));
-      float sw = ui_text_width_tr(s1, 1.1f, 1.5f);
-      ui_text_ex(s1, ccx - sw * 0.5f, g_ui_vh - 44, 1.1f, TXT_REG, 1.5f,
-                 C4(C_BONE, 0.95f));
-      const char *s2 = "OUT \x05 BACK IN NEXT ROUND";
-      ui_text_ex(s2, ccx - ui_text_width_tr(s2, 0.7f, 1.2f) * 0.5f, g_ui_vh - 28, 0.7f,
-                 TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
+      ui_vgrad(0, g_ui_vh - 30, g_ui_vw, 30, C4(0, 0, 0, 0), C4(0, 0, 0, 0.55f));
+      const char *l = "SPECTATING ", *r = "  \x05  BACK IN NEXT ROUND";
+      const char *nm = ent_name(spec_on);
+      const float sc = 0.8f, tr = 1.2f;
+      float lw = ui_text_width_tr(l, sc, tr) + tr, nw = ui_text_width_tr(nm, sc, tr) + tr;
+      float rw = ui_text_width_tr(r, sc, tr);
+      float sx = ccx - (lw + nw + rw) * 0.5f, sy = g_ui_vh - 15;
+      ui_text_ex(l, sx, sy, sc, TXT_REG, tr, C4(C_HAZE, 0.85f));
+      ui_text_ex(nm, sx + lw, sy, sc, TXT_REG, tr, C4(C_BONE, 0.95f));
+      ui_text_ex(r, sx + lw + nw, sy, sc, TXT_REG, tr, C4(C_HAZE, 0.7f));
     } else if (!p->alive && !g_match.over) {
       // The death frame is STAGED: an INK scrim from both edges controls
       // whatever the corpse camera happens to face, so the caption never
@@ -38671,7 +39757,9 @@ static void render_frame(const player_t *p, float alpha, int fps,
     if (g_match.over && !rescue_on()) {
       ui_vgrad(0, 0, g_ui_vw, 96, C4(0, 0, 0, 0.60f), C4(0, 0, 0, 0));
       char msg[32];
-      if (g_match.winner == g_local_ent) snprintf(msg, sizeof msg, "VICTORY");
+      if (g_match.winner >= MAX_ENTS)   // a side took it
+        snprintf(msg, sizeof msg, "%s", won_by_me(g_match.winner) ? "VICTORY" : "DEFEAT");
+      else if (g_match.winner == g_local_ent) snprintf(msg, sizeof msg, "VICTORY");
       else snprintf(msg, sizeof msg, "%s WINS", ent_name(g_match.winner));
       float w1 = ui_text_width_tr(msg, 2.6f, 2.2f);
       ui_text_ex(msg, ccx - w1 * 0.5f + 1, 25, 2.6f, TXT_BLACK, 2.2f,
@@ -39325,6 +40413,7 @@ static void boot_connect_kick(void) {
 // rule applied to a state transition rather than to an algorithm.
 static void leave_match(void) {
   if (g_cl.state != NC_OFF) net_cl_disconnect();
+  if (g_mp_hosting) mp_host_stop();     // the host leaving ends the game
   g_online = 0;
   g_local_ent = 0;
   // Everything above slot 0 belonged to the SERVER's roster. Slot 0 is the
@@ -40594,7 +41683,9 @@ static void usage(void) {
        "             --do/--script run the headless harness instead.\n"
        "  --connect H[:P]    join a server on host H (port P, else mp_port)\n"
        "                     while the local match runs until the first snapshot\n"
-       "  --server           dedicated server: sim only, no GL/audio/window.\n"
+       "  --server           dedicated server: sim only, no GL/audio/window.\n"       "  --name NAME        server name shown in the MULTIPLAYER page's LAN list\n"       "  --team-size N      TEAM DEATHMATCH places per side, 1..9 (default 5)\n"
+       "  --team-fill 0|1    bots fill the places no player holds (default 1)\n"
+       "  --friendly-fire 0|1  teammates can hurt each other (default 0)\n"
        "                     with --port N --cap-bots N (bots in the arena)\n"
        "                     --cap-public N (arena size, public door)\n"
        "                     --lobbies N (independent arenas in this ONE\n"
@@ -43573,7 +44664,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_ui_mdown = 0;
     } else if (!strcmp(t, "key")) {
       char *tok = next_tok();
-      if (g_ui_name_edit) ui_name_key(tok);  // name field has key focus
+      if (UI_TEXT_EDIT) ui_name_key(tok);  // a text field has key focus
       else ui_assign_bind(tok);
     } else if (!strcmp(t, "uiframe")) {
       render_frame(s->p, 1.0f, 120, &s->cam);
@@ -45166,10 +46257,41 @@ static void run_script(char *script, sim_ctx_t *s) {
       const char *n = next_tok();
       int m = gm_parse(n);
       if (m < 0) {
-        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms|rescue)\n", n);
+        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms|rescue|tdm)\n", n);
         exit(1);
       }
       g_cfg.sp_mode = m;
+    } else if (!strcmp(t, "teamsize")) {        // TEAM DEATHMATCH settings, like the
+      g_cfg.sp_team_size = (int)next_n();       // MATCH page: next `restart`/tick
+    } else if (!strcmp(t, "teamfill")) {
+      g_cfg.sp_team_fill = next_n() ? 1 : 0;
+    } else if (!strcmp(t, "teamff")) {
+      g_cfg.sp_team_ff = next_n() ? 1 : 0;
+    } else if (!strcmp(t, "team")) {            // the local player's side (0/1)
+      g_cfg.sp_team = next_n() ? 1 : 0;
+    } else if (!strcmp(t, "teams")) {
+      // Each side: its members (h = human), alive count, score; then whether
+      // any two teammates have ever damaged each other (ffhits must be 0).
+      for (int tm = 0; tm < 2; tm++) {
+        printf("team %s score=%d members=", TEAM_NAMES[tm], g_team_score[tm]);
+        int n2 = 0, al = 0, zs = 0;
+        ENT_FOREACH(e) if (g_team[e] == tm) {
+          printf("%s%s%s", n2 ? "," : "", ent_name(e), human_of_ent(e) >= 0 ? "(h)" : "");
+          n2++; al += ent_alive(e);
+          zs += ent_pos(e).z < 0.0f;
+        }
+        printf(" n=%d alive=%d on_minus_z=%d\n", n2, al, zs);
+      }
+      int ksum = 0;
+      ENT_FOREACH(e) ksum += g_match.kills[e];
+      int locks = 0;
+      for (int i = 0; i < g_match.nbots; i++)
+        if (g_bots[i].active && g_bots[i].tgt >= 0 && team_mates(i + 1, g_bots[i].tgt)) locks++;
+      printf("teams kills=%d (side frags %d) mate_locks=%d ff=%d\n", ksum,
+             g_team_score[0] + g_team_score[1], locks, team_ff());
+      printf("teams on=%d size=%d fill=%d nbots=%d over=%d winner=%s\n", teams_on(),
+             team_size(), g_cfg.sp_team_fill, g_match.nbots, g_match.over,
+             g_match.over ? ent_name(g_match.winner) : "none");
     } else if (!strcmp(t, "rescue")) {
       // HOSTAGE RESCUE state: the mission line, every guard, every hostage.
       // `rescue show` (the mission line) | `rescue all` (+ guards, hostages) |
@@ -45788,6 +46910,11 @@ static double nat_now(void) {
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sys/random.h>    // getrandom() for the cookie secret (net_secret_init)
+#include <ifaddrs.h>       // LAN scan: every interface's broadcast address
+#include <net/if.h>
+#include <sys/prctl.h>     // HOST GAME: the server dies with the game
+#include <signal.h>
+#include <sys/wait.h>
 
 // --- UDP socket backend, POSIX half ---
 static int net_udp_open(int port) {
@@ -45831,6 +46958,84 @@ static uint32_t net_resolve(const char *host) {
   uint32_t out = ((struct sockaddr_in *)res->ai_addr)->sin_addr.s_addr;
   freeaddrinfo(res);
   return out;
+}
+static int net_udp_bcast_on(int fd) {
+  int on = 1;
+  return setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &on, sizeof on) == 0;
+}
+// The limited broadcast alone leaves by the default route's interface only, so
+// a laptop on Wi-Fi with a docker bridge or a VPN up may shout into the wrong
+// network. Every interface's own directed broadcast goes too, and loopback, so
+// a server on this same machine is found without any network at all.
+static int net_bcast_targets(uint32_t *out, int max) {
+  int n = 0;
+  if (n < max) out[n++] = htonl(INADDR_BROADCAST);
+  if (n < max) out[n++] = htonl(INADDR_LOOPBACK);
+  struct ifaddrs *ia = NULL;
+  if (getifaddrs(&ia) == 0) {
+    for (struct ifaddrs *q = ia; q && n < max; q = q->ifa_next) {
+      if (!q->ifa_addr || q->ifa_addr->sa_family != AF_INET) continue;
+      if (!(q->ifa_flags & IFF_UP) || !(q->ifa_flags & IFF_BROADCAST) || !q->ifa_broadaddr) continue;
+      uint32_t b = ((struct sockaddr_in *)q->ifa_broadaddr)->sin_addr.s_addr;
+      int dup = 0;
+      for (int i = 0; i < n; i++) dup |= out[i] == b;
+      if (!dup) out[n++] = b;
+    }
+    freeifaddrs(ia);
+  }
+  return n;
+}
+static int net_local_addrs(uint32_t *out, int max) {
+  int n = 0;
+  struct ifaddrs *ia = NULL;
+  if (getifaddrs(&ia) != 0) return 0;
+  for (struct ifaddrs *q = ia; q && n < max; q = q->ifa_next) {
+    if (!q->ifa_addr || q->ifa_addr->sa_family != AF_INET) continue;
+    if (!(q->ifa_flags & IFF_UP) || (q->ifa_flags & IFF_LOOPBACK)) continue;
+    out[n++] = ((struct sockaddr_in *)q->ifa_addr)->sin_addr.s_addr;
+  }
+  freeifaddrs(ia);
+  return n;
+}
+// HOST GAME: this same binary, re-run as `--server`. The dedicated server is
+// the tested one (cookie handshake, lag comp, lobbies, bot fill) and running
+// it as a separate process keeps the host's own client exactly as networked as
+// everyone else's — no listen-server special case anywhere in the netcode.
+// PR_SET_PDEATHSIG takes the server down with the game, crash included, so a
+// closed game never leaves a server holding the port.
+static pid_t g_host_pid;
+static int host_spawn(char *const argv[]) {
+  host_kill();
+  char logp[512], dir[480];
+  exe_dir(dir, sizeof dir);
+  snprintf(logp, sizeof logp, "%shost-server.log", dir);
+  pid_t parent = getpid();
+  pid_t pid = fork();
+  if (pid < 0) return 0;
+  if (pid == 0) {               // async-signal-safe calls only until exec
+    prctl(PR_SET_PDEATHSIG, SIGTERM);
+    if (getppid() != parent) _exit(0);   // the game died before the prctl
+    int lf = open(logp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    int nf = open("/dev/null", O_RDONLY);
+    if (nf >= 0) dup2(nf, 0);
+    if (lf >= 0) { dup2(lf, 1); dup2(lf, 2); }
+    execv("/proc/self/exe", argv);
+    _exit(127);
+  }
+  g_host_pid = pid;
+  return 1;
+}
+static int host_alive(void) {
+  if (g_host_pid <= 0) return 0;
+  int st;
+  if (waitpid(g_host_pid, &st, WNOHANG) == g_host_pid) { g_host_pid = 0; return 0; }
+  return 1;
+}
+static void host_kill(void) {
+  if (g_host_pid <= 0) return;
+  kill(g_host_pid, SIGTERM);    // srv_sig: the loop ends within a tick
+  waitpid(g_host_pid, NULL, 0);
+  g_host_pid = 0;
 }
 static uint32_t net_now_ms(void) {
   struct timespec ts;
@@ -46903,10 +48108,16 @@ static void nat_key(XKeyEvent *ke, int down) {
     return;
   }
   int k = key_from_keysym(ks);
-  if (down && g_ui_name_edit) {
+  if (down && UI_TEXT_EDIT) {
     if (ks == XK_BackSpace) ui_name_key("back");
     else if (ks == XK_Return || ks == XK_KP_Enter) ui_name_key("enter");
-    else {
+    else if (ks == XK_period || ks == XK_KP_Decimal) ui_name_key(".");
+    else if (ks == XK_semicolon || ks == XK_colon) ui_name_key(":");
+    else if (ks == XK_minus || ks == XK_KP_Subtract) ui_name_key("-");
+    else if (ks >= XK_KP_0 && ks <= XK_KP_9) {
+      char t[2] = {(char)('0' + (ks - XK_KP_0)), 0};
+      ui_name_key(t);
+    } else {
       const char *tok = token_from_key(k);
       if (tok && !tok[1]) ui_name_key(tok);
     }
@@ -47398,6 +48609,13 @@ static int server_main(uint32_t seed) {
   g_cfg.sp_mode = g_srv.mode;
   g_cfg.sp_map = g_srv.map;
   g_cfg.sp_rounds = parse_int_def(g_srv.rounds, &SP_ROUNDS_DEF);
+  g_cfg.sp_team_size = g_srv.team_size;
+  g_cfg.sp_team_fill = g_srv.team_fill;
+  g_cfg.sp_team_ff = g_srv.team_ff;
+  // A team game seats exactly two teams' worth of humans; bots are the
+  // team math's, not the --cap-bots fill's (see tdm_bot_want).
+  if (g_srv.mode == GM_TDM)
+    g_srv.cap_public = 2 * g_srv.team_size < MAX_HUMANS ? 2 * g_srv.team_size : MAX_HUMANS;
   signal(SIGINT, srv_sig);
   signal(SIGTERM, srv_sig);
   // EVERY ARENA IS BROUGHT UP THE SAME WAY, through the one shared entry
@@ -47415,6 +48633,8 @@ static int server_main(uint32_t seed) {
   }
   g_lobby = 0;
   g_srv_started = time(NULL);
+  g_srv_uid = seed ^ (uint32_t)g_srv_started * 2654435761u;
+  if (!g_srv.name[0]) snprintf(g_srv.name, sizeof g_srv.name, "BLINDDROP");
   net_secret_init();
   g_srv_fd = net_udp_open(g_srv.port);
   if (g_srv_fd < 0) {
@@ -47534,12 +48754,28 @@ int main(int argc, char **argv) {
       int m = gm_parse(argv[++i]);
       if (m < 0 || m == GM_RESCUE) {
         fprintf(stderr, m == GM_RESCUE ? "--mode rescue is a single-player mission\n"
-                                       : "unknown --mode '%s' (dm|gun|sniper|blades|lms)\n", argv[i]);
+                                       : "unknown --mode '%s' (dm|gun|sniper|blades|lms|tdm)\n", argv[i]);
         return 1;
       }
       g_srv.mode = m;
     }
     else if (arg && !strcmp(a, "--ticks"))      g_srv.ticks = atol(argv[++i]);
+    else if (arg && !strcmp(a, "--team-size")) {
+      g_srv.team_size = atoi(argv[++i]);
+      if (g_srv.team_size < 1 || g_srv.team_size > TEAM_SIZE_MAX) {
+        fprintf(stderr, "--team-size must be 1..%d\n", TEAM_SIZE_MAX); return 1;
+      }
+    }
+    else if (arg && !strcmp(a, "--team-fill"))  g_srv.team_fill = atoi(argv[++i]) ? 1 : 0;
+    else if (arg && !strcmp(a, "--friendly-fire")) g_srv.team_ff = atoi(argv[++i]) ? 1 : 0;
+    else if (arg && !strcmp(a, "--name")) {     // sanitized like a player name
+      const char *q = argv[++i]; int k = 0;
+      for (; *q && k < (int)sizeof g_srv.name - 1; q++) {
+        char g = *q == ' ' ? ' ' : name_glyph(*q);
+        if (g) g_srv.name[k++] = g;
+      }
+      g_srv.name[k] = '\0';
+    }
     else if (!strcmp(a, "--net-debug"))         g_net_debug = 1;  // game.log: one
                                                 // line per trim/skip, see decl
     else if (arg && !strcmp(a, "--connect"))    g_connect_host = argv[++i];  // HOST[:PORT]
@@ -47688,6 +48924,20 @@ static uint32_t net_resolve(const char *host) {
   return out;
 }
 static uint32_t net_now_ms(void) { return (uint32_t)GetTickCount(); }
+static int net_udp_bcast_on(int fd) {
+  BOOL on = TRUE;
+  return setsockopt((SOCKET)fd, SOL_SOCKET, SO_BROADCAST, (const char *)&on, sizeof on) == 0;
+}
+static int net_bcast_targets(uint32_t *out, int max) {
+  int n = 0;
+  if (n < max) out[n++] = htonl(INADDR_BROADCAST);
+  if (n < max) out[n++] = htonl(INADDR_LOOPBACK);
+  return n;
+}
+static int net_local_addrs(uint32_t *out, int max) { (void)out; (void)max; return 0; }
+static int host_spawn(char *const argv[]) { (void)argv; return 0; }   // HOST_SUPPORTED 0
+static int host_alive(void) { return 0; }
+static void host_kill(void) {}
 
 // g_keys/g_pressed are indexed by VK code, which IS the shared KEY_* space —
 // see the key layer above the frame step. Nothing here maps anything.
@@ -48224,10 +49474,16 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     // g_esc_held; that one needs a flag because detectable auto-repeat sends no
     // release to key off.)
     if (down && wp == VK_ESCAPE) { if (!(lp & (1 << 30))) ui_on_escape(); return 0; }
-    if (down && g_ui_name_edit && msg == WM_KEYDOWN) {  // name field has focus
+    if (down && UI_TEXT_EDIT && msg == WM_KEYDOWN) {  // a text field has focus
       if (vk == VK_BACK) ui_name_key("back");
       else if (vk == VK_RETURN) ui_name_key("enter");
-      else {
+      else if (vk == VK_OEM_PERIOD || vk == VK_DECIMAL) ui_name_key(".");
+      else if (vk == VK_OEM_1) ui_name_key(":");
+      else if (vk == VK_OEM_MINUS || vk == VK_SUBTRACT) ui_name_key("-");
+      else if (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9) {
+        char t[2] = {(char)('0' + (vk - VK_NUMPAD0)), 0};
+        ui_name_key(t);
+      } else {
         const char *tok = token_from_key((int)vk);
         if (tok && !tok[1]) ui_name_key(tok);
       }

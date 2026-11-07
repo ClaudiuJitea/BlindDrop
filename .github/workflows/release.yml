@@ -1,5 +1,5 @@
 # Every push and pull request builds the game for Linux and Windows and runs the
-# proof gate. Releases currently ship the Linux binary only.
+# proof gate. Releases ship the Linux and Windows binaries.
 # A release is published ONLY when a v* tag is pushed, so nothing reaches
 # players by accident. The game has no updater: players download a release
 # themselves and can check it against SHA256SUMS.
@@ -42,6 +42,7 @@ jobs:
           if [ "$REF_TYPE" = tag ]; then V="$REF_NAME"; fi
           make all BUILD_VERSION="$V" BUILD_COMMIT="$(echo "$SHA" | cut -c1-7)"
           mv build/game-x86_64 blinddrop-linux-amd64
+          mv build/game.exe blinddrop-windows-amd64.exe
 
       # Warning gate WITHOUT LTO (-flto swallows -Wformat-truncation), then the
       # self-contained proof gate. The build that ships is proved.

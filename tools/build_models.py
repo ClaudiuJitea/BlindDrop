@@ -1457,6 +1457,97 @@ def hand_open():
     shell_patch(s_th, 0.70, 0.99, -150.0, 150.0, thick=.0012, nu=6, nv=9, rim_u=.035, rim_d=8.0,
                 col=TIP_CAP, rough=.52, flag=7, sharp=True, name='o_th_tip')
 
+# ------------------------------------------------------------------ grenade pin hand (HAND_GP)
+EXTRA_DEFINES = []
+def hand_pin():
+    """The grenade's off hand taking the pin: the open hand's anatomy (HAND_KO, same
+    glove) with the INDEX hooked through the ring, the other three clenched in a fist behind
+    it and the thumb laid along the index's side. Frame as hand_open: origin at the
+    wrist, +y toward the knuckles, +z the palm normal, +x the thumb side. The hook's
+    crook, its wire axis and its opening are exported for game.c, which places the ring
+    wire IN the crook rather than at a guessed station."""
+    clear()
+    D = V3(0, 0, -1)
+    cuff = [(V3(0,-.034,-.006), D, .0262, .0205), (V3(0,-.016,-.003), D, .0276, .0214),
+            (V3(0, .002, 0), D, .0290, .0222)]
+    _, s_cuff = loft_tube(cuff, seg_u=10, seg_v=20, palmar_flat=0.94, col=SLATE, rough=.60, flag=2, name='p_cuff')
+    shell_patch(s_cuff, 0.14, 0.80, -25.0, 205.0, thick=.0026, bury=.0010, nu=6, nv=10, rim_u=.06, rim_d=7.0,
+                col=LEATHER, rough=.52, flag=7, sharp=True, name='p_strap')
+    palm = [(V3(.003,-.004,.002), D, .0270, .0172), (V3(.003,.024,.004), D, .0350, .0172),
+            (V3(.001,.052,.006), D, .0385, .0162), (V3(-.001,.072,.009), D, .0370, .0136)]
+    _, s_palm = loft_tube(palm, seg_u=14, seg_v=22, palmar_flat=0.78, col=LEATHER, rough=.58, flag=7, name='p_palm')
+    shell_patch(s_palm, 0.04, 0.96, 18.0, 162.0, thick=.0016, nu=8, nv=8, rim_u=.04, rim_d=7.0,
+                col=SLATE, rough=.56, flag=2, sharp=True, name='p_dorsal')
+    shell_patch(s_palm, 0.70, 0.97, 32.0, 148.0, thick=.0020, nu=6, nv=8, rim_u=.05, rim_d=8.0,
+                col=PAD_RIM, rough=.52, flag=4, sharp=True, name='p_kn_bezel')
+    shell_patch(s_palm, 0.73, 0.94, 40.0, 140.0, thick=.0034, nu=6, nv=8, rim_u=.05, rim_d=7.0,
+                col=PAD, rough=.40, flag=4, sharp=True, name='p_kn_plate')
+    shell_patch(s_palm, 0.10, 0.66, 84.0, 96.0, thick=.0008, nu=5, nv=3, rim_u=.04, rim_d=3.0,
+                col=SEAM, rough=.62, flag=4, name='p_seam')
+    # (x at the knuckle, length, radius, splay deg, MCP/PIP/DIP flex deg)
+    # Index: a HOOK — little at the knuckle, hard at the middle joint, so the crook
+    # between the proximal and middle phalanges is where the wire rides.
+    # The other three CLOSE into a fist behind it: a pin takes a real pull, and a
+    # hooked finger only has leverage with the rest of the hand clenched under it.
+    FING = ((.0255, .0700, .0094,  4.0, 34.0, 96.0, 50.0),
+            (.0085, .0780, .0099,  0.0, 84.0, 102.0, 58.0),
+            (-.0088, .0730, .0096, -2.0, 88.0, 104.0, 58.0),
+            (-.0250, .0580, .0084, -5.0, 92.0, 104.0, 56.0))
+    hook = None
+    for i, (x, L, r, spl, f1, f2, f3) in enumerate(FING):
+        p = V3(x, .072 - abs(x)*.12, .007)
+        ang = 0.0
+        sp = radians(spl)
+        pts = [p.copy()]; ups = []
+        for seg_len, flex in zip((L*.46, L*.30, L*.24), (f1, f2, f3)):
+            ang += radians(flex)
+            d = V3(math.sin(sp)*math.cos(ang), math.cos(sp)*math.cos(ang), math.sin(ang))
+            p = p + d*seg_len; pts.append(p.copy())
+            ups.append(V3(0, math.sin(ang), -math.cos(ang)))
+        ctrl = []
+        rr = (1.06, .98, .90, .78)
+        for k in range(3):
+            for u in ((0.0, .5) if k < 2 else (0.0, .5, 1.0)):
+                q = rr[k] + (rr[k+1]-rr[k])*u
+                kn = 1.06 if u == 0.0 and k > 0 else 1.0       # the joints swell
+                # bend the frame's "up" smoothly through each joint
+                up = ups[k] if u > 0.0 or k == 0 else (ups[k-1] + ups[k]).normalized()
+                ctrl.append((pts[k].lerp(pts[k+1], u), up, r*q*kn, r*q*.90*kn))
+        _, s_f = loft_tube(ctrl, seg_u=24, seg_v=16, palmar_flat=0.80, col=SLATE, rough=.58, flag=2, name=f'p_f{i}')
+        shell_patch(s_f, 0.10, 0.30, 62.0, 118.0, thick=.0013, nu=5, nv=5, rim_u=.04, rim_d=8.0,
+                    col=PAD, rough=.42, flag=4, sharp=True, name=f'p_fpad{i}')
+        shell_patch(s_f, 0.55, 0.99, -150.0, -30.0, thick=.0010, nu=6, nv=6, rim_u=.04, rim_d=8.0,
+                    col=LEATHER, rough=.52, flag=7, name=f'p_ftip{i}')
+        shell_patch(s_f, 0.80, 0.99, 40.0, 140.0, thick=.0010, nu=5, nv=5, rim_u=.04, rim_d=8.0,
+                    col=TIP_CAP, rough=.50, flag=7, name=f'p_fcap{i}')
+        if i == 0:
+            # The crook: on the inside bisector of the PIP joint, a finger radius
+            # plus the 1.5 mm wire in from both phalanges.
+            u0 = (pts[0] - pts[1]).normalized(); u1 = (pts[2] - pts[1]).normalized()
+            b = (u0 + u1).normalized()
+            half = math.acos(max(-1.0, min(1.0, u0.dot(u1)))) * 0.5
+            hook = pts[1] + b * ((r*.98 + .0016) / max(math.sin(half), .3))
+            wire = u0.cross(u1).normalized()                     # across the finger
+            opening = ((pts[0] + pts[3]) * 0.5 - hook)
+            opening = (opening - wire*opening.dot(wire)).normalized()
+    # Thumb: laid along the radial side of the index's proximal phalanx, tip just
+    # short of the crook — the hand of someone pulling a key ring, not a fist.
+    thenar = [(V3(.016,.002,.010), V3(.5,0,-1), .0165, .0138), (V3(.024,.022,.014), V3(.5,0,-1), .0175, .0142),
+              (V3(.029,.040,.017), V3(.5,0,-1), .0145, .0122)]
+    loft_tube(thenar, seg_u=12, seg_v=18, palmar_flat=0.86, col=LEATHER, rough=.56, flag=7, name='p_thenar')
+    th = [(V3(.027,.026,.014), V3(.6,0,-1), .0148, .0128), (V3(.037,.042,.022), V3(.7,-.1,-1), .0138, .0120),
+          (V3(.042,.057,.031), V3(.8,-.2,-1), .0124, .0108), (V3(.042,.070,.039), V3(.9,-.3,-1), .0110, .0097),
+          (V3(.039,.080,.045), V3(.9,-.4,-1), .0088, .0079)]
+    _, s_th = loft_tube(th, seg_u=18, seg_v=18, palmar_flat=0.84, col=SLATE, rough=.58, flag=2, name='p_thumb')
+    shell_patch(s_th, 0.22, 0.56, 40.0, 140.0, thick=.0024, nu=6, nv=6, rim_u=.04, rim_d=7.0,
+                col=PAD, rough=.40, flag=4, sharp=True, name='p_th_pad')
+    shell_patch(s_th, 0.70, 0.99, -150.0, 150.0, thick=.0012, nu=6, nv=9, rim_u=.035, rim_d=8.0,
+                col=TIP_CAP, rough=.52, flag=7, sharp=True, name='p_th_tip')
+    f3 = lambda v: '%.5ff, %.5ff, %.5ff' % (v.x, v.y, v.z)
+    EXTRA_DEFINES.append('#define HAND_GP_HOOK  {{%s}}   /* the crook of the index */' % f3(hook))
+    EXTRA_DEFINES.append('#define HAND_GP_WIRE  {{%s}}   /* the wire\'s line through it */' % f3(wire))
+    EXTRA_DEFINES.append('#define HAND_GP_OPEN  {{%s}}   /* out of the hook, toward what it holds */' % f3(opening))
+
 # ------------------------------------------------------------------ fragmentation grenade
 NADE_SPOON_TH = -28.0                            # where the lever lies round the body
 NADE_E = Vector((0,-.386,.921)).normalized()    # from the palm toward the fingers
@@ -1506,18 +1597,21 @@ def grenade():
     # Pin through the fuze, ring on the LEFT: where the off hand reaches to pull it.
     finish(pin(-.0170,.0200,.0030,.0445,.0015,14), STEEL, .34, .92, 0, group=3)
     bm = bmesh.new()   # ring: a torus swept by hand
-    n, m = 36, 10; R_, r_ = .0100, .0015; vs = []
+    # 25 mm across, as a real ring is: at 20 mm a gloved finger could not pass it.
+    n, m = 36, 10; R_, r_ = .0125, .0015; vs = []
     for i in range(n):
         a_ = 2*math.pi*i/n; row = []
         for j in range(m):
             b_ = 2*math.pi*j/m; k = R_ + r_*cos(b_)
-            row.append(bm.verts.new((.0290 + k*cos(a_), .0030 + r_*sin(b_), .0445 + k*sin(a_))))
+            row.append(bm.verts.new((.0315 + k*cos(a_), .0030 + r_*sin(b_), .0445 + k*sin(a_))))
         vs.append(row)
     for i in range(n):
         for j in range(m):
             bm.faces.new((vs[i][j], vs[(i+1)%n][j], vs[(i+1)%n][(j+1)%m], vs[i][(j+1)%m]))
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-    finish(from_bm(bm, 'ring'), STEEL, .34, .92, 0, group=3)
+    # Its own group: the ring hangs from the pin's eye and swings on it, so the
+    # pin hand can take it at whatever angle its arm arrives from.
+    finish(from_bm(bm, 'ring'), STEEL, .34, .92, 0, group=4)
     for o in bpy.context.collection.objects:
         for v in o.data.vertices:
             # -x keeps this frame right-handed: a mirrored frame turns the mesh inside out.
@@ -1528,9 +1622,16 @@ def hand_g():
     '''A hand built round the grenade rather than bent onto it. Everything is placed by polar
     position about the body's axis: th 0 is the palm, 90 the back of the hand's side, 180 the
     far side, so nothing can sink into the shell. Phalanges are straight between real joints.
-    NADE_HOLD yaws this so the palm is on the outside of the body, the fingers go round its
-    far side and the thumb crosses the side facing the eye: a palm turned to the eye would
-    be a forearm rolled past what it can do.'''
+    The palm sits on the outside of the body, the fingers fan round its far side, and the
+    thumb runs up the lever on the side facing the eye: it is what holds the spoon down.
+
+    PROPORTION IS THE WHOLE READ. The first version spaced four 17 mm fingers 12 mm apart
+    round the equator, so most of each one sat inside its neighbour and only the tips
+    survived as four separate nubs at the silhouette; the thumb was a 37 mm slab. Now the
+    fingers are glove-width apart and FAN over the ball (index toward the fuze, little
+    finger curling under the base), they grow out of a knuckle ridge instead of out of the
+    shell, and the thumb is a round digit with a real IP joint whose tip rolls over the
+    lever's shoulder.'''
     clear()
     X = V3(1,0,0)
     def rad(th):   # outward from the body's axis at angle th
@@ -1547,56 +1648,79 @@ def hand_g():
     _, s_cuff = loft_tube(cuff, seg_u=10, seg_v=20, palmar_flat=0.94, col=SLATE, rough=.60, flag=2, name='g_cuff')
     shell_patch(s_cuff, 0.16, 0.78, -25.0, 205.0, thick=.0026, bury=.0010, nu=6, nv=10, rim_u=.06, rim_d=7.0,
                 col=LEATHER, rough=.52, flag=7, sharp=True, name='g_strap')
-    # The palm: a pad lying on the back of the shell, its inner face just clear of it.
-    # The hand closes round the EQUATOR, the widest part of the shell: palm behind it,
-    # fingers round the far side, thumb across the near side, tips meeting at the front.
-    palm = [(W_R - AX_G*.010, N_W, .0250, .0185),
-            (S(4,-.036,.0185), rad(4), .0255, .0160),
-            (S(18,-.018,.0150), rad(18), .0265, .0125),
-            (S(44,-.008,.0125), rad(44), .0265, .0100),
-            (S(66,-.005,.0105), rad(66), .0250, .0085)]
-    _, s_palm = loft_tube(palm, seg_u=16, seg_v=20, palmar_flat=0.86, col=LEATHER, rough=.60, flag=7, name='g_palm')
-    shell_patch(s_palm, 0.08, 0.94, 30.0, 150.0, thick=.0016, nu=8, nv=7, rim_u=.04, rim_d=7.0,
+
+    # --- the palm: one broad pad from the heel to the knuckle line, lying on the back of the
+    # shell. Wide (it spans all four finger roots) and thin, the inner face just clear.
+    palm = [(W_R - AX_G*.010, N_W, .0255, .0180),
+            (S(2, -.034, .0175),  rad(2),  .0300, .0150),
+            (S(20,-.020, .0150),  rad(20), .0340, .0128),
+            (S(42,-.010, .0130),  rad(42), .0345, .0112),
+            (S(62,-.006, .0118),  rad(62), .0330, .0100)]
+    _, s_palm = loft_tube(palm, seg_u=18, seg_v=22, palmar_flat=0.80, col=LEATHER, rough=.60, flag=7, name='g_palm')
+    # The back of the hand is ONE soft panel over the whole outer face: the leather showing
+    # round its edge was what read as a dark crescent hooded over the grenade.
+    shell_patch(s_palm, 0.05, 0.97, 8.0, 172.0, thick=.0018, nu=9, nv=9, rim_u=.03, rim_d=6.0,
                 col=SLATE, rough=.56, flag=2, sharp=True, name='g_dorsal')
-    # Four fingers: three straight bones, a corner at each joint. Index just under the band.
-    # Each finger an open C on the shell's widest band, the bend shared over all three
-    # joints, the tips landing on the near-left face.
-    rows = (( .0115, 70, 50, 48, 46, .0086), (-.0005, 70, 52, 50, 48, .0090),
-            (-.0125, 70, 52, 50, 46, .0084), (-.0235, 70, 50, 46, 40, .0072))
-    for i, (w, th0, a1, a2, a3, r) in enumerate(rows):
-        ths = (th0, th0+a1, th0+a1+a2, th0+a1+a2+a3)
-        wtip = w + .002
-        lift = [r*.95, r*1.02, r*.96, r*.66]           # pads on the shell, the tip pressed in
-        pts = [S(t, w + (wtip-w)*k/3, lift[k]) for k, t in enumerate(ths)]
+
+    # --- four fingers. (w at the root, w drift to the tip, root radius). Glove-width apart
+    # and fanned: each runs round a tilted path rather than a latitude, so the index rises
+    # toward the fuze and the little finger tucks under the base.
+    # Phalanx arcs: 46 / 28 / 21 mm of a glove finger over a ~39 mm path radius.
+    # Digit girths are the KNIFE FIST'S (r_f*: 10.2-11.6 mm), so the two hands
+    # read as the same glove.
+    rows = (( .0172,  .0030, .0110, (62, 62, 40, 30)),    # index
+            (-.0005,  .0006, .0114, (64, 64, 42, 31)),    # middle: the longest
+            (-.0178, -.0018, .0108, (64, 60, 40, 29)),    # ring
+            (-.0318, -.0040, .0098, (62, 54, 36, 27)))    # little
+    for i, (w0, dw, r, arcs) in enumerate(rows):
+        th0 = arcs[0]
+        ths = [th0, th0 + arcs[1], th0 + arcs[1] + arcs[2], th0 + arcs[1] + arcs[2] + arcs[3]]
+        ws  = [w0 + dw * k / 3 for k in range(4)]
+        lift = [r*1.02, r*1.00, r*.95, r*.80]      # resting on the shell; the tip pressed in
+        rr   = [1.12, 1.00, .90, .80]              # knuckle widest, tapering to the tip
+        pts  = [S(ths[k], ws[k], lift[k]) for k in range(4)]
         ctrl = []
-        rr = (1.10, 1.00, .90, .78)
         for k in range(3):
-            for u in (.10, .50, .90):
+            for u in ((.0, .5) if k < 2 else (.0, .5, 1.0)):
                 p_ = pts[k].lerp(pts[k+1], u)
                 t_ = ths[k] + (ths[k+1]-ths[k])*u
+                w_ = ws[k] + (ws[k+1]-ws[k])*u
                 q_ = rr[k] + (rr[k+1]-rr[k])*u
-                ctrl.append((p_, rad(t_), r*q_, r*q_*.92))
-        _, s_f = loft_tube(ctrl, seg_u=22, seg_v=14, palmar_flat=0.80, col=SLATE, rough=.58, flag=2, name=f'g_f{i}')
-        shell_patch(s_f, 0.04, 0.30, 44.0, 136.0, thick=.0016, nu=5, nv=5, rim_u=.04, rim_d=8.0,
-                    col=PAD, rough=.34, flag=4, sharp=True, name=f'g_kn{i}')
-        shell_patch(s_f, 0.62, 0.99, -150.0, -20.0, thick=.0010, nu=6, nv=6, rim_u=.04, rim_d=8.0,
+                # a joint is a slight swell, a bone a slight waist
+                q_ *= 1.04 if u == 0.0 and k > 0 else .98
+                ctrl.append((p_, rad(t_), r*q_, r*q_*.90))
+        _, s_f = loft_tube(ctrl, seg_u=26, seg_v=16, palmar_flat=0.78, col=SLATE, rough=.58, flag=2, name=f'g_f{i}')
+        # moulded knuckle plate on the proximal phalanx only, flush and small
+        shell_patch(s_f, 0.06, 0.26, 52.0, 128.0, thick=.0013, nu=5, nv=5, rim_u=.05, rim_d=9.0,
+                    col=PAD, rough=.36, flag=4, sharp=True, name=f'g_kn{i}')
+        # grip leather on the palmar face (against the shell; it shows only at the tip's roll)
+        shell_patch(s_f, 0.55, 0.99, -160.0, -20.0, thick=.0009, nu=6, nv=6, rim_u=.04, rim_d=8.0,
                     col=LEATHER, rough=.52, flag=7, name=f'g_tip{i}')
-    # Thumb: slim, laid along the side and pressing the spoon down onto the shell.
-    # The thumb crosses the near side horizontally, over the lever, and closes toward
-    # the fingers: it wraps the body, it does not stand up beside it.
-    def tp(th_, w, off): return S(th_, w, off)
-    th = [(tp(-4, -.030,.0190), rad(-4),   .0185, .0135),
-          (tp(-18,-.020,.0165), rad(-18),  .0165, .0118),
-          (tp(-32,-.008,.0138), rad(-32),  .0125, .0098),
-          (tp(-46, .003,.0116), rad(-46),  .0102, .0086),
-          (tp(-60, .011,.0104), rad(-60),  .0094, .0080),
-          (tp(-72, .016,.0098), rad(-72),  .0088, .0075),
-          (tp(-80, .0185,.0094),rad(-80),  .0076, .0066),
-          (tp(-85, .0200,.0088),rad(-85),  .0054, .0048),
-          (tp(-88, .0205,.0082),rad(-88),  .0030, .0028)]
-    _, s_th = loft_tube(th, seg_u=26, seg_v=18, palmar_flat=0.97, col=SLATE, rough=.58, flag=2, name='g_thumb')
-    shell_patch(s_th, 0.12, 0.42, 42.0, 138.0, thick=.0026, nu=6, nv=6, rim_u=.04, rim_d=7.0,
-                col=PAD, rough=.34, flag=4, sharp=True, name='g_th_pad')
+    # The knuckle ridge: the metacarpal heads under the glove, bridging palm to fingers.
+    ridge = [(S(56, w0 + .0004, r*1.05), rad(56), r*1.25, r*.95) for (w0, dw, r, a) in rows]
+    loft_tube(ridge, seg_u=14, seg_v=16, palmar_flat=0.80, col=SLATE, rough=.58, flag=2, name='g_ridge')
+
+    # --- thumb: ON THE SPOON. The metacarpal leaves the heel of the palm, the proximal
+    # phalanx lies along the lever (th = NADE_SPOON_TH) and the distal phalanx bends at the IP
+    # joint so the pad rolls over the lever's shoulder just under the neck. `off` is the
+    # lever's 3 mm plus the thumb's own half-thickness, so it rests on the steel.
+    SP = NADE_SPOON_TH
+    def tp(th_, w, ry): return S(th_, w, .0030 + ry*.95)
+    # Girths are the knife fist's thumb (r_thumb: 12-15.6 mm).
+    th = [(S(-4, -.037, .0180),     rad(-4),     .0158, .0128),   # metacarpal, in the heel
+          (S(-14,-.029, .0156),     rad(-14),    .0140, .0118),
+          (tp(SP+5, -.019, .0108),  rad(SP+5),   .0128, .0108),   # MCP joint, onto the lever
+          (tp(SP+2, -.009, .0102),  rad(SP+2),   .0120, .0102),   # proximal phalanx
+          (tp(SP,    .001, .0100),  rad(SP),     .0118, .0100),
+          (tp(SP,    .010, .0104),  rad(SP),     .0124, .0104),   # IP joint: a swell
+          (tp(SP,    .018, .0098),  rad(SP),     .0116, .0098),   # distal pad on the lever
+          (tp(SP,    .024, .0086),  rad(SP),     .0102, .0086),
+          (tp(SP,    .028, .0064),  rad(SP),     .0076, .0064)]
+    _, s_th = loft_tube(th, seg_u=30, seg_v=18, palmar_flat=0.82, col=SLATE, rough=.58, flag=2, name='g_thumb')
+    shell_patch(s_th, 0.36, 0.56, 54.0, 126.0, thick=.0013, nu=5, nv=5, rim_u=.05, rim_d=9.0,
+                col=PAD, rough=.36, flag=4, sharp=True, name='g_th_pad')
+    shell_patch(s_th, 0.70, 0.99, -160.0, -20.0, thick=.0009, nu=6, nv=6, rim_u=.04, rim_d=8.0,
+                col=LEATHER, rough=.52, flag=7, name='g_th_tip')
 
 def mirror_x():
     '''Left-hand copy of what is in the scene. Winding is flipped so the mesh stays outward.'''
@@ -1637,6 +1761,7 @@ for kfn, ktag in ((knife_tanto, 'KNIFE_TANTO'), (knife_dagger, 'KNIFE_DAGGER'),
                   (knife_kukri, 'KNIFE_KUKRI'), (knife_talon, 'KNIFE_TALON')):
     kfn(); assign_finishes(); emit(store, ktag)
 hand_open(); emit(store, 'HAND_KO')
+hand_pin(); emit(store, 'HAND_GP')
 
 with open(OUT, 'w') as f:
     f.write('// Generated by tools/build_models.py. Do not edit by hand.\n')
@@ -1660,4 +1785,5 @@ with open(OUT, 'w') as f:
         for p in parts:
             f.write('  {%d,%d,%.3ff,%.3ff,%.3ff,%.3ff,%.3ff,%d,%d},\n' % p)
         f.write('};\n#define %s_NP %d\n' % (tag, len(parts)))
+    for d in EXTRA_DEFINES: f.write(d + '\n')
 print('WROTE', OUT)
