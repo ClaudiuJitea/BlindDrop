@@ -16,7 +16,7 @@
 <p align="center">
   <img src="media/sniper.jpg" alt="Looking over Citadel's rooftops from the top of the minaret" width="49%">
   <img src="media/harbor.jpg" alt="The container yard and lighthouse from Harbor's crane walkway" width="49%">
-  <img src="media/refinery.jpg" alt="Pipe racks over mid on Refinery" width="49%">
+  <img src="media/refinery.jpg" alt="Refinery's rooftops and cooling tower from the distillation-column deck" width="49%">
   <img src="media/citadel.jpg" alt="The souk street on Citadel" width="49%">
 </p>
 
@@ -65,10 +65,10 @@ match. A game you host has its own mode and map under **Multiplayer > Host setti
 ### Hostage Rescue
 
 <p align="center">
-  <img src="media/rescue.jpg" alt="Creeping up on the south gate, a sentry growing suspicious" width="49%">
-  <img src="media/hostage.jpg" alt="Cutting a hostage's restraints in the pen" width="49%">
-  <img src="media/extraction.jpg" alt="A freed hostage reaching the helicopter on the LZ" width="49%">
-  <img src="media/compound.jpg" alt="A tower guard watching over the compound at blue hour" width="49%">
+  <img src="media/rescue.jpg" alt="A guard in the scope from outside the wall, growing suspicious" width="49%">
+  <img src="media/hostage.jpg" alt="Leading the freed hostages to the helicopter" width="49%">
+  <img src="media/extraction.jpg" alt="The helicopter on its pad, a tower guard above the wall" width="49%">
+  <img src="media/compound.jpg" alt="The compound at blue hour from above the HQ" width="49%">
 </p>
 
 Three hostages are held in the pen, the motor pool and on the HQ roof. Hold **R** beside one to
