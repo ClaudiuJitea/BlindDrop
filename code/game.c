@@ -2132,6 +2132,19 @@ static solid_t g_solids_all[SRV_LOBBIES][MAX_SOLIDS];
 static int     g_num_solids_all[SRV_LOBBIES];
 #define g_num_solids (g_num_solids_all[g_lobby])
 
+// LADDERS: a climbable strip on a wall face. The rails and rungs are ordinary
+// solids (thin, flush on the wall); what makes it a ladder is this record,
+// which the shared move code (player_move_tick) reads, so a client predicting
+// a climb and the server simulating it run the same arithmetic on the same
+// map-generated data. (x, z) is the foot on the wall face, (nx, nz) the face's
+// outward normal, top the height you climb to (the parapet's crown).
+#define MAX_LADDERS 16
+typedef struct { float x, z, nx, nz, top; } ladder_t;
+static ladder_t g_ladders_all[SRV_LOBBIES][MAX_LADDERS];
+#define g_ladders (g_ladders_all[g_lobby])
+static int      g_nladders_all[SRV_LOBBIES];
+#define g_nladders (g_nladders_all[g_lobby])
+
 // Every match start regenerates the arena from the next seed in a
 // deterministic chain (harness runs stay reproducible from --seed; the
 // Windows build seeds the chain from startup time). The renderer re-uploads
@@ -3600,6 +3613,92 @@ static void quay_rail(int ax, float plane, int inw, float a0, float a1) {
     fbox(ax, plane, inw, a, a + 0.12f, 0.02f, 0.14f, 0.02f, 1.25f, m);
 }
 
+// A LADDER up a wall face. `side` names the face it hangs on (SIDE_N: the
+// face looking -z, ...). The climb height is read off the world: the highest
+// solid just inside the face at the ladder's line, i.e. the parapet's crown.
+// Two rails and rungs stand 16 cm off the wall, which is also what keeps a
+// climber's box clear of the cornice on the way up.
+#define LADDER_HALF  0.30f   // rail to rail / 2
+#define LADDER_OFF   0.16f   // rails' depth off the face
+// Anything jutting past the rails into the climb column (an awning, a
+// balcony) would stop a climber dead, so the ladder slides along the face to
+// the nearest clear stretch, up to 3 m either way.
+static int ladder_clear(float x, float z, float nx, float nz, float top) {
+  float tx = -nz, tz = nx;
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *b = &g_solids[i];
+    if (b->max.y < 0.25f || b->min.y > top) continue;
+    float cx = (b->min.x + b->max.x) * 0.5f - x, cz = (b->min.z + b->max.z) * 0.5f - z;
+    float hx = (b->max.x - b->min.x) * 0.5f, hz = (b->max.z - b->min.z) * 0.5f;
+    float dc = cx * nx + cz * nz, dh = hx * fabsf(nx) + hz * fabsf(nz);
+    float ac = cx * tx + cz * tz, ah = hx * fabsf(tx) + hz * fabsf(tz);
+    if (dc + dh > LADDER_OFF + 0.02f && dc - dh < LADDER_OFF + 0.9f &&
+        fabsf(ac) - ah < LADDER_HALF + 0.45f)
+      return 0;
+  }
+  return 1;
+}
+static void ladder_add(float x, float z, int side) {
+  if (g_nladders >= MAX_LADDERS) return;
+  float nx = side == SIDE_E ? 1.0f : side == SIDE_W ? -1.0f : 0.0f;
+  float nz = side == SIDE_S ? 1.0f : side == SIDE_N ? -1.0f : 0.0f;
+  float tx = -nz, tz = nx;             // along the face
+  float top = 0.0f;
+  int ok = 0;
+  for (int k = 0; k <= 12 && !ok; k++) {
+    float off = (float)((k + 1) / 2) * 0.5f * ((k & 1) ? 1.0f : -1.0f);
+    float cx = x + tx * off, cz = z + tz * off;
+    float px = cx - nx * 0.12f, pz = cz - nz * 0.12f;
+    top = 0.0f;
+    for (int i = 0; i < g_num_solids; i++) {
+      const solid_t *b = &g_solids[i];
+      if (px >= b->min.x && px <= b->max.x && pz >= b->min.z && pz <= b->max.z &&
+          b->max.y > top)
+        top = b->max.y;
+    }
+    if (top >= 1.0f && ladder_clear(cx, cz, nx, nz, top)) { x = cx; z = cz; ok = 1; }
+  }
+  if (!ok) return;                     // no clear wall here: no ladder
+  // A GAP IN THE PARAPET over the ladder, so the way down is as open as the
+  // way up: the crown that set `top` is split round the ladder's span, and
+  // the climb then ends at the roof itself.
+  {
+    float px = x - nx * 0.12f, pz = z - nz * 0.12f, gh = LADDER_HALF + 0.30f;
+    int n0 = g_num_solids;
+    for (int i = 0; i < n0; i++) {
+      solid_t *b = &g_solids[i];
+      if (fabsf(b->max.y - top) > 0.01f || b->max.y - b->min.y > 1.5f) continue;
+      if (px < b->min.x || px > b->max.x || pz < b->min.z || pz > b->max.z) continue;
+      solid_t hi = *b;
+      if (fabsf(tx) > 0.5f) { b->max.x = x - gh; hi.min.x = x + gh; }
+      else                  { b->max.z = z - gh; hi.min.z = z + gh; }
+      int keep_lo = b->max.x - b->min.x > 0.05f && b->max.z - b->min.z > 0.05f;
+      int keep_hi = hi.max.x - hi.min.x > 0.05f && hi.max.z - hi.min.z > 0.05f;
+      if (!keep_lo && keep_hi) { *b = hi; keep_hi = 0; keep_lo = 1; }
+      if (!keep_lo) b->max = b->min;   // degenerate: collides with nothing
+      if (keep_hi) map_add(hi.min, hi.max, hi.color);
+    }
+    float t2 = 0.0f;
+    for (int i = 0; i < g_num_solids; i++) {
+      const solid_t *b = &g_solids[i];
+      if (px >= b->min.x && px <= b->max.x && pz >= b->min.z && pz <= b->max.z &&
+          b->max.y > t2)
+        t2 = b->max.y;
+    }
+    if (t2 >= 1.0f) top = t2;
+  }
+  g_ladders[g_nladders++] = (ladder_t){x, z, nx, nz, top};
+  v3 m = rgb(0.86f, 0.64f, 0.14f);   // safety yellow: findable from the street
+  for (int r = -1; r <= 1; r += 2) {   // rails
+    float ax = x + tx * LADDER_HALF * (float)r, az = z + tz * LADDER_HALF * (float)r;
+    bx(ax - 0.03f * fabsf(tx), 0.0f, az - 0.03f * fabsf(tz),
+       ax + 0.03f * fabsf(tx) + nx * LADDER_OFF, top, az + 0.03f * fabsf(tz) + nz * LADDER_OFF, m);
+  }
+  for (float y = 0.30f; y < top - 0.1f; y += 0.30f)   // rungs
+    bx(x - tx * (LADDER_HALF - 0.03f) + nx * 0.06f, y, z - tz * (LADDER_HALF - 0.03f) + nz * 0.06f,
+       x + tx * (LADDER_HALF - 0.03f) + nx * 0.12f, y + 0.04f, z + tz * (LADDER_HALF - 0.03f) + nz * 0.12f, m);
+}
+
 static void flare_stack(float x, float z, float h) {
   bx(x - 2.0f, 0.0f, z - 2.0f, x + 2.0f, 3.0f, z + 2.0f, g_town.stone);
   for (int i = 0; 3.0f + (float)i * 2.0f < h; i++) {
@@ -3868,6 +3967,14 @@ static void harbor_extras(void) {
   truck(-26.0f, 46.0f, 0, rgb(0.66f, 0.20f, 0.14f));
   for (float z = -36.0f; z <= 40.0f; z += 12.0f) lamp(-43.4f, z, 0, -1);
   barrel(36.0f, -2.0f, rgb(0.20f, 0.30f, 0.50f)); barrel(36.8f, -2.4f, rgb(0.62f, 0.20f, 0.14f));
+  // Sniper roofs: ladders up five buildings, each on a face over open street —
+  // over site A (north row), mid from both sides of the long west block, the
+  // yard from the west block's east end, and the north approach.
+  ladder_add(-20.0f, -38.0f, SIDE_S);
+  ladder_add(20.0f, -40.0f, SIDE_N);
+  ladder_add(-26.0f, -2.0f, SIDE_S);
+  ladder_add(-10.0f, 12.0f, SIDE_E);
+  ladder_add(30.0f, 10.0f, SIDE_N);
 }
 
 static void refinery_extras(void) {
@@ -4046,6 +4153,7 @@ static void map_generate_layout(uint32_t seed) {
     g_rng_gun[h] = rng_gun_seed(seed, h);
   g_rng_bot = (uint64_t)(seed ^ 0xB07u) * 2654435761u + 1;
   g_num_solids = 0;
+  g_nladders = 0;
   g_nprops = 0;
   g_theme = THEMES[rng_u32() % (sizeof THEMES / sizeof THEMES[0])];
   const map_def_t *md = &MAP_DEFS[map_id_valid(g_map_id)];
@@ -7718,7 +7826,9 @@ typedef struct {
 // fail the world hash on the first snapshot instead — a clean refusal, but at
 // the wrong boundary and with the wrong message. The version is what the
 // handshake is for.
-#define NET_PROTO 12   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
+// 13: Harbor gains LADDERS (new solids, split parapets) and player_move_tick
+// climbs them; a 12 client would mispredict every climb and fail the world hash.
+#define NET_PROTO 13   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -17245,6 +17355,23 @@ static void mv_ledge(player_t *p, float wx, float wz, float wlen, float sp2d) {
   }
 }
 
+// The ladder a body at `pos` is on, or -1: its centre within reach of the
+// rails (in front of the face, inside the rail span) and its feet below the
+// top. Stateless, so prediction and rollback need nothing new on the wire.
+#define LADDER_REACH  (PLAYER_RADIUS + LADDER_OFF + 0.22f)
+#define LADDER_CLIMB  3.2f    // m/s up or down
+static int ladder_touch(v3 pos) {
+  for (int i = 0; i < g_nladders; i++) {
+    const ladder_t *L = &g_ladders[i];
+    float dx = pos.x - L->x, dz = pos.z - L->z;
+    float d = dx * L->nx + dz * L->nz, a = dx * -L->nz + dz * L->nx;
+    if (d > 0.0f && d < LADDER_REACH && fabsf(a) < LADDER_HALF + 0.15f &&
+        pos.y < L->top + 0.05f)
+      return i;
+  }
+  return -1;
+}
+
 static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
                              float wish_px, float wish_py) {
   const float *mv = g_sim_mv;
@@ -17406,7 +17533,40 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
     wz = wz / wlen * m;
   }
 
-  if (p->grounded) {
+  // LADDER: facing the rungs, forward climbs and back descends; strafe
+  // shuffles along them, jump kicks off. A grounded body only mounts by
+  // pushing INTO the face, so walking past a ladder never grabs anyone. At
+  // the crown the climb turns into a step over the parapet onto the roof.
+  int climbing = 0;
+  int lad = p->alive ? ladder_touch(p->pos) : -1;
+  if (lad >= 0) {
+    const ladder_t *L = &g_ladders[lad];
+    float into = -(wx * L->nx + wz * L->nz);          // + toward the wall
+    float along = wx * -L->nz + wz * L->nx;
+    if (!p->grounded || into > 0.3f) {
+      if (p->jump_buf > 0 && !p->grounded) {          // kick off the rungs
+        p->vel = (v3){{L->nx * 3.5f, 3.0f, L->nz * 3.5f}};
+        p->jump_buf = 0;
+      } else {
+        climbing = 1;
+        p->sliding = 0;
+        float vy = into * LADDER_CLIMB;
+        if (p->grounded && vy < 0.0f) vy = 0.0f;
+        float hold = into > 0.0f ? 1.5f : 0.0f;      // keep the body on the rungs
+        if (p->pos.y > L->top - 0.35f && into > 0.0f) {
+          vy = fmaxf(vy, 2.0f);                       // clear the crown...
+          hold = 3.0f;                                // ...and step over it
+        }
+        p->vel = (v3){{-L->nx * hold + -L->nz * along * 1.2f, vy,
+                       -L->nz * hold + L->nx * along * 1.2f}};
+        p->jump_buf = 0;
+      }
+    }
+  }
+
+  if (climbing) {
+    // the ladder set the velocity
+  } else if (p->grounded) {
     if (p->sliding) sp2d = mv_slide_step(&p->vel, sp2d, wx, wz, wlen);
     else            mv_walk(&p->vel, wx, wz, wlen, max_speed);
     if (p->jump_buf > 0) {
@@ -17424,7 +17584,7 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
     mv_air(&p->vel, wx, wz, wlen, sp2d);
   }
 
-  p->vel.y -= GRAVITY * TICK_DT;
+  if (!climbing) p->vel.y -= GRAVITY * TICK_DT;
   p->grounded = 0;
   float vy_pre = p->vel.y;  // impact speed: the move zeroes vel.y on contact
   ent_move(&p->pos, &p->vel, &p->grounded, height);
@@ -36253,61 +36413,89 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                  + 0.30f * wallk +
                  (-0.086f - lean * 0.10f + lean_d * 0.30f) * hip);         // roll
   int fistw = cur == WPN_KN || cur == WPN_GR;
-  if (fistw) {
+  float gr_arm = 0.0f;   // grenade: how much the forearm runs straight out of the wrist
+  if (cur == WPN_KN) {
     // The knife IS its timeline: every other spring only rides on top of it.
-    // THE GRENADE IS HELD LIKE THE KNIFE. The grenade hand is sculpted in the
-    // knife fist's own frame (the body sits where the handle would), and the
-    // knife's hold is the one that reads as a relaxed hand: palm behind, finger
-    // backs to the eye, forearm straight in from the corner. The grenade's
-    // timeline still drives the cook and the throw — as offsets from its own
-    // hold, re-based on the knife's — so only the resting pose moves. The
-    // ROTATIONS only: the knife sits low because its blade rises out of the
-    // fist, and at the knife's height the grenade was cut by the frame edge.
-    // Viewmodel only: the figure keeps NADE_HOLD.
-    static const float KH[6] = KNIFE_HOLD;
-    float kk[6];
-    for (int i = 0; i < 6; i++)
-      kk[i] = ga_.kn[i] + (cur == WPN_GR && i >= 3 ? KH[i] - NADE_HOLD[i] : 0.0f);
-    gx = rgt; gy = upv; gz = fwd;
-    rot2(&gz, &gy, kk[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
-    rot2(&gx, &gz, kk[4] + VLERP(sway_y));
-    rot2(&gx, &gy, kk[5] + VLERP(roll));
-    px = kk[0] + VLERP(bob_x) + VLERP(lag_x);
-    py = kk[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
-    pz = kk[2] + VLERP(lag_z);
     // The knife rides a little further out than its timeline says: at the
     // timeline's own distance the fist was nearly a third of the frame
     // in the guard and dwarfed the blade it holds. Scaling the offset from the
     // eye keeps every keyframe's screen position and only shrinks the
     // assembly. Viewmodel only: the figure keeps the timeline as authored.
-    // The grenade rides the same push: same hand, same distance, same scale.
+    gx = rgt; gy = upv; gz = fwd;
+    rot2(&gz, &gy, ga_.kn[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
+    rot2(&gx, &gz, ga_.kn[4] + VLERP(sway_y));
+    rot2(&gx, &gy, ga_.kn[5] + VLERP(roll));
+    px = ga_.kn[0] + VLERP(bob_x) + VLERP(lag_x);
+    py = ga_.kn[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
+    pz = ga_.kn[2] + VLERP(lag_z);
     px *= KNIFE_VM_PUSH; py *= KNIFE_VM_PUSH; pz *= KNIFE_VM_PUSH;
-    if (cur == WPN_GR && (w->gr_cook > 0 || w->gr_t > 0)) {
-      // PRESENT THE RING: the wrist rolls the grenade about its own fuze axis
-      // to offer the ring to the off hand for the reach and the pull, and rolls
-      // back as the hand leaves. Turned about the body's centre, so the grenade
-      // stays where it is in the palm and on screen.
-      float nc = nade_clock(w, alpha);
-      float pr = smooth01(f_clamp(nc / NPIN_REACH, 0.0f, 1.0f)) *
-                 (1.0f - smooth01(f_clamp((nc - NPIN_PULL1) / 24.0f, 0.0f, 1.0f)));
-      float ang = -0.6f * pr;
-      if (ang != 0.0f) {
-        v3 o0 = v3_add(eye, v3_add(v3_scale(rgt, px), v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
-        v3 ax = v3_norm(v3_add(v3_scale(gy, 0.921f), v3_scale(gz, 0.386f)));
-        v3 cn = v3_add(o0, v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f)));
-        #define RODR(v) v3_add(v3_add(v3_scale(v, cosf(ang)), v3_scale(v3_cross(ax, v), sinf(ang))), \
-                               v3_scale(ax, v3_dot(ax, v) * (1.0f - cosf(ang))))
-        gx = RODR(gx); gy = RODR(gy); gz = RODR(gz);
-        v3 o1 = v3_add(cn, RODR(v3_sub(o0, cn)));
-        #undef RODR
-        v3 dd = v3_sub(o1, eye);
-        px = v3_dot(dd, rgt); py = v3_dot(dd, upv); pz = v3_dot(dd, fwd);
+  } else if (cur == WPN_GR) {
+    // Dedicated first-person grenade timeline: HAND_G cradles the shell from
+    // behind-right-below on a true anatomical ulnar wrist, so the fuze stands
+    // upright at rest, turns cleanly inward to offer the pull ring to HAND_GP,
+    // raises into a poised upright cook hold (no palm-over-top wrist flip), and
+    // drives forward and down off the lower edge on release. Viewmodel only:
+    // the third-person figure keeps NADE_HOLD..NADE_DOWN.
+    static const float G_IDLE[6] = {0.220f, -0.054f, 0.390f,  0.34f, 1.18f, -0.09f};
+    static const float G_PULL[6] = {0.096f, -0.040f, 0.372f,  0.32f, 0.54f, -0.06f};
+    static const float G_COOK[6] = {0.226f, -0.018f, 0.382f,  0.36f, 1.30f, -0.11f};
+    static const float G_OUT[6]  = {0.145f, -0.035f, 0.535f, -0.35f, 0.64f, -0.08f};
+    static const float G_LOWC[6] = {0.200f, -0.115f, 0.340f,  0.40f, 0.90f, -0.08f};
+    static const float G_LOWO[6] = {0.125f, -0.060f, 0.510f,  0.44f, 0.56f, -0.08f};
+    static const float G_DOWN[6] = {0.185f, -0.340f, 0.360f, -0.55f, 0.68f, -0.10f};
+    #define G_COOK_AT(dst, c_) do {                                                \
+      float u_in_ = smooth01(f_clamp((c_) / NPIN_REACH, 0.0f, 1.0f));              \
+      float u_ck_ = smooth01(f_clamp(((c_) - 42.0f) / 26.0f, 0.0f, 1.0f));         \
+      for (int i_ = 0; i_ < 6; i_++) {                                             \
+        float p_ = G_IDLE[i_] + (G_PULL[i_] - G_IDLE[i_]) * u_in_;                 \
+        (dst)[i_] = p_ + (G_COOK[i_] - p_) * u_ck_;                                \
+      }                                                                            \
+    } while (0)
+    float kk[6];
+    for (int i = 0; i < 6; i++) kk[i] = G_IDLE[i];
+    if (w->gr_t > 0) {
+      float t = (float)w->gr_t - 1.0f + alpha;
+      float c_rel = (float)(NADE_FUSE - w->gr_fuse);
+      float st[6];
+      G_COOK_AT(st, c_rel);
+      if (t < (float)NADE_RELEASE_T) {
+        float u = f_clamp(t / (float)NADE_RELEASE_T, 0.0f, 1.0f);
+        u = u * u * (1.6f - 0.6f * u);
+        if (w->gr_lob) {
+          float iu = 1.0f - u;
+          for (int i = 0; i < 6; i++)
+            kk[i] = iu * iu * st[i] + 2.0f * iu * u * G_LOWC[i] + u * u * G_LOWO[i];
+        } else {
+          for (int i = 0; i < 6; i++) kk[i] = st[i] + (G_OUT[i] - st[i]) * u;
+        }
+      } else if (t < (float)NADE_RELEASE_T + 16.0f) {
+        const float *pa = w->gr_lob ? G_LOWO : G_OUT;
+        float u = smooth01((t - (float)NADE_RELEASE_T) / 16.0f);
+        for (int i = 0; i < 6; i++) kk[i] = pa[i] + (G_DOWN[i] - pa[i]) * u;
+      } else {
+        float u = smooth01((t - (float)NADE_RELEASE_T - 16.0f) /
+                           (float)(NADE_THROW_T - NADE_RELEASE_T - 16));
+        for (int i = 0; i < 6; i++) kk[i] = G_DOWN[i] + (G_IDLE[i] - G_DOWN[i]) * u;
       }
-      // ...and BRINGS IT IN toward the chest, so the left hand meets it in the
-      // middle of the frame and its arm reaches in from the left, instead of the
-      // left hand crossing the whole screen to the bottom-right corner.
-      px -= 0.120f * pr; py += 0.030f * pr; pz -= 0.010f * pr;
+    } else if (w->gr_cook > 0) {
+      G_COOK_AT(kk, (float)w->gr_cook - 1.0f + alpha);
+      if (w->gr_cook > NADE_PIN_T) {
+        float k = (float)w->gr_cook / (float)NADE_FUSE, c = (float)w->gr_cook + alpha;
+        k = k * k * k * 0.0065f;
+        kk[0] += sinf(c * 1.13f) * k;
+        kk[1] += sinf(c * 1.61f + 1.0f) * k;
+        kk[5] += sinf(c * 0.91f + 2.0f) * k * 3.0f;
+      }
     }
+    #undef G_COOK_AT
+    gx = rgt; gy = upv; gz = fwd;
+    rot2(&gz, &gy, kk[3] - VLERP(sway_p) - kick * 2.0f + sw * 0.60f);
+    rot2(&gx, &gz, kk[4] + VLERP(sway_y));
+    rot2(&gx, &gy, kk[5] + VLERP(roll));
+    gr_arm = 1.0f;
+    px = kk[0] + VLERP(bob_x) + VLERP(lag_x);
+    py = kk[1] + VLERP(bob_y) + VLERP(lag_y) - dip * 0.5f - sw * 0.125f;
+    pz = kk[2] + VLERP(lag_z);
   }
   v3 org = v3_add(eye, v3_add(v3_scale(rgt, px),
            v3_add(v3_scale(upv, py), v3_scale(fwd, pz))));
@@ -36984,10 +37172,11 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       }
       for (int h = 0; h < 2; h++) {
         if (h == 1 && knf && (cur == WPN_GR ? !pin_on : gk <= 0.01f)) continue;
+        const v3 gr_wr = HAND_G_WRIST, gr_ax = HAND_G_AX;
         v3 wr = h == 0
           ? cur == WPN_GR
-            ? v3_add(or_p, v3_add(v3_scale(rx, -0.0355f),     // the grenade hand's own wrist
-                           v3_add(v3_scale(ry, -0.0816f), v3_scale(rz, -0.0358f))))
+            ? v3_add(or_p, v3_add(v3_scale(rx, gr_wr.x),      // the grenade hand's own wrist
+                           v3_add(v3_scale(ry, gr_wr.y), v3_scale(rz, gr_wr.z))))
             : cur == WPN_KN
             ? v3_add(or_h, v3_scale(v3_add(v3_scale(rx, 0.018f),
                            v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f))), kfs))
@@ -37001,9 +37190,17 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         // A rifle pins the arm's angle; a swinging knife does not, and a forearm
         // rigid to the hand sweeps straight through the camera on every cut. The
         // knife arm aims at the shoulder instead, so it always leaves the frame.
+        // THE GRENADE WRIST IS STRAIGHT: the forearm runs out along the hand's
+        // own anatomical forearm line (HAND_G_AX in the sculpt), so neither the
+        // hold nor the throw kinks the wrist or sweeps the vambrace across the lens.
+        v3 shd = v3_norm(v3_sub(v3_add(eye, v3_add(v3_scale(rgt, 0.30f),
+                         v3_add(v3_scale(upv, -0.42f), v3_scale(fwd, -0.10f)))), wr));
+        if (h == 0 && cur == WPN_GR && gr_arm > 0.0f) {
+          v3 hax = v3_norm(v3_add(v3_scale(rx, gr_ax.x), v3_add(v3_scale(ry, gr_ax.y), v3_scale(rz, gr_ax.z))));
+          shd = v3_norm(v3_add(v3_scale(shd, 1.0f - gr_arm), v3_scale(hax, gr_arm)));
+        }
         v3 ax = v3_norm(h == 0
-          ? (knf ? v3_sub(v3_add(eye, v3_add(v3_scale(rgt, 0.30f),
-                                 v3_add(v3_scale(upv, -0.42f), v3_scale(fwd, -0.10f)))), wr)
+          ? (knf ? shd
                  : v3_add(v3_scale(rx, 0.32f), v3_add(v3_scale(ry, -0.66f), v3_scale(rz, -0.68f))))
           : cur == WPN_KN ? v3_sub(kshoulder, wr)
           : cur == WPN_GR ? v3_scale(kly, -1.0f)      // the pin hand's wrist is straight
@@ -42257,6 +42454,7 @@ static void bothear_proof(void) {
   // movement gate must wait until the sound is within 60 degrees of view.
   memset(g_match.noise, 0, sizeof g_match.noise);
   g_num_solids = 0;
+  g_nladders = 0;
   BOTHEAR_STAGE();
   g_tick = 200;
   bothear_emit_shot(2, (v3){{10,1.0f,0}});
@@ -42379,6 +42577,7 @@ static void bothear_proof(void) {
   float wall_err = v3_len(v3_sub(g_bots[0].hear_pos, (v3){{0,0,10}}));
   int localised_wall = fabsf(wall_err - wall_want) < 1e-3f;
   g_num_solids = 0;
+  g_nladders = 0;
 
   // THE STARTLE, at the angle the whole complaint was about: a boot lands
   // 6 m directly BEHIND a patrolling bot. The contract is a bound, not a
@@ -42435,6 +42634,7 @@ static void bothear_proof(void) {
                           fabsf(wrap_pi(heard_bearing - g_bots[0].yaw)) <
                               fabsf(wrap_pi(heard_bearing - memory_yaw));
   g_num_solids = 0;
+  g_nladders = 0;
 
   // Same fixture, target VISIBLE: the noise must not move it at all.
   memset(g_match.noise, 0, sizeof g_match.noise);
@@ -42655,6 +42855,7 @@ static void botweapon_proof(void) {
   g_players[0] = (player_t){.pos = {{0,0,-30}}, .hp = PLAYER_HP, .alive = 1,
                              .grounded = 1, .eye = EYE_STAND};
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   g_bots_frozen = 0;
   *b = (bot_t){.pos = {{0,0,0}}, .hp = PLAYER_HP, .alive = 1, .active = 1,
@@ -42673,6 +42874,7 @@ static void botweapon_proof(void) {
   memset(g_humans_on, 0, sizeof g_humans_on);
   g_match.nbots = 1;
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   *b = (bot_t){.pos = {{0,0,0}}, .hp = PLAYER_HP, .alive = 1, .active = 1,
                .grounded = 1, .eye = EYE_STAND, .tgt = -1, .scan_t = 100,
@@ -42694,6 +42896,7 @@ static void botweapon_proof(void) {
   g_players[0] = (player_t){.pos = {{0,0,-10}}, .hp = PLAYER_HP, .alive = 1,
                              .grounded = 1, .eye = EYE_STAND};
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   *b = (bot_t){.pos = {{0,0,0}}, .hp = PLAYER_HP, .alive = 1, .active = 1,
                .grounded = 1, .eye = EYE_STAND, .tgt = 0, .scan_t = 100,
@@ -42755,6 +42958,7 @@ static void botflank_proof(void) {
   memset(g_humans_on, 0, sizeof g_humans_on);
   g_match.nbots = 1;
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   g_bots_frozen = 0;
   g_tick = 100;
@@ -42878,6 +43082,7 @@ static void botmem_stage(bot_t seed, v3 hpos) {
   g_match.nbots = 1;
   g_humans_on[0] = 1;
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   seed.prev_pos = seed.pos;
   seed.hp = PLAYER_HP;
@@ -42971,6 +43176,7 @@ static void botmemory_proof(void) {
   int reacquire0 = g_bots[0].reacquire_count;
 
   g_num_solids = 0;
+  g_nladders = 0;
   // Reacquisition needs the target back in the LINE and back in the ARC, so the
   // fixture now states the second precondition instead of leaving it to
   // wherever the search walk happened to leave the bot facing. The arc itself
@@ -43041,6 +43247,7 @@ static void botmemory_proof(void) {
   g_match.nbots = 2;
   g_humans_on[0] = 1;
   g_num_solids = 0;
+  g_nladders = 0;
   g_num_events = 0;
   g_players[0] = (player_t){.pos = {{5,0,0}}, .hp = PLAYER_HP,
                              .alive = 1, .grounded = 1, .eye = EYE_STAND};
@@ -43069,6 +43276,7 @@ static void botmemory_proof(void) {
   // six physical anchors valid and distinct; all six must be consumed before
   // the seventh replan wraps to one of them.
   g_num_solids = 0;
+  g_nladders = 0;
   g_bots[0] = (bot_t){.pos = {{0,0,0}}, .last_seen = {{0,0,-8}},
                        .belief_pos = {{1,0,-7}},
                        .last_seen_vel = {{0,0,-1}}, .search_dir = 1};

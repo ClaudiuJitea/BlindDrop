@@ -29,7 +29,7 @@
 - **Five weapons** on `1`-`5` (rifle, bolt sniper, sidearm, knife, frag grenades), no loadouts or
   unlocks. Grenades cook, bounce and roll; the knife chains slashes, guards and parries.
 - **Weapon handling:** realistic magazine changes, scopes, sway and inertia, tracers from the muzzle
-  to the impact, and a mantle over low walls.
+  to the impact, a mantle over low walls and ladders to climb.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots** hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **Armory:** five knives, eleven weapon themes and glove colourways (first-person looks only), plus
@@ -45,7 +45,7 @@
 | **Arena** | Procedural: a new layout and sky every match. |
 | **Foundry**, **Bazaar**, **Outpost** | Handmade 48 m arenas: a gantry and side halls, a market square with rooftops, long sniper lanes. |
 | **Citadel** | 104 m desert old town: a domed mosque, a climbable minaret, arched gates and rooftop stairs. |
-| **Harbor** | 104 m waterfront: brick warehouses, stacked containers, a crane walkway and a lighthouse. |
+| **Harbor** | 104 m waterfront: brick warehouses, stacked containers, a crane walkway, a lighthouse and ladders up to the rooftops. |
 | **Refinery** | 104 m industrial site: storage tanks, pipe racks over mid, a flare stack and a column lookout. |
 | **Compound** | 104 m walled stronghold at blue hour, the Hostage Rescue map; also a normal map. |
 
@@ -146,7 +146,7 @@ make build/game-x86_64
 ./build/game-x86_64
 ```
 
-`make dist-linux RELEASE_VERSION=v0.6` builds the redistributable binary (needs Docker). The
+`make dist-linux RELEASE_VERSION=v0.7` builds the redistributable binary (needs Docker). The
 first-person models come from `tools/build_models.py`, regenerated with
 `blender -b --factory-startup -P tools/build_models.py`.
 
