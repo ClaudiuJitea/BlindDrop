@@ -13399,7 +13399,10 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
     float s = GUN_PATTERN[w->idx & 31];
     w->punch_roll_v = (s > 0.001f ? 1.0f : s < -0.001f ? -1.0f
                                    : (w->idx & 1) ? 1.0f : -1.0f) *
-                      GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V * GUN_ROLL_K;
+                      GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V * GUN_ROLL_K
+                      // automatic fire rocked the picture side to side at the
+                      // fire rate; the single-shot sniper keeps its full roll
+                      * (w->cur == WPN_SR ? 1.0f : 0.4f);
   }
   // SPLIT, not converted (the one line that fused both meanings): shots++ is
   // INDEX — every human's lifetime counter, the trace contract — while the
@@ -13409,13 +13412,18 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   int sh = human_of_ent(ent);
   if (sh >= 0) g_players[sh].shots++;
   if (ent == g_local_ent && sh >= 0) {
-    g_players[sh].vm.kick_v += 0.8f + 0.5f * wp[WP_PUNCH];  // gun slams back
+    g_players[sh].vm.kick_v += w->cur == WPN_SR ? 0.8f + 0.5f * wp[WP_PUNCH]  // gun slams back
+                                                : 0.42f + 0.26f * wp[WP_PUNCH];
+    // (The AR and pistol had 0.8 + 0.5 p before 0.7: at the AR's 12.5 rounds a second the gun jumped
+    // a full 8 mm and 4 deg every round and read as shaking, not recoiling.)
     // ...and TWISTS: the bore is above the grip, so the recoil impulse is a
     // torque as well as a push. Its sign and size come from the shot index
     // (a hash, no rng draw: the gun stream stays exactly what it was).
     uint32_t th = (uint32_t)w->idx * 2654435761u ^ 0x9E37u;
     float tw = ((float)(th >> 8 & 0xFFFF) / 65535.0f - 0.35f);
-    g_players[sh].vm.twist_v += tw * (1.6f + 1.2f * wp[WP_PUNCH]) * (1.0f - 0.6f * w->ads_s);
+    g_players[sh].vm.twist_v += tw * (w->cur == WPN_SR ? 1.0f + 0.7f * wp[WP_PUNCH]
+                                                      : 0.45f + 0.3f * wp[WP_PUNCH])
+                                 * (1.0f - 0.6f * w->ads_s);
   }
   if (anim) {
     anim->fire_k = 1.0f;                          // third-person body: gun kick
@@ -17179,7 +17187,7 @@ static void vm_tick(player_t *p) {
     v->wall = f_clamp(v->wall, 0.0f, 1.0f);
   }
   // Torque twist from the last shot (impulse in weapon_fire), ringing out.
-  vm_spring(&v->twist, &v->twist_v, 0.0f, 4.2f, 0.32f);
+  vm_spring(&v->twist, &v->twist_v, 0.0f, 4.2f, 0.55f);  // settles, no ringing
 
   // Walk bob: the phase advances at a STRIDE CADENCE (~1.6..2.3 Hz), not
   // with distance — at 12 m/s a distance phase would wag the gun at ~10 Hz,
@@ -36384,7 +36392,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // so ADS — the state a player actually shoots from, where the AR's dot is a
   // HUD element and the SR's disc is derived from the ocular — is left exactly
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
-  rot2(&gz, &gy, -(VLERP(sway_p) + kick * (6.0f + 3.2f * hip)
+  rot2(&gz, &gy, -(VLERP(sway_p) + kick * (cur == WPN_SR ? 6.0f + 3.2f * hip : 2.6f + 1.2f * hip)
                  + rl * 0.055f - rch * 0.045f
                  - rk * 0.075f + sw * 0.42f) + aim_p * hip
                  + 0.62f * wallk);                                         // pitch
