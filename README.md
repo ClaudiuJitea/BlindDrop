@@ -25,13 +25,16 @@
 - **Play with friends:** one click hosts a game; everyone on your network sees it and joins with
   another. **Team Deathmatch** up to 9 v 9, ALPHA in red against BRAVO in blue, bots filling the gaps.
 - **A hostage-rescue mission:** sneak into a guarded compound, free three hostages and walk them
-  out to a helicopter.
+  out to a helicopter, alone or as a squad of up to three with friends and bots.
 - **Five weapons** on `1`-`5` (rifle, bolt sniper, sidearm, knife, frag grenades), no loadouts or
   unlocks. Grenades cook, bounce and roll; the knife chains slashes, guards and parries.
 - **Weapon handling:** realistic magazine changes, scopes, sway and inertia, tracers from the muzzle
   to the impact, a mantle over low walls and ladders to climb.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots** hear you, remember you, flank, throw grenades and find their way around the big maps.
+- **Two forces you can tell apart by shape:** you and your side are operators (helmet, goggles,
+  plate carrier, pack); whoever you're fighting are insurgents (head wrap, face scarf, light chest
+  rig, no armour), on every map and in every mode. Team games keep their red and blue on top.
 - **Armory:** five knives, eleven weapon themes and glove colourways (first-person looks only), plus
   the weapon's field of view and a lower hip position.
 - **Match summary and career:** your headshots and best run each match, lifetime totals in `config.cfg`.
@@ -57,7 +60,7 @@
 | **Snipers Only** | The bolt sniper and nothing else. |
 | **Knives + Nades** | The knife, with grenades that regrow. |
 | **Last Man Standing** | No respawns; the last one alive takes the round. |
-| **Hostage Rescue** | Operation Nightfall, a single-player stealth mission on Compound. |
+| **Hostage Rescue** | Operation Nightfall, a stealth mission on Compound for a squad of one to three, players and bots. |
 
 Pick them under **Singleplayer** (they apply on the next restart); **Rotate** changes map every
 match. A game you host has its own mode and map under **Multiplayer > Host settings**.
@@ -81,7 +84,16 @@ your crosshair, `?` over his head), faster when you are close, standing, moving 
 too. The alarm sends everyone hunting and starts the hostages' execution clock. A knife strike on a
 guard who isn't fighting you is a silent takedown. Difficulty sets the guards (10, 14 or 18), their
 sight, the radio delay and the execution timer (100, 75 or 55 s); the debrief rates you Ghost,
-Shadow, Silent or Loud. Offline only.
+Shadow, Silent or Loud.
+
+**The squad.** **SQUAD** (Singleplayer, or Host settings) is one to three operators. Players take
+the places first and bots fill the rest, stepping aside as friends join. Every operator past the
+first brings two more guards, up to 18: a squad of three on Easy faces 14, on Normal or Hard 18.
+Squad bots stay a few metres behind the nearest player, crouch when you crouch, watch your flanks
+and cut a hostage loose when you're both beside one. They hold fire until a guard is onto the
+squad, the alarm is up or a player opens fire. Freed hostages follow whoever cut them free (a bot
+hands them on to the nearest player). The mission fails only when the whole squad is down;
+a fallen operator watches the others carry on.
 
 ## Download and run
 
@@ -112,6 +124,7 @@ Up to 8 players per arena, with bots in the empty slots. Open **MULTIPLAYER**:
 
 - **Host a game** starts a server on your PC and puts you in it; it shuts down when you leave.
   **Host settings** picks its mode, map, bots, difficulty and frag limit. Linux only.
+  **Hostage Rescue** hosts the mission as a co-op game: up to three players, bots in the free places.
 - **Games on your network** lists every game on your LAN. Click one to join.
 - **Join by address** takes an IP or `host:port`. Over the internet the host forwards UDP 31415.
 
@@ -126,10 +139,11 @@ A dedicated server works from the command line:
 ```sh
 ./blinddrop-linux-amd64 --server --mode tdm --team-size 5 --team-fill 1 --friendly-fire 0
 ./blinddrop-linux-amd64 --server --mode lms --map citadel --name "friday night"
+./blinddrop-linux-amd64 --server --mode rescue --squad 3 --skill 1
 ./blinddrop-linux-amd64 --connect 192.168.1.50
 ```
 
-Modes: `dm tdm gun sniper blades lms`. Maps: `arena foundry bazaar outpost citadel harbor refinery compound rotate`.
+Modes: `dm tdm gun sniper blades lms rescue`. Maps: `arena foundry bazaar outpost citadel harbor refinery compound rotate`.
 
 ## Privacy
 

@@ -935,6 +935,7 @@ static struct {   // consumed by the Linux server half only
   char name[24];       // --name: what a LAN scan lists this server as
   int team_size, team_fill;   // --team-size N, --team-fill 0|1 (TEAM DEATHMATCH)
   int team_ff;                // --friendly-fire 0|1
+  int squad;                  // --squad N: HOSTAGE RESCUE squad size 1..3
 // DESIGNATED, and not merely as a style preference. This was positional, and
 // adding `lobbies` to the int line above put it BEFORE `ticks` while the
 // initializer still carried the old order — so the default became lobbies = 0,
@@ -949,7 +950,7 @@ static struct {   // consumed by the Linux server half only
 // is edited is a silent trap, and this one only has to be sprung once.
 } g_srv = {.port = NET_PORT_DEF, .cap_bots = 2, .cap_public = 6,
            .skill = 1, .fraglimit = 12, .lobbies = 1, .mode = 0, .rounds = 3,
-           .ticks = 0, .team_size = 5, .team_fill = 1};
+           .ticks = 0, .team_size = 5, .team_fill = 1, .squad = 3};
 
 // WHICH entity is "me" — the one identity that is allowed to differ per
 // process: 0 in singleplayer, the own id on a networked client,
@@ -1025,6 +1026,8 @@ static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "
 // TEAM DEATHMATCH: two sides, ALPHA and BRAVO. A winner >= MAX_ENTS is a TEAM
 // (MAX_ENTS + team), which is how EV_END, NP_SCORES and the banner carry it.
 #define TEAM_SIZE_MAX 9
+// HOSTAGE RESCUE's squad: one to three operators, humans first, bots the rest.
+#define RESC_SQUAD_MAX 3
 static const char *const TEAM_NAMES[2] = {"ALPHA", "BRAVO"};
 static int won_by_me(int winner);   // with the team state, by match_t
 // GUN GAME's ladder: GG_RUNG_KILLS kills with each weapon promote you to the
@@ -1504,6 +1507,7 @@ typedef struct {
   // MULTIPLAYER page's HOST SETTINGS, apart from the SINGLEPLAYER rules.
   int   host_mode, host_map, host_bots;
   int   host_team_size, host_team_fill, host_team_ff;
+  int   sp_squad, host_squad;  // HOSTAGE RESCUE: squad size 1..RESC_SQUAD_MAX
   char  name[12];            // player name; glyph policy lives in name_glyph
   int   third_person;        // camera: 0 = first person, 1 = shoulder cam
   int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
@@ -1600,6 +1604,7 @@ static config_t config_defaults(void) {
                 .sp_team_size = 5, .sp_team_fill = 1, .sp_team = 0, .sp_team_ff = 0,
                 .host_mode = GM_TDM, .host_map = 0, .host_bots = 3,
                 .host_team_size = 5, .host_team_fill = 1, .host_team_ff = 0,
+                .sp_squad = 3, .host_squad = 3,
                 // LINEAR (0), changed from STANDARD 2026-08-19. The power curve
                 // was chosen to widen the precision band most thumbs live in —
                 // but it does that by making the stick's OUTPUT non-linear in
@@ -1671,6 +1676,7 @@ static void config_emit(FILE *f, const config_t *c) {
           map_pick_key(c->host_map), c->host_bots);
   fprintf(f, "host_team_size %d\nhost_team_fill %d\nhost_friendly_fire %d\n",
           c->host_team_size, c->host_team_fill, c->host_team_ff);
+  fprintf(f, "sp_squad %d\nhost_squad %d\n", c->sp_squad, c->host_squad);
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
@@ -1897,7 +1903,7 @@ static void config_load_or_create(const char *path, config_t *c) {
     }
     else if (!strcmp(key, "host_mode")) {
       int m = gm_parse(val);
-      if (m >= 0 && m != GM_RESCUE) c->host_mode = m;
+      if (m >= 0) c->host_mode = m;
     }
     else if (!strcmp(key, "sp_map")) {
       int m = map_parse(val);
@@ -1913,6 +1919,8 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "host_team_size")) c->host_team_size = parse_int(val, c->host_team_size, 1, TEAM_SIZE_MAX);
     else if (!strcmp(key, "host_team_fill")) c->host_team_fill = parse_int(val, c->host_team_fill, 0, 1);
     else if (!strcmp(key, "host_friendly_fire")) c->host_team_ff = parse_int(val, c->host_team_ff, 0, 1);
+    else if (!strcmp(key, "sp_squad")) c->sp_squad = parse_int(val, c->sp_squad, 1, RESC_SQUAD_MAX);
+    else if (!strcmp(key, "host_squad")) c->host_squad = parse_int(val, c->host_squad, 1, RESC_SQUAD_MAX);
     else if (!strcmp(key, SP_ROUNDS_DEF.key)) {
       c->sp_rounds = parse_int_def(parse_long(val, c->sp_rounds), &SP_ROUNDS_DEF);
     }
@@ -7828,7 +7836,9 @@ typedef struct {
 // handshake is for.
 // 13: Harbor gains LADDERS (new solids, split parapets) and player_move_tick
 // climbs them; a 12 client would mispredict every climb and fail the world hash.
-#define NET_PROTO 13   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
+// 14: HOSTAGE RESCUE goes online (NP_RESCUE, the squad/guard sides in
+// team_mates); a 13 client would neither draw nor predict the mission.
+#define NET_PROTO 14   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -7863,6 +7873,10 @@ typedef enum {
   NP_TEAM,          // client->server: token + side (0/1). The server refuses a
                     // full side in silence; the next NP_SCORES says which side
                     // the client is really on.
+  NP_RESCUE,        // server->client, 20 Hz while a HOSTAGE RESCUE runs: the
+                    // mission's state (alarm, clocks, hostages, every guard's
+                    // detection meter, the banner). STATE like NP_SCORES: a
+                    // lost packet is repaired by the next one.
 } np_type_t;
 
 // Values are pinned: they ride the NP_REJECT payload, and 3/4 (bad cookie /
@@ -11523,9 +11537,14 @@ static int g_net_team_fill;   // client: ...and whether bots fill it
 static int teams_on(void) { return game_mode() == GM_TDM; }
 static int team_of(int e) { return e >= 0 && e < MAX_ENTS ? g_team[e] : -1; }
 // Friend, not foe: two DIFFERENT entities on one side of a team game.
+// HOSTAGE RESCUE has two sides as well, the squad and the guards, and they are
+// fixed by who an entity is (resc_side), not by a choice.
+static int resc_side(int e);
+static int resc_is_squad(int e);
 static int team_mates(int a, int b) {
-  return teams_on() && a != b && a >= 0 && b >= 0 && a < MAX_ENTS && b < MAX_ENTS &&
-         g_team[a] == g_team[b];
+  if (a == b || a < 0 || b < 0 || a >= MAX_ENTS || b >= MAX_ENTS) return 0;
+  if (game_mode() == GM_RESCUE) return resc_side(a) == resc_side(b);
+  return teams_on() && g_team[a] == g_team[b];
 }
 static int team_size(void) {
   int n = g_online && g_net_team_size ? g_net_team_size : g_cfg.sp_team_size;
@@ -11552,7 +11571,9 @@ static int team_auto(void) {
 }
 // Did the local player's side (or the local player) take the match?
 static void tdm_deal_bots(int respawn);   // with the bot roster, below
+static int rescue_won(void);
 static int won_by_me(int winner) {
+  if (game_mode() == GM_RESCUE) return rescue_won();   // the squad wins or loses together
   if (winner >= MAX_ENTS) return winner - MAX_ENTS == team_of(g_local_ent);
   return winner == g_local_ent;
 }
@@ -11573,7 +11594,7 @@ static int mode_allowed(int ent, int wpn) {
     case GM_SNIPER: return wpn == WPN_SR;
     case GM_BLADES: return wpn == WPN_KN || wpn == WPN_GR;
     // The operator carries the suppressed sniper, a sidearm and the knife.
-    case GM_RESCUE: return human_of_ent(ent) < 0 || wpn == WPN_SR || wpn == WPN_PT || wpn == WPN_KN;
+    case GM_RESCUE: return !resc_is_squad(ent) || wpn == WPN_SR || wpn == WPN_PT || wpn == WPN_KN;
     default:        return 1;
   }
 }
@@ -11584,7 +11605,7 @@ static int mode_primary(int ent) {
     case GM_GUN:    return GG_LADDER[gg_level(ent)];
     case GM_SNIPER: return WPN_SR;
     case GM_BLADES: return WPN_KN;
-    case GM_RESCUE: return human_of_ent(ent) >= 0 ? WPN_SR : WPN_AR;
+    case GM_RESCUE: return resc_is_squad(ent) ? WPN_SR : WPN_AR;
     default:        return WPN_AR;
   }
 }
@@ -11632,9 +11653,14 @@ static void mode_loadout(int ent, weapon_t *w) {
 // meter has filled (distance, stance, movement, lamp light and the edge of its
 // view all set the rate), and one who has you in sight long enough — or who
 // finds a body — radios the ALARM. The alarm starts the hostages' execution
-// clock and sends every hunter to your last known position. Offline only: the
-// whole layer is off on a server and on a client, so the netcode contract and
-// every multiplayer mode are untouched.
+// clock and sends every hunter to your last known position.
+//
+// CO-OP. The mission is played by a SQUAD of one to three: the humans first,
+// and bots take the places nobody holds (resc_squad). Bot slots [0, nguards)
+// are the guards and [nguards, nbots) the squad's bots, so a joining human
+// retires a squad bot (bots leave from the top) and never a guard. More squad
+// means more guards (resc_guard_count). The sim runs offline and on a server;
+// a client runs none of it and draws what NP_RESCUE tells it (rescue_view).
 // ===========================================================================
 #define RESC_HOSTAGES 3
 enum { HS_CAPTIVE, HS_FOLLOW, HS_EXTRACTED, HS_DEAD };
@@ -11654,6 +11680,9 @@ typedef struct {
   float pose, prev_pose;   // 0 kneeling .. 1 standing (eased)
   v3 wp;
   int wp_t;
+  int leader;              // the squad entity this hostage follows (-1)
+  v3 net_pos;              // client: the last replicated position
+  float net_yaw;           // ...and heading
 } hostage_t;
 typedef struct {
   int on;
@@ -11662,15 +11691,20 @@ typedef struct {
   int clock, result, why, end_tick;
   int freed, extracted;
   int kills, takedowns, heads, spotted_n, bodies;
-  int reach_i, cutting;    // the captive within reach / being freed (-1)
-  int use_held;            // the local player's RELOAD, latched by player_tick
-  int msg_t, msg_kind;
+  int reach_i, cutting;    // the captive within the LOCAL player's reach / being freed (-1)
+  int use_held[MAX_HUMANS];  // each human's RELOAD, latched by player_tick
+  int msg_t, msg_kind, msg_seq;
   char msg[48], msg2[48];
   int ever_seen;           // any guard ever reached full detection
-  int lit;                 // the player stands in lamp light this tick
-  v3 lkp;                  // last position any guard saw the player at
+  int lit;                 // the LOCAL player stands in lamp light this tick
+  uint8_t lit_e[MAX_ENTS]; // ...and every squad member (sim side)
+  int nguards, squad;      // latched at the mission's start
+  int fire_free_t;         // ticks the squad bots may open fire (a human shot)
+  int cl_alarm_age;        // client: ticks since it saw the alarm go up
+  v3 lkp;                  // last position any guard saw the squad at
   long lkp_tick;
   float detect[MAX_BOTS], prev_detect[MAX_BOTS];
+  int det_who[MAX_BOTS];   // the squad entity each guard's meter is on (-1)
   v3 glimpse[MAX_BOTS];
   int radio_t[MAX_BOTS], radio_why[MAX_BOTS];
   int wp_i[MAX_BOTS], wait_t[MAX_BOTS], body_cd[MAX_BOTS];
@@ -11680,7 +11714,9 @@ typedef struct {
   int siren_t, sfx_pending;
   float rotor, prev_rotor, rotor_w;
 } rescue_t;
-static rescue_t g_resc;
+// Per lobby, like every other piece of match state a server ticks per arena.
+static rescue_t g_resc_all[SRV_LOBBIES];
+#define g_resc (g_resc_all[g_lobby])
 
 // The hostages: where each is held (x, z, floor y) and which way they kneel.
 static const float RESC_HOLD[RESC_HOSTAGES][4] = {
@@ -11742,12 +11778,65 @@ static const resc_diff_t *resc_diff(void) {
   int d = g_cfg.sp_diff;
   return &RESC_DIFF[d < 0 ? 0 : d > 2 ? 2 : d];
 }
-static int rescue_on(void) { return g_resc.on && !g_home && !g_online && !g_server; }
-static int rescue_guards(void);
-static int rescue_bot_count(void) { return rescue_on() ? rescue_guards() : -1; }
-static int rescue_guards(void) {
-  int n = resc_diff()->guards;
-  return n < RESC_POSTS ? (n < MAX_BOTS ? n : MAX_BOTS) : RESC_POSTS;
+// rescue_on: THIS process runs the mission (offline, or a server's arena).
+// rescue_view: a mission is being shown (also a client, from NP_RESCUE).
+static int rescue_on(void) { return g_resc.on && !g_home && (g_server || !g_online); }
+static int rescue_view(void) { return g_resc.on && !g_home; }
+// The squad's size, 1..RESC_SQUAD_MAX: the humans plus the bots in the rest.
+static int resc_squad_cfg(void) {
+  int n = g_cfg.sp_squad;
+  return n < 1 ? 1 : n > RESC_SQUAD_MAX ? RESC_SQUAD_MAX : n;
+}
+// The guards: the difficulty's number, and two more for every extra member of
+// the squad (a three-man team on EASY meets NORMAL's fourteen), capped by the
+// posts there are and by the bot slots the squad's own bots still need.
+static int resc_guard_count(int diff, int squad) {
+  int n = RESC_DIFF[diff < 0 ? 0 : diff > 2 ? 2 : diff].guards + 2 * (squad - 1);
+  if (n > RESC_POSTS) n = RESC_POSTS;
+  if (n > MAX_BOTS - (RESC_SQUAD_MAX - 1)) n = MAX_BOTS - (RESC_SQUAD_MAX - 1);
+  return n;
+}
+static int resc_humans(void) {
+  int n = 0;
+  for (int h = 0; h < MAX_HUMANS; h++) n += g_humans_on[h] ? 1 : 0;
+  return n;
+}
+static int rescue_bot_count(void) {
+  if (!rescue_on()) return -1;
+  int hu = resc_humans();
+  int sb = hu ? g_resc.squad - hu : 0;   // an empty server fields no squad bots
+  return g_resc.nguards + (sb > 0 ? sb : 0);
+}
+// Which side an entity is on: 0 the squad (humans and the squad's bots),
+// 1 the guards, -1 nobody. The guard range is the low bot slots.
+static int resc_is_guard(int e) { return e >= 1 && e <= MAX_BOTS && e - 1 < g_resc.nguards; }
+static int resc_is_squad(int e) {
+  return human_of_ent(e) >= 0 || (e >= 1 && e <= MAX_BOTS && e - 1 >= g_resc.nguards);
+}
+static int resc_side(int e) {
+  if (e < 0 || e >= MAX_ENTS) return -1;
+  return resc_is_guard(e) ? 1 : 0;
+}
+// The kit colour a body is drawn in: its side in a team game; in HOSTAGE
+// RESCUE the squad wears BRAVO's blue and the guards their own gear, so a
+// squad bot is never mistaken for a guard. -1 = the ordinary kit.
+static int fig_team_of(int e) {
+  if (teams_on()) return team_of(e);
+  if (rescue_view() && e >= 0 && e < MAX_ENTS && resc_is_squad(e)) return 1;
+  return -1;
+}
+// Is entity `e` drawn as an INSURGENT (the head wrap and chest rig) rather
+// than an operator? Whoever is against the local player: the guards in a
+// mission, the other side in a team game, everyone else in a free-for-all.
+// The local player and his side are always operators. Presentation only: each
+// client decides it from its own seat, the sim never reads it.
+static int fig_ins_of(int e) {
+  if (e < 0 || e >= MAX_ENTS) return 0;
+  if (g_home) return e & 1;                 // the backdrop shows both forces
+  if (e == g_local_ent) return 0;
+  if (rescue_view()) return resc_is_guard(e);
+  if (teams_on()) return g_local_ent >= 0 ? team_of(e) != team_of(g_local_ent) : team_of(e) == 0;
+  return 1;
 }
 static const guard_post_t *rescue_post(int bi) {
   return &GUARD_POSTS[bi >= 0 && bi < RESC_POSTS ? bi : 0];
@@ -11758,12 +11847,22 @@ static void rescue_msg(int kind, const char *a, const char *b) {
   snprintf(g_resc.msg2, sizeof g_resc.msg2, "%s", b ? b : "");
   g_resc.msg_kind = kind;
   g_resc.msg_t = 4 * TICK_HZ;
+  g_resc.msg_seq++;          // a client takes the new banner on this edge
 }
-// May guard `bi` choose entity `e` as a target? Never another guard; the
-// player only once it has detected him (or he shot it, or it already has him).
+// May bot `bi` choose entity `e` as a target? A GUARD: never another guard,
+// and a member of the squad only once it has detected someone (or he shot it,
+// or it already has him). A SQUAD BOT holds its fire: it engages only a guard
+// who is onto the squad, once the alarm is up, or for a few seconds after a
+// human of the squad has fired (the leader opened up, everyone does).
 static int rescue_may_target(const bot_t *b, int bi, int e) {
-  if (human_of_ent(e) < 0) return 0;
-  return g_resc.detect[bi] >= 1.0f || b->tgt == e || b->threat_src == e;
+  if (bi < g_resc.nguards) {
+    if (!resc_is_squad(e)) return 0;
+    return g_resc.detect[bi] >= 1.0f || b->tgt == e || b->threat_src == e;
+  }
+  if (!resc_is_guard(e)) return 0;
+  const bot_t *g = &g_bots[e - 1];
+  return g_resc.alarm || g_resc.fire_free_t > 0 || b->tgt == e || b->threat_src == e ||
+         g_resc.detect[e - 1] >= 0.5f || (g->tgt >= 0 && resc_is_squad(g->tgt));
 }
 
 // Bounded, simulation-owned writer. tick==0 remains the empty-store marker.
@@ -11795,7 +11894,6 @@ static void bot_hear_update(bot_t *b, int bi) {
     for (int src = 0; src < MAX_ENTS; src++) {
       const bot_noise_t *n = &g_match.noise[kind][src];
       if (n->tick == 0 || n->tick >= g_tick || n->src == bi + 1) continue;
-      if (rescue_on() && n->src >= 1 && n->src <= MAX_BOTS) continue;   // a comrade
       if (team_mates(bi + 1, n->src)) continue;     // a teammate's boots and shots
       if (g_tick - n->tick > bot_hear_life((bot_noise_kind_t)kind)) continue;
       float dist = v3_len(v3_sub(n->pos, b->pos));
@@ -12296,6 +12394,183 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   return got;
 }
 
+// RESCUE(sibling): the mission as replicated STATE, 20 Hz, one build per
+// arena. The client runs none of the mission (rescue_on is 0 there) and draws
+// from this: the tracker, the meters, the hostages, the banner, the debrief.
+// Positions are centimetres in i16 (the map is 104 m), meters are u8.
+static void np_wstr(np_wr *w, const char *str, int n) {
+  int done = 0;
+  for (int k = 0; k < n; k++) {
+    uint8_t ch = done ? 0 : (uint8_t)str[k];
+    if (!ch) done = 1;
+    np_w8(w, ch);
+  }
+}
+static void np_rstr(np_rd *r, char *out, int n) {
+  for (int k = 0; k < n; k++) {
+    char c = (char)np_r8(r);
+    out[k] = c >= 32 && c < 127 ? c : (c == 0 ? 0 : (c == 5 ? c : '?'));
+  }
+  out[n] = '\0';
+}
+static uint8_t np_u8c(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+static int16_t np_cm(float v) {
+  float c = v * 100.0f;
+  return (int16_t)(c > 32767.0f ? 32767 : c < -32767.0f ? -32767 : (int)lrintf(c));
+}
+static size_t net_rescue_build(unsigned char *buf, size_t cap) {
+  np_wr w = {buf, cap, 0, 0};
+  np_w16(&w, NET_PROTO);
+  np_w8(&w, NP_RESCUE);
+  np_w8(&w, (uint8_t)((g_resc.alarm ? 1 : 0) | (g_resc.ever_seen ? 2 : 0)));
+  np_w8(&w, (uint8_t)g_resc.result);
+  np_w8(&w, (uint8_t)g_resc.why);
+  np_w8(&w, (uint8_t)g_resc.alarm_why);
+  np_w16(&w, (uint16_t)(g_resc.exec_t < 0 ? 0 : g_resc.exec_t > 65535 ? 65535 : g_resc.exec_t));
+  np_w16(&w, (uint16_t)(g_resc.exec_max > 65535 ? 65535 : g_resc.exec_max));
+  np_w32(&w, (uint32_t)g_resc.clock);
+  np_w32(&w, (uint32_t)g_resc.end_tick);
+  np_w8(&w, np_u8c(g_resc.freed));
+  np_w8(&w, np_u8c(g_resc.extracted));
+  np_w8(&w, np_u8c(g_resc.kills));
+  np_w8(&w, np_u8c(g_resc.takedowns));
+  np_w8(&w, np_u8c(g_resc.heads));
+  np_w8(&w, np_u8c(g_resc.spotted_n));
+  np_w8(&w, np_u8c(g_resc.bodies));
+  np_w8(&w, np_u8c(g_resc.nguards));
+  np_w8(&w, np_u8c(g_resc.squad));
+  np_w8(&w, np_u8c((int)(g_resc.rotor_w * 5.0f + 0.5f)));
+  np_w8(&w, (uint8_t)(g_resc.msg_seq & 0xFF));
+  np_w8(&w, (uint8_t)g_resc.msg_kind);
+  np_w16(&w, (uint16_t)(g_resc.msg_t < 0 ? 0 : g_resc.msg_t));
+  np_wstr(&w, g_resc.msg, 47);
+  np_wstr(&w, g_resc.msg2, 47);
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    const hostage_t *h = &g_resc.h[i];
+    np_w8(&w, (uint8_t)h->state);
+    np_w8(&w, (uint8_t)(h->leader < 0 || h->leader >= MAX_ENTS ? 0xFF : h->leader));
+    np_w16(&w, (uint16_t)np_cm(h->pos.x));
+    np_w16(&w, (uint16_t)np_cm(h->pos.y));
+    np_w16(&w, (uint16_t)np_cm(h->pos.z));
+    np_w16(&w, (uint16_t)net_q_yaw(h->yaw));
+    np_w8(&w, np_u8c((int)(h->free_t * 255.0f + 0.5f)));
+    np_w8(&w, np_u8c((int)(h->pose * 255.0f + 0.5f)));
+  }
+  uint8_t lit = 0;
+  for (int h = 0; h < MAX_HUMANS; h++)
+    if (g_humans_on[h] && g_resc.lit_e[ent_of_human(h)]) lit |= (uint8_t)(1u << h);
+  np_w8(&w, lit);
+  for (int i = 0; i < g_resc.nguards; i++) {
+    np_w8(&w, np_u8c((int)(g_resc.detect[i] * 255.0f + 0.5f)));
+    int who = g_resc.det_who[i];
+    np_w8(&w, (uint8_t)(who < 0 || who >= MAX_ENTS ? 0xFF : who));
+  }
+  return w.bad ? 0 : w.at;
+}
+// Hostile input as everywhere: every enum, id and count range-checked, and a
+// packet that fails any of it changes nothing (it is read into a copy).
+static int net_rescue_read(const unsigned char *buf, size_t len, rescue_t *o) {
+  np_rd r = {buf, len, 0, 0};
+  if (np_r16(&r) != NET_PROTO || np_r8(&r) != NP_RESCUE) return 0;
+  int fl = np_r8(&r);
+  o->alarm = fl & 1;
+  o->ever_seen = (fl >> 1) & 1;
+  o->result = np_r8(&r);
+  o->why = np_r8(&r);
+  o->alarm_why = np_r8(&r);
+  o->exec_t = np_r16(&r);
+  o->exec_max = np_r16(&r);
+  o->clock = (int)(np_r32(&r) & 0x7FFFFFFF);
+  o->end_tick = (int)(np_r32(&r) & 0x7FFFFFFF);
+  o->freed = np_r8(&r);
+  o->extracted = np_r8(&r);
+  o->kills = np_r8(&r);
+  o->takedowns = np_r8(&r);
+  o->heads = np_r8(&r);
+  o->spotted_n = np_r8(&r);
+  o->bodies = np_r8(&r);
+  o->nguards = np_r8(&r);
+  o->squad = np_r8(&r);
+  o->rotor_w = (float)np_r8(&r) / 5.0f;
+  int seq = np_r8(&r);
+  o->msg_kind = np_r8(&r);
+  int mt = np_r16(&r);
+  char m1[48], m2[48];
+  np_rstr(&r, m1, 47);
+  np_rstr(&r, m2, 47);
+  if (r.bad || o->result > RR_FAIL || o->why > RF_EXECUTED || o->msg_kind > 3 ||
+      o->nguards > MAX_BOTS || o->squad < 1 || o->squad > RESC_SQUAD_MAX ||
+      o->freed > RESC_HOSTAGES || o->extracted > RESC_HOSTAGES)
+    return 0;
+  if ((seq & 0xFF) != (o->msg_seq & 0xFF)) {   // a new banner
+    o->msg_seq = seq;
+    memcpy(o->msg, m1, sizeof o->msg);
+    memcpy(o->msg2, m2, sizeof o->msg2);
+    o->msg_t = mt > 8 * TICK_HZ ? 8 * TICK_HZ : mt;
+  }
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &o->h[i];
+    int st = np_r8(&r), ld = np_r8(&r);
+    float x = (float)(int16_t)np_r16(&r) / 100.0f;
+    float y = (float)(int16_t)np_r16(&r) / 100.0f;
+    float z = (float)(int16_t)np_r16(&r) / 100.0f;
+    float yw = net_dq_yaw((int16_t)np_r16(&r));
+    float ft = (float)np_r8(&r) / 255.0f, ps = (float)np_r8(&r) / 255.0f;
+    if (r.bad || st > HS_DEAD || (ld != 0xFF && ld >= MAX_ENTS)) return 0;
+    h->state = st;
+    h->leader = ld == 0xFF ? -1 : ld;
+    h->net_pos = (v3){{x, y, z}};
+    h->net_yaw = yw;
+    h->free_t = ft;
+    h->pose = ps;
+  }
+  int lit = np_r8(&r);
+  int me = human_of_ent(g_local_ent);
+  o->lit = me >= 0 ? (lit >> me) & 1 : 0;
+  for (int i = 0; i < MAX_BOTS; i++) { o->detect[i] = 0.0f; o->det_who[i] = -1; }
+  for (int i = 0; i < o->nguards; i++) {
+    float d = (float)np_r8(&r) / 255.0f;
+    int who = np_r8(&r);
+    if (r.bad) return 0;
+    o->detect[i] = d;
+    o->det_who[i] = who == 0xFF || who >= MAX_ENTS ? -1 : who;
+  }
+  return !r.bad;
+}
+// A client takes the packet: a copy is decoded and committed whole, the
+// presentation that the sim would have cued (chimes, siren, the shots) is
+// cued from the edges between the old state and the new.
+static void rescue_net_apply(const unsigned char *buf, size_t len) {
+  static rescue_t tmp;
+  tmp = g_resc;
+  if (!g_resc.on) {   // the first packet of a mission: a clean slate
+    memset(&tmp, 0, sizeof tmp);
+    tmp.msg_seq = -1;
+    for (int i = 0; i < RESC_HOSTAGES; i++) tmp.h[i].leader = -1;
+  }
+  if (!net_rescue_read(buf, len, &tmp)) return;
+  int was_on = g_resc.on;
+  if (was_on) {
+    if (tmp.freed > g_resc.freed) tmp.sfx_pending |= 1;
+    if (tmp.extracted > g_resc.extracted) tmp.sfx_pending |= 2;
+    if (tmp.alarm && !g_resc.alarm) { tmp.cl_alarm_age = 0; tmp.siren_t = 0; }
+    if (tmp.result == RR_FAIL && tmp.why == RF_EXECUTED && g_resc.result != RR_FAIL)
+      tmp.sfx_pending |= 8;
+    // A NEW mission (the server restarted it): the clock ran backwards.
+    if (tmp.clock < g_resc.clock) { tmp.cl_alarm_age = 0; tmp.rotor = 0.0f; }
+  }
+  tmp.on = 1;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &tmp.h[i];
+    // First sight, a captive (they do not move) or a jump past 3 m: snap.
+    if (!was_on || h->state == HS_CAPTIVE || v3_len(v3_sub(h->net_pos, h->pos)) > 3.0f) {
+      h->pos = h->prev = h->net_pos;
+      h->yaw = h->prev_yaw = h->net_yaw;
+    }
+  }
+  g_resc = tmp;
+}
+
 // (Lag-comp history moved below ent_trace_box/bot_eye.)
 
 // Random free floor spot far from every living combatant (excluding entity
@@ -12318,8 +12593,11 @@ static int net_scores_read(const unsigned char *buf, size_t len,
 #define SPAWN_SEEN_PEN 20.0f   // m of score per enemy with a line to the spot
 static v3 spawn_spot(int self) {
   int sh = human_of_ent(self);
-  if (rescue_on() && sh >= 0)
-    return (v3){{RESC_INSERT_X + 1.5f * (float)sh, 0.0f, RESC_INSERT_Z}};
+  if (rescue_on() && resc_is_squad(self)) {
+    // The insertion point: humans on the first places, squad bots after them.
+    int k = sh >= 0 ? sh : RESC_SQUAD_MAX + (self - 1 - g_resc.nguards);
+    return (v3){{RESC_INSERT_X + 1.5f * (float)(k % 6), 0.0f, RESC_INSERT_Z - 1.5f * (float)(k / 6)}};
+  }
   // Fallback point PER HUMAN: one literal for all eight is a deterministic
   // stack of bodies on a full-arena tick. Human 0 keeps the historical 18.
   v3 best = {{0, 0, sh >= 0 ? 18.0f - 2.0f * (float)sh : -12.0f}};
@@ -12402,7 +12680,11 @@ static void bot_spawn(int bi) {
   b->strafe_dir = (rng_next(&g_rng_bot) & 1) ? 1 : -1;
   g_spawn_seq[bi + 1]++;       // snapshot readers see a teleport, not motion
   anim_reset(&b->anim, b->pos, b->yaw);
-  if (rescue_on()) rescue_spawn_guard(b, bi);   // a guard starts on its post
+  if (rescue_on() && bi < g_resc.nguards) rescue_spawn_guard(b, bi);   // a guard starts on its post
+  else if (rescue_on()) {                        // a squad bot, on the insertion
+    b->yaw = b->prev_yaw = b->pup_face = atan2f(-spot.x, spot.z);
+    anim_reset(&b->anim, b->pos, b->yaw);
+  }
 }
 
 static int bot_investigating(const bot_t *b) {
@@ -13139,9 +13421,10 @@ static void ent_damage(int ent, int dmg, int part, int src, v3 from, v3 at) {
   // round, blade or grenade does nothing and is not a hit on anyone's
   // accuracy either. Your own grenade still hurts you either way.
   if (team_mates(src, ent) && !team_ff()) return;
-  if (rescue_on() && human_of_ent(ent) < 0) {
-    if (human_of_ent(src) < 0) return;            // guards never hurt guards
+  if (rescue_on() && resc_is_guard(ent)) {
+    if (resc_is_guard(src)) return;               // guards never hurt guards
     g_resc.detect[ent - 1] = 1.0f;                // ...and a hit guard knows
+    g_resc.det_who[ent - 1] = src;
     g_resc.glimpse[ent - 1] = ent_pos(src);
   }
   int hs = part == 3;
@@ -13359,9 +13642,11 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   const float *wp = g_sim_wp[w->cur];
   w->ammo[w->cur]--;
   g_match.shots[ent]++;
-  // HOSTAGE RESCUE: the operator's rifle and pistol are suppressed.
+  // HOSTAGE RESCUE: the squad's rifle and pistol are suppressed, and a human
+  // of the squad firing frees the squad bots to fire with him.
   bot_noise_emit(ent, BOT_NOISE_SHOT, o,
-                 rescue_on() && human_of_ent(ent) >= 0 ? (w->cur == WPN_SR ? 15.0f : 11.0f) : 34.0f);
+                 rescue_on() && resc_is_squad(ent) ? (w->cur == WPN_SR ? 15.0f : 11.0f) : 34.0f);
+  if (rescue_on() && human_of_ent(ent) >= 0) g_resc.fire_free_t = 4 * TICK_HZ;
   w->cool[w->cur] = (int)((float)TICK_HZ * 60.0f / wp[WP_RPM] + 0.5f);
   if (w->cool[w->cur] < 1) w->cool[w->cur] = 1;
 
@@ -13793,7 +14078,7 @@ static void melee_land(int ent, weapon_t *w, int vic, int part, const melee_def_
   int dmg = m->dmg * (part == 3 ? WPN_DEF[WPN_KN].head_x : 1);
   // THE TAKEDOWN: a blade from a guard who is not fighting you is the end of
   // him, and a quiet one.
-  if (rescue_on() && human_of_ent(ent) >= 0 && vic >= 1 && vic <= MAX_BOTS) {
+  if (rescue_on() && resc_is_squad(ent) && resc_is_guard(vic)) {
     const bot_t *vb = &g_bots[vic - 1];
     if (!(vb->tgt == ent && vb->belief == BOT_BELIEF_VISIBLE) && vb->alive) {
       dmg = vb->hp > dmg ? vb->hp : dmg;   // exactly lethal: he drops where he stood
@@ -13891,7 +14176,7 @@ static void melee_tick(int ent, weapon_t *w, v3 o, float yaw, float pitch,
     g_match.shots[ent]++;
     int sh = human_of_ent(ent);
     if (sh >= 0) g_players[sh].shots++;
-    bot_noise_emit(ent, BOT_NOISE_SHOT, o, rescue_on() && sh >= 0 ? 2.5f : 9.0f);
+    bot_noise_emit(ent, BOT_NOISE_SHOT, o, rescue_on() && resc_is_squad(ent) ? 2.5f : 9.0f);
     if (anim) anim->fire_k = 1.0f;
     ev_push((event_t){.type = EV_MELEE, .a = o, .src = ent, .wpn = WPN_KN});
   }
@@ -15162,15 +15447,35 @@ static void rescue_spawn_guard(bot_t *b, int bi) {
 // clock, and a spotter that stays on the radio long enough raises the alarm.
 // Traced every third tick per guard (staggered), which is what keeps eighteen
 // guards' extra line-of-sight rays inside the budget.
+// One squad member as a guard sees him: where, how fast, how low.
+typedef struct { v3 pos, vel, aim, head; int crouched, grounded; } resc_body_t;
+static int resc_body(int e, resc_body_t *o) {
+  if (!resc_is_squad(e) || !ent_alive(e)) return 0;
+  int h = human_of_ent(e);
+  if (h >= 0) {
+    const player_t *p = &g_players[h];
+    o->pos = p->pos; o->vel = p->vel;
+    o->crouched = p->crouched; o->grounded = p->grounded;
+    o->head = (v3){{p->pos.x, p->pos.y + p->eye, p->pos.z}};
+  } else {
+    const bot_t *sb = &g_bots[e - 1];
+    if (!sb->active) return 0;
+    o->pos = sb->pos; o->vel = sb->vel;
+    o->crouched = sb->crouch; o->grounded = sb->grounded;
+    o->head = (v3){{sb->pos.x, sb->pos.y + bot_eye(sb), sb->pos.z}};
+  }
+  o->aim = ent_aimpoint(e);
+  return 1;
+}
+
 static void rescue_guard_tick(bot_t *b, int bi) {
-  if (!rescue_on()) return;
+  if (!rescue_on() || bi >= g_resc.nguards) return;   // squad bots perceive as bots
   const resc_diff_t *rd = resc_diff();
   const guard_post_t *gp = rescue_post(bi);
   float *det = &g_resc.detect[bi];
   g_resc.prev_detect[bi] = *det;
-  int pe = g_local_ent;
-  const player_t *p = &g_players[0];
-  int engaged = b->tgt == pe && b->belief == BOT_BELIEF_VISIBLE && p->alive;
+  int engaged = b->tgt >= 0 && resc_is_squad(b->tgt) && b->belief == BOT_BELIEF_VISIBLE &&
+                ent_alive(b->tgt);
   // A gunshot heard is a reason to look (the hearing itself still steers the
   // turn and the walk over, through bot_tick's startle branch).
   if (b->hear_tick && b->hear_kind == BOT_NOISE_SHOT && b->hear_tick != g_resc.heard_tick[bi]) {
@@ -15178,36 +15483,48 @@ static void rescue_guard_tick(bot_t *b, int bi) {
     if (*det < 0.55f) *det = 0.55f;
     g_resc.glimpse[bi] = b->hear_pos;
   }
-  if ((g_tick + bi) % 3 == 0 && p->alive) {
+  if ((g_tick + bi) % 3 == 0) {
     const float dt3 = 3.0f * TICK_DT;
     v3 eo = {{b->pos.x, b->pos.y + bot_eye(b), b->pos.z}};
-    v3 tp = ent_aimpoint(pe);
-    v3 hd = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
-    float dx = tp.x - eo.x, dz = tp.z - eo.z, hl = sqrtf(dx * dx + dz * dz);
-    float d = v3_len(v3_sub(tp, eo));
     float R = gp->kind == GK_SNIPER ? rd->snipe : gp->kind == GK_WARDEN ? rd->range * 0.8f : rd->range;
     if (g_resc.alarm) R *= 1.25f;
-    float align = hl > 0.01f ? (dx * sinf(b->yaw) - dz * cosf(b->yaw)) / hl : 1.0f;
-    int seen = 0;
-    // The cone is ~145 deg wide, opening out to the flanks within arm's reach;
-    // behind his back a guard sees nothing (he hears — bot_hear_update).
-    float cone = d < 2.5f ? -0.10f : 0.30f;
-    if (d < R && align > cone && (los_clear(eo, tp) || los_clear(eo, hd))) {
+    // Every member of the squad in view adds to ONE meter; the one filling it
+    // fastest is the one he is looking at (det_who), and where he goes to look.
+    int seen = 0, who = -1;
+    float rate_sum = 0.0f, rate_best = 0.0f;
+    v3 who_pos = {{0, 0, 0}};
+    ENT_FOREACH(e) {
+      resc_body_t sb;
+      if (!resc_body(e, &sb)) continue;
+      v3 tp = sb.aim;
+      float dx = tp.x - eo.x, dz = tp.z - eo.z, hl = sqrtf(dx * dx + dz * dz);
+      float d = v3_len(v3_sub(tp, eo));
+      if (d >= R) continue;
+      float align = hl > 0.01f ? (dx * sinf(b->yaw) - dz * cosf(b->yaw)) / hl : 1.0f;
+      // The cone is ~145 deg wide, opening out to the flanks within arm's reach;
+      // behind his back a guard sees nothing (he hears — bot_hear_update).
+      float cone = d < 2.5f ? -0.10f : 0.30f;
+      if (align <= cone || !(los_clear(eo, tp) || los_clear(eo, sb.head))) continue;
       float prox = 1.0f - d / R;
       float periph = 0.30f + 0.70f * f_clamp((align - cone) / (0.92f - cone), 0.0f, 1.0f);
-      float hs = sqrtf(p->vel.x * p->vel.x + p->vel.z * p->vel.z) / g_sim_mv[MV_RUN];
-      float motion = 0.50f + 0.65f * f_clamp(hs, 0.0f, 1.3f) + (p->grounded ? 0.0f : 0.3f);
-      float stance = p->crouched ? 0.45f : 1.0f;
-      float light = g_resc.lit ? 1.7f : 1.0f;
+      float hs = sqrtf(sb.vel.x * sb.vel.x + sb.vel.z * sb.vel.z) / g_sim_mv[MV_RUN];
+      float motion = 0.50f + 0.65f * f_clamp(hs, 0.0f, 1.3f) + (sb.grounded ? 0.0f : 0.3f);
+      float stance = sb.crouched ? 0.45f : 1.0f;
+      float light = g_resc.lit_e[e] ? 1.7f : 1.0f;
       float rate = rd->rate * (0.22f + 2.6f * prox * prox) * periph * motion * stance * light;
       if (d < 4.0f) rate *= 3.0f;
       if (g_resc.alarm) rate *= 2.2f;
       if (gp->kind == GK_SNIPER) rate *= 0.8f;
-      *det += rate * dt3;
+      rate_sum += rate;
+      if (rate > rate_best) { rate_best = rate; who = e; who_pos = sb.pos; }
       seen = 1;
-      g_resc.glimpse[bi] = p->pos;
+    }
+    if (seen) {
+      *det += rate_sum * dt3;
+      g_resc.det_who[bi] = who;
+      g_resc.glimpse[bi] = who_pos;
       if (*det >= 1.0f) {
-        g_resc.lkp = p->pos;
+        g_resc.lkp = who_pos;
         g_resc.lkp_tick = g_tick;
       }
     }
@@ -15220,6 +15537,7 @@ static void rescue_guard_tick(bot_t *b, int bi) {
       }
       *det -= decay * dt3;
       if (*det < 0.0f) *det = 0.0f;
+      if (*det <= 0.0f) g_resc.det_who[bi] = -1;
       if (g_resc.prev_detect[bi] > 0.5f && *det <= 0.5f && b->tgt < 0) {
         b->alert_p = g_resc.glimpse[bi];   // "something was there": check it
         b->alert_t = 6 * TICK_HZ;
@@ -15233,7 +15551,7 @@ static void rescue_guard_tick(bot_t *b, int bi) {
     // BODIES. A guard who walks up on a fallen comrade radios it in.
     if (--g_resc.body_cd[bi] <= 0) {
       g_resc.body_cd[bi] = 5;   // x3 ticks
-      for (int j = 0; j < g_match.nbots; j++) {
+      for (int j = 0; j < g_resc.nguards && j < g_match.nbots; j++) {
         const bot_t *o = &g_bots[j];
         if (j == bi || !o->active || o->alive || g_resc.body_found[j]) continue;
         v3 cp = {{o->pos.x, o->pos.y + 0.35f, o->pos.z}};
@@ -15339,6 +15657,75 @@ static int rescue_patrol(bot_t *b, int bi, float *yaw, float *pitch, float *wx,
   if (rl > 0.01f) *yaw = atan2f(rx, -rz);
   if (rl > 0.01f && fabsf(wrap_pi(*yaw - b->yaw)) < 1.0f) { *wx = rx / rl; *wz = rz / rl; }
   *pace = g_resc.alarm ? 0.6f : 0.34f;
+  return 1;
+}
+
+// A SQUAD BOT with nobody to fight. With a human in the squad alive it is HIS
+// man: it keeps a few metres behind him, crouches when he crouches, watches
+// the way he faces (a little to one side) and frees a captive the two of them
+// are standing near. With no human left standing it runs the mission itself:
+// the nearest captive, then the LZ with whoever follows it. Returns 1 when it
+// set the intent.
+#define RESC_LZ_CX 22.0f
+#define RESC_LZ_CZ -45.0f
+static int rescue_squad_intent(bot_t *b, int bi, float *yaw, float *pitch, float *wx,
+                               float *wz, float *pace) {
+  int me = bi + 1, slot = bi - g_resc.nguards;
+  *pitch = 0.0f;
+  b->crouch_t = 0;
+  const player_t *lp = NULL;
+  float ld = 1e9f;
+  for (int h = 0; h < MAX_HUMANS; h++) {
+    if (!g_humans_on[h] || !g_players[h].alive) continue;
+    float d = v3_len(v3_sub(g_players[h].pos, b->pos));
+    if (d < ld) { ld = d; lp = &g_players[h]; }
+  }
+  int followers = 0, ci = -1;
+  float cd = 1e9f;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    const hostage_t *h = &g_resc.h[i];
+    if (h->state == HS_FOLLOW && h->leader == me) followers++;
+    if (h->state != HS_CAPTIVE) continue;
+    float d = v3_len(v3_sub(h->pos, b->pos));
+    if (d < cd) { cd = d; ci = i; }
+  }
+  v3 goal;
+  float stop;
+  int low = 0;
+  if (followers) {
+    goal = (v3){{RESC_LZ_CX, 0.0f, RESC_LZ_CZ}};
+    stop = 1.5f;
+  } else if (lp) {
+    int help = ci >= 0 && cd < 9.0f && v3_len(v3_sub(lp->pos, g_resc.h[ci].pos)) < 14.0f;
+    if (help) { goal = g_resc.h[ci].pos; stop = 1.1f; }
+    else      { goal = lp->pos; stop = 2.6f + 1.4f * (float)slot; }
+    low = lp->crouched && !g_resc.alarm;
+  } else if (ci >= 0) {
+    goal = g_resc.h[ci].pos;
+    stop = 1.1f;
+    low = !g_resc.alarm;               // alone, it goes in low and slow
+  } else {
+    goal = (v3){{RESC_LZ_CX, 0.0f, RESC_LZ_CZ}};
+    stop = 1.5f;
+  }
+  b->crouch = low;
+  float dx = goal.x - b->pos.x, dz = goal.z - b->pos.z, d = sqrtf(dx * dx + dz * dz);
+  if (d < stop && fabsf(goal.y - b->pos.y) < 1.5f) {
+    // In place: watch the leader's sector, one bot to each side of it.
+    if (lp && !followers) *yaw = lp->yaw + ((slot & 1) ? -0.9f : 0.9f);
+    else if (d > 0.3f)    *yaw = atan2f(dx, -dz);
+    else                  *yaw = b->yaw;
+    *wx = *wz = 0.0f;
+    *pace = 0.0f;
+    return 1;
+  }
+  v3 rw = bot_route(b, goal);
+  float rx = rw.x - b->pos.x, rz = rw.z - b->pos.z, rl = sqrtf(rx * rx + rz * rz);
+  if (rl > 0.01f) *yaw = atan2f(rx, -rz);
+  if (rl > 0.01f && fabsf(wrap_pi(*yaw - b->yaw)) < 1.0f) { *wx = rx / rl; *wz = rz / rl; }
+  // Quiet unless it has to catch up, the alarm is up, or it is crouched (the
+  // crouch speed is already the slow one).
+  *pace = low ? 1.0f : g_resc.alarm || ld > 14.0f || (!lp && d > 25.0f) ? 0.95f : 0.55f;
   return 1;
 }
 
@@ -15882,7 +16269,9 @@ static void bot_tick(int bi) {
     }
   }
   if (b->tgt < 0 && !startled && b->alert_t == 0 &&
-      !(rescue_on() && rescue_patrol(b, bi, &want_yaw, &want_pitch, &wx, &wz, &pace))) {
+      !(rescue_on() && (bi < g_resc.nguards
+                          ? rescue_patrol(b, bi, &want_yaw, &want_pitch, &wx, &wz, &pace)
+                          : rescue_squad_intent(b, bi, &want_yaw, &want_pitch, &wx, &wz, &pace)))) {
     // Patrol: wander between random reachable waypoints.
     // STAND UP FIRST. Every other branch clears the crouch and this one did
     // not, so a bot that killed its target from a crouched hold stayed crouched
@@ -16530,19 +16919,44 @@ static void lms_tick(void) {
 // ---------------------------------------------------------------------------
 static void rescue_reset(void) {
   memset(&g_resc, 0, sizeof g_resc);
-  g_resc.on = g_match.mode == GM_RESCUE && !g_home && !g_server && !g_online;
+  // A client never runs the mission: NP_RESCUE switches its view on.
+  g_resc.on = g_match.mode == GM_RESCUE && !g_home && (g_server || !g_online);
   g_resc.reach_i = g_resc.cutting = -1;
+  for (int i = 0; i < MAX_BOTS; i++) g_resc.det_who[i] = -1;
   if (!g_resc.on) return;
+  g_resc.squad = resc_squad_cfg();
+  g_resc.nguards = resc_guard_count(g_cfg.sp_diff, g_resc.squad);
   g_resc.exec_max = (int)(resc_diff()->exec_s * TICK_HZ);
   for (int i = 0; i < RESC_HOSTAGES; i++) {
     hostage_t *h = &g_resc.h[i];
-    h->pos = h->prev = (v3){{RESC_HOLD[i][0], RESC_HOLD[i][2], RESC_HOLD[i][1]}};
+    h->pos = h->prev = h->net_pos = (v3){{RESC_HOLD[i][0], RESC_HOLD[i][2], RESC_HOLD[i][1]}};
     h->yaw = h->prev_yaw = RESC_HOLD[i][3];
     h->state = HS_CAPTIVE;
     h->grounded = 1;
+    h->leader = -1;
   }
   rescue_msg(0, "OPERATION NIGHTFALL", "FREE THE 3 HOSTAGES  \x05  GET THEM TO THE LZ");
   g_resc.msg_t = RESC_INTRO_TICKS;
+}
+// The squad won (the debrief and the career ask; a client reads the replicated
+// result).
+static int rescue_won(void) { return g_resc.result == RR_SUCCESS; }
+// The nearest living member of the squad to `at`, humans before bots (a
+// hostage would rather follow a person), or -1.
+static int resc_nearest_squad(v3 at, int humans_only) {
+  int best = -1;
+  float bd = 1e18f;
+  for (int pass = 0; pass < 2 && best < 0; pass++) {
+    ENT_FOREACH(e) {
+      if (!resc_is_squad(e) || !ent_alive(e)) continue;
+      if ((human_of_ent(e) >= 0) != (pass == 0)) continue;
+      v3 d = v3_sub(ent_pos(e), at);
+      float dd = v3_dot(d, d);
+      if (dd < bd) { bd = dd; best = e; }
+    }
+    if (humans_only) break;
+  }
+  return best;
 }
 
 static void rescue_alarm(int why) {
@@ -16556,10 +16970,11 @@ static void rescue_alarm(int why) {
   for (int i = 0; i < RESC_HOSTAGES; i++) captive += g_resc.h[i].state == HS_CAPTIVE;
   rescue_msg(2, "ALARM RAISED",
              captive ? "THE HOSTAGES WILL BE EXECUTED - MOVE NOW" : "GET TO THE LZ");
-  // Every hunter is sent to where the player was last seen (or is now, if
-  // nobody has seen him yet — a body was found, the shooter is close).
-  v3 at = g_resc.lkp_tick ? g_resc.lkp : g_players[0].pos;
-  for (int i = 0; i < g_match.nbots; i++) {
+  // Every hunter is sent to where the squad was last seen (or is now, if
+  // nobody has seen it yet — a body was found, the shooter is close).
+  int any = resc_nearest_squad((v3){{0, 0, 0}}, 0);
+  v3 at = g_resc.lkp_tick ? g_resc.lkp : any >= 0 ? ent_pos(any) : (v3){{0, 0, 0}};
+  for (int i = 0; i < g_resc.nguards && i < g_match.nbots; i++) {
     bot_t *b = &g_bots[i];
     int k = rescue_post(i)->kind;
     if (!b->active || !b->alive || k == GK_WARDEN || k == GK_SNIPER) continue;
@@ -16567,21 +16982,24 @@ static void rescue_alarm(int why) {
   }
 }
 
-// The captive within reach of the player, or -1.
-static int rescue_reach(const player_t *p) {
+// The captive within reach of a body at `at`, or -1.
+static int rescue_reach_at(v3 at) {
   int best = -1;
   float bd = 2.2f * 2.2f;
   for (int i = 0; i < RESC_HOSTAGES; i++) {
     const hostage_t *h = &g_resc.h[i];
-    if (h->state != HS_CAPTIVE || fabsf(h->pos.y - p->pos.y) > 1.2f) continue;
-    float dx = h->pos.x - p->pos.x, dz = h->pos.z - p->pos.z, dd = dx * dx + dz * dz;
+    if (h->state != HS_CAPTIVE || fabsf(h->pos.y - at.y) > 1.2f) continue;
+    float dx = h->pos.x - at.x, dz = h->pos.z - at.z, dd = dx * dx + dz * dz;
     if (dd < bd) { bd = dd; best = i; }
   }
   return best;
 }
-// Does the RELOAD key belong to a hostage right now? (weapon_tick asks.)
+static int rescue_reach(const player_t *p) { return rescue_reach_at(p->pos); }
+// Does the RELOAD key belong to a hostage right now? (weapon_tick asks — on
+// the server for every human, and in a client's prediction for itself, which
+// sees the same replicated captives.)
 static int rescue_reload_block(const player_t *p) {
-  return rescue_on() && p == &g_players[0] && p->alive && rescue_reach(p) >= 0;
+  return rescue_view() && p->alive && rescue_reach(p) >= 0;
 }
 
 static int rescue_in_lz(v3 p) {
@@ -16591,7 +17009,7 @@ static int rescue_in_lz(v3 p) {
 // ONE FREED HOSTAGE: follow the player on the bots' own grid routes, keep a
 // little apart from the others, and stop at a polite distance. Same collision
 // as everyone (ent_move), so walls are walls and stairs are stairs.
-static void hostage_follow(hostage_t *h, int i, v3 goal, float stop) {
+static void hostage_follow(hostage_t *h, int i, v3 goal, float stop, int lead) {
   float dx = goal.x - h->pos.x, dz = goal.z - h->pos.z, d = sqrtf(dx * dx + dz * dz);
   float wx = 0.0f, wz = 0.0f, spd = 0.0f;
   if (d > stop) {
@@ -16648,11 +17066,12 @@ static void hostage_follow(hostage_t *h, int i, v3 goal, float stop) {
   // Lost behind a corner for good: catch up behind the player rather than
   // wedging (a rescue is not a pathfinding test).
   if (spd > 1.0f && hs < 0.25f) h->stuck++; else h->stuck = 0;
-  if (h->stuck > 3 * TICK_HZ && d > 4.0f) {
-    const player_t *p = &g_players[0];
+  if (h->stuck > 3 * TICK_HZ && d > 4.0f && lead >= 0 && ent_alive(lead)) {
+    v3 lpos = ent_pos(lead);
+    float lyaw = ent_yaw(lead);
     for (int t = 0; t < 8; t++) {
-      float a = p->yaw + F_PI + ((float)t - 3.5f) * 0.5f;
-      v3 c = {{p->pos.x + sinf(a) * 1.8f, p->pos.y, p->pos.z - cosf(a) * 1.8f}};
+      float a = lyaw + F_PI + ((float)t - 3.5f) * 0.5f;
+      v3 c = {{lpos.x + sinf(a) * 1.8f, lpos.y, lpos.z - cosf(a) * 1.8f}};
       if (aabb_fits(c, PLAYER_RADIUS, HEIGHT_STAND)) {
         h->pos = h->prev = c;
         h->vel = (v3){{0, 0, 0}};
@@ -16668,7 +17087,10 @@ static void rescue_end(int result, int why) {
   g_resc.result = result;
   g_resc.why = why;
   g_resc.end_tick = g_resc.clock;
-  match_end(result == RR_SUCCESS ? g_local_ent : 1);
+  // Offline the winner is the player, as it always was; online the SIDE is
+  // (MAX_ENTS + side), which NP_SCORES and the banner carry like a team win.
+  if (!g_server) match_end(result == RR_SUCCESS ? g_local_ent : 1);
+  else           match_end(MAX_ENTS + (result == RR_SUCCESS ? 0 : 1));
 }
 
 // The mission's sounds, played from the tick that caused them. Not positional:
@@ -16705,55 +17127,102 @@ static void rescue_tick(void) {
       g_resc.rotor += g_resc.rotor_w * TICK_DT;
       for (int i = 0; i < RESC_HOSTAGES; i++)
         if (g_resc.h[i].state == HS_EXTRACTED)
-          hostage_follow(&g_resc.h[i], i, (v3){{RESC_SEAT[i][0], 0.0f, RESC_SEAT[i][1]}}, 0.15f);
+          hostage_follow(&g_resc.h[i], i, (v3){{RESC_SEAT[i][0], 0.0f, RESC_SEAT[i][1]}}, 0.15f, -1);
     }
     return;
   }
-  player_t *p = &g_players[0];
+  // An arena nobody is in has no mission: an empty server holds it at the
+  // start (the guards keep their posts) until someone joins, and one the last
+  // player left mid-mission is set up fresh for the next.
+  if (g_server && !resc_humans()) {
+    if (g_resc.clock > 0) g_match.restart_req = 1;
+    return;
+  }
   g_resc.clock++;
   if (g_resc.msg_t > 0) g_resc.msg_t--;
-  // Lamp light: a lit lamp within 7 m makes the player far easier to see.
-  g_resc.lit = 0;
-  for (int i = 0; i < g_nprops; i++) {
-    if (g_props[i].kind != PROP_LAMP) continue;
-    float dx = g_props[i].x - p->pos.x, dz = g_props[i].z - p->pos.z;
-    if (dx * dx + dz * dz < 49.0f && p->pos.y < 3.0f &&
-        los_clear((v3){{g_props[i].x, 3.7f, g_props[i].z}}, (v3){{p->pos.x, p->pos.y + 1.2f, p->pos.z}})) {
-      g_resc.lit = 1;
-      break;
+  if (g_resc.fire_free_t > 0) g_resc.fire_free_t--;
+  // Lamp light: a lit lamp within 7 m makes a squad member far easier to see.
+  memset(g_resc.lit_e, 0, sizeof g_resc.lit_e);
+  int alive = 0;
+  ENT_FOREACH(e) {
+    if (!resc_is_squad(e) || !ent_alive(e)) continue;
+    if (human_of_ent(e) < 0 && !g_bots[e - 1].active) continue;
+    alive++;
+    v3 pp = ent_pos(e);
+    if (pp.y >= 3.0f) continue;
+    for (int i = 0; i < g_nprops; i++) {
+      if (g_props[i].kind != PROP_LAMP) continue;
+      float dx = g_props[i].x - pp.x, dz = g_props[i].z - pp.z;
+      if (dx * dx + dz * dz < 49.0f &&
+          los_clear((v3){{g_props[i].x, 3.7f, g_props[i].z}}, (v3){{pp.x, pp.y + 1.2f, pp.z}})) {
+        g_resc.lit_e[e] = 1;
+        break;
+      }
     }
   }
-  if (!p->alive) { rescue_end(RR_FAIL, RF_KILLED); return; }
-  // THE RESTRAINTS: hold RELOAD beside a captive for 1.5 s.
-  g_resc.reach_i = rescue_reach(p);
-  if (g_resc.reach_i >= 0 && g_resc.use_held) {
-    hostage_t *h = &g_resc.h[g_resc.reach_i];
-    g_resc.cutting = g_resc.reach_i;
+  g_resc.lit = g_local_ent >= 0 ? g_resc.lit_e[g_local_ent] : 0;
+  // The whole squad down is the end of it; one survivor carries on.
+  if (!alive) { rescue_end(RR_FAIL, RF_KILLED); return; }
+  // THE RESTRAINTS: a human holds RELOAD beside a captive for 1.5 s; a squad
+  // bot with nobody to fight cuts the one it is standing at.
+  int cut[RESC_HOSTAGES] = {0}, cutter[RESC_HOSTAGES] = {-1, -1, -1};
+  for (int h = 0; h < MAX_HUMANS; h++) {
+    if (!g_humans_on[h] || !g_players[h].alive || !g_resc.use_held[h]) continue;
+    int k = rescue_reach(&g_players[h]);
+    if (k >= 0) { cut[k] = 1; cutter[k] = ent_of_human(h); }
+  }
+  for (int i = g_resc.nguards; i < g_match.nbots; i++) {
+    const bot_t *sb = &g_bots[i];
+    if (!sb->active || !sb->alive || sb->tgt >= 0) continue;
+    int k = rescue_reach_at(sb->pos);
+    if (k >= 0 && !cut[k]) { cut[k] = 1; cutter[k] = i + 1; }
+  }
+  g_resc.reach_i = g_local_ent >= 0 && ent_alive(g_local_ent) && human_of_ent(g_local_ent) >= 0
+                   ? rescue_reach(&g_players[human_of_ent(g_local_ent)]) : -1;
+  g_resc.cutting = -1;
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &g_resc.h[i];
+    if (h->state != HS_CAPTIVE) continue;
+    if (!cut[i]) {
+      if (h->free_t > 0.0f) h->free_t = fmaxf(0.0f, h->free_t - TICK_DT);
+      continue;
+    }
+    if (cutter[i] == g_local_ent) g_resc.cutting = i;
     h->free_t += TICK_DT / 1.5f;
-    if (h->free_t >= 1.0f) {
-      h->free_t = 1.0f;
-      h->state = HS_FOLLOW;
-      g_resc.freed++;
-      g_resc.sfx_pending |= 1;
-      char b[48];
-      snprintf(b, sizeof b, "%d OF %d FREED", g_resc.freed, RESC_HOSTAGES);
-      rescue_msg(3, "HOSTAGE FREED", g_resc.freed == RESC_HOSTAGES ?
-                 "ALL FREE  \x05  GET THEM TO THE LZ" : b);
+    if (h->free_t < 1.0f) continue;
+    h->free_t = 1.0f;
+    h->state = HS_FOLLOW;
+    // A bot hands the freed man on to the nearest human of the squad, who is
+    // the one leading the walk out; a human keeps his own.
+    int lead = cutter[i];
+    if (human_of_ent(lead) < 0) {
+      int hu = resc_nearest_squad(h->pos, 1);
+      if (hu >= 0 && v3_len(v3_sub(ent_pos(hu), h->pos)) < 40.0f) lead = hu;
     }
-  } else {
-    g_resc.cutting = -1;
-    for (int i = 0; i < RESC_HOSTAGES; i++)
-      if (g_resc.h[i].state == HS_CAPTIVE && g_resc.h[i].free_t > 0.0f)
-        g_resc.h[i].free_t = fmaxf(0.0f, g_resc.h[i].free_t - TICK_DT);
+    h->leader = lead;
+    g_resc.freed++;
+    g_resc.sfx_pending |= 1;
+    char b[48];
+    snprintf(b, sizeof b, "%d OF %d FREED", g_resc.freed, RESC_HOSTAGES);
+    rescue_msg(3, "HOSTAGE FREED", g_resc.freed == RESC_HOSTAGES ?
+               "ALL FREE  \x05  GET THEM TO THE LZ" : b);
   }
-  // The followers, in the order they were freed, each a step further back.
-  int order = 0;
+  // The followers: each behind its leader, in the order they were freed. A
+  // leader who falls (or a bot that leaves) hands them to the nearest member
+  // of the squad still standing.
+  int order[MAX_ENTS] = {0};
   for (int i = 0; i < RESC_HOSTAGES; i++) {
     hostage_t *h = &g_resc.h[i];
     if (h->state == HS_FOLLOW || h->state == HS_EXTRACTED)
       h->pose = fminf(1.0f, h->pose + TICK_DT * 1.4f);
     if (h->state == HS_FOLLOW) {
-      hostage_follow(h, i, p->pos, 2.0f + 1.1f * (float)order++);
+      if (h->leader < 0 || h->leader >= MAX_ENTS || !resc_is_squad(h->leader) ||
+          !ent_alive(h->leader) ||
+          (human_of_ent(h->leader) < 0 && !g_bots[h->leader - 1].active))
+        h->leader = resc_nearest_squad(h->pos, 0);
+      if (h->leader < 0) continue;
+      int o = order[h->leader]++;
+      hostage_follow(h, i, ent_pos(h->leader), 2.0f + 1.1f * (float)o, h->leader);
       if (rescue_in_lz(h->pos)) {
         h->state = HS_EXTRACTED;
         g_resc.extracted++;
@@ -16761,7 +17230,7 @@ static void rescue_tick(void) {
       }
     } else if (h->state == HS_EXTRACTED) {
       v3 seat = {{RESC_SEAT[i][0], 0.0f, RESC_SEAT[i][1]}};
-      hostage_follow(h, i, seat, 0.15f);
+      hostage_follow(h, i, seat, 0.15f, -1);
     }
   }
   if (g_resc.extracted > 0 || g_resc.freed == RESC_HOSTAGES)
@@ -16775,7 +17244,7 @@ static void rescue_tick(void) {
     }
     // Every 5 s the radio passes on where the player was last seen.
     if (((int)g_tick - g_resc.alarm_tick) % (5 * TICK_HZ) == 0 && g_resc.lkp_tick) {
-      for (int i = 0; i < g_match.nbots; i++) {
+      for (int i = 0; i < g_resc.nguards && i < g_match.nbots; i++) {
         bot_t *b = &g_bots[i];
         int k = rescue_post(i)->kind;
         if (!b->active || !b->alive || k == GK_WARDEN || k == GK_SNIPER || b->tgt >= 0) continue;
@@ -16796,11 +17265,48 @@ static void rescue_tick(void) {
   if (g_resc.extracted == RESC_HOSTAGES) rescue_end(RR_SUCCESS, RF_NONE);
 }
 
+// A CLIENT's half of the mission, once per client tick: nothing of the rules,
+// only what makes the replicated state look alive between packets — the
+// hostages walk to where the server last put them (with the walk cycle that
+// distance makes), the rotor turns, the banner counts down, the siren and the
+// chimes sound, and the RELOAD prompt is worked out from our own position.
+static void rescue_client_tick(void) {
+  if (!rescue_view() || rescue_on()) return;
+  rescue_sfx_flush();
+  for (int i = 0; i < RESC_HOSTAGES; i++) {
+    hostage_t *h = &g_resc.h[i];
+    h->prev = h->pos;
+    h->prev_yaw = h->yaw;
+    h->prev_gait = h->gait;
+    h->prev_move = h->move;
+    h->prev_pose = h->pose;
+    v3 d = v3_sub(h->net_pos, h->pos);
+    h->pos = v3_add(h->pos, v3_scale(d, f_clamp(12.0f * TICK_DT, 0.0f, 1.0f)));
+    float hs = sqrtf(d.x * d.x + d.z * d.z) * 12.0f;   // m/s the lerp is walking
+    if (hs < 0.15f) hs = 0.0f;
+    h->yaw += wrap_pi(h->net_yaw - h->yaw) * f_clamp(10.0f * TICK_DT, 0.0f, 1.0f);
+    h->move += (f_clamp(hs / 5.0f, 0.0f, 1.0f) - h->move) * f_clamp(8.0f * TICK_DT, 0.0f, 1.0f);
+    h->gait += hs * TICK_DT * 2.1f;
+  }
+  g_resc.prev_rotor = g_resc.rotor;
+  g_resc.rotor += g_resc.rotor_w * TICK_DT;
+  if (g_resc.msg_t > 0) g_resc.msg_t--;
+  if (g_resc.alarm && g_resc.result == RR_RUNNING && !g_match.over) {
+    if (g_resc.cl_alarm_age++ < 14 * TICK_HZ && g_resc.siren_t-- <= 0) {
+      g_resc.siren_t = 2 * TICK_HZ;
+      g_resc.sfx_pending |= 4;
+    }
+  }
+  int me = human_of_ent(g_local_ent);
+  g_resc.reach_i = me >= 0 && g_players[me].alive ? rescue_reach(&g_players[me]) : -1;
+  g_resc.cutting = g_resc.reach_i >= 0 && g_resc.h[g_resc.reach_i].free_t > 0.0f ? g_resc.reach_i : -1;
+}
+
 // The guard side of a kill (match_on_kill asks): the count, and the end of
 // a mission whose operator is down.
 static void rescue_on_kill(int src, int dst, int hs) {
   if (!rescue_on()) return;
-  if (human_of_ent(src) >= 0 && dst >= 1 && dst <= MAX_BOTS) {
+  if (resc_is_squad(src) && resc_is_guard(dst)) {
     g_resc.kills++;
     if (hs) g_resc.heads++;
     g_resc.radio_t[dst - 1] = 0;   // a dead man radios nobody
@@ -17708,7 +18214,12 @@ static void player_tick(player_t *p, const int held[IN_COUNT]) {
     player_move_tick(hp, ent, hh, wpx, wpy);
     g_lagcomp_view = -1;               // bots and the present half stay live
   }
-  g_resc.use_held = held[IN_RELOAD] && !g_menu_open;   // a hostage's restraints
+  // A hostage's restraints: every human's RELOAD (the local one through the
+  // menu gate, the others from their consumed input).
+  for (int h = 0; h < MAX_HUMANS; h++)
+    g_resc.use_held[h] = !g_humans_on[h] ? 0
+                       : ent_of_human(h) == g_local_ent ? held[IN_RELOAD] && !g_menu_open
+                                                        : g_human_held[h][IN_RELOAD];
   match_tick();
   vfx_tick();
   for (int h = 0; h < MAX_HUMANS; h++)
@@ -18283,6 +18794,17 @@ static void net_srv_scan_reply(uint32_t ip, uint16_t port) {
       net_udp_send(g_srv_fd, g_conns[i].ip, g_conns[i].port, buf, (int)len);
 }
 
+// The mission's state to every client in this arena (NP_RESCUE, 20 Hz).
+[[maybe_unused]] static void net_srv_rescue_broadcast(void) {
+  if (g_srv_fd < 0 || !rescue_on()) return;
+  static unsigned char buf[512];
+  size_t len = net_rescue_build(buf, sizeof buf);
+  if (!len) return;
+  for (int i = 0; i < MAX_HUMANS; i++)
+    if (g_conns[i].used)
+      net_udp_send(g_srv_fd, g_conns[i].ip, g_conns[i].port, buf, (int)len);
+}
+
 static int net_srv_client_count(void) {
   int c = 0;
   for (int i = 0; i < MAX_HUMANS; i++) if (g_conns[i].used) c++;
@@ -18788,6 +19310,8 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
         snprintf(g_human_name[h], sizeof g_human_name[h], "%s", g_cl.name);
         g_local_ent = g_cl.my_ent;
         g_online = 1;
+        rescue_reset();              // the local mission (if any) is not this one;
+                                     // NP_RESCUE switches the server's on
         g_cl.sync_seq = g_cl.seq;    // predictions are real from HERE on
       }
       p->pos = p->prev_pos = auth; p->vel = avel;
@@ -19093,6 +19617,8 @@ static int net_cl_poll(void) {
       return 0;
     } else if (type == NP_SNAPSHOT && g_cl.state == NC_PLAYING) {
       net_cl_snapshot(b, n);
+    } else if (type == NP_RESCUE && g_cl.state == NC_PLAYING && g_cl.synced) {
+      if (g_match.mode == GM_RESCUE) rescue_net_apply(b, (size_t)n);
     } else if (type == NP_SCORES && g_cl.state == NC_PLAYING && g_cl.synced) {
       // synced-gated: rows landing before the first snapshot would only be
       // wiped again by the sync memset — and a stale over=1 pinned the
@@ -19131,6 +19657,7 @@ static int net_cl_poll(void) {
           g_team[e] = (signed char)rows[i].team;
         }
         g_match.mode = nm.mode;
+        if (nm.mode != GM_RESCUE) g_resc.on = 0;   // no mission drawn in another mode
         g_net_team_size = nm.team_size;
         g_net_team_fill = nm.team_fill & 1;
         g_net_team_ff = (nm.team_fill >> 1) & 1;
@@ -22274,12 +22801,22 @@ static float g_ui_time;
 static int spec_target(void) {
   static float dead_since = -1.0f;
   int me = g_local_ent;
-  if (me < 0 || game_mode() != GM_LMS || g_match.over || ent_alive(me)) {
+  int gm = game_mode();
+  if (me < 0 || (gm != GM_LMS && gm != GM_RESCUE) || g_match.over || ent_alive(me)) {
     dead_since = -1.0f;
     return -1;
   }
   if (dead_since < 0.0f || dead_since > g_ui_time) dead_since = g_ui_time;
   if (g_ui_time - dead_since < 1.5f) return -1;
+  // HOSTAGE RESCUE: a fallen operator watches the squad carry on, a human
+  // teammate first.
+  if (gm == GM_RESCUE) {
+    for (int pass = 0; pass < 2; pass++)
+      ENT_FOREACH(e)
+        if (e != me && resc_is_squad(e) && ent_alive(e) && (human_of_ent(e) >= 0) == (pass == 0))
+          return e;
+    return -1;
+  }
   int lk = g_match.last_killer;
   if (lk >= 0 && lk < MAX_ENTS && lk != me && ent_alive(lk)) return lk;
   ENT_FOREACH(e) if (e != me && ent_alive(e)) return e;
@@ -22975,13 +23512,14 @@ static int mp_join(uint32_t ip, uint16_t port) {
   return net_cl_connect(ip, port, g_cfg.name);
 }
 // HOST GAME: the HOST SETTINGS (host_*) served; difficulty, frag limit,
-// rounds and ballistics are shared with SINGLEPLAYER. Rescue is a
-// single-player mission, so a host on it serves deathmatch instead.
+// rounds and ballistics are shared with SINGLEPLAYER. HOSTAGE RESCUE is
+// served as a co-op mission with the host's squad size.
 static int mp_host_start(void) {
   if (!HOST_SUPPORTED) return 0;
-  char port[8], bots[8], skill[8], frag[8], rounds[8], name[24];
-  int mode = g_cfg.host_mode == GM_RESCUE || g_cfg.host_mode < 0 || g_cfg.host_mode >= GM_COUNT
-             ? 0 : g_cfg.host_mode;
+  char port[8], bots[8], skill[8], frag[8], rounds[8], name[24], sq[8];
+  int mode = g_cfg.host_mode < 0 || g_cfg.host_mode >= GM_COUNT ? 0 : g_cfg.host_mode;
+  snprintf(sq, sizeof sq, "%d", g_cfg.host_squad < 1 ? 1 : g_cfg.host_squad > RESC_SQUAD_MAX
+                                ? RESC_SQUAD_MAX : g_cfg.host_squad);
   int bc = g_cfg.host_bots < 0 ? 0 : g_cfg.host_bots > MAX_BOTS ? MAX_BOTS : g_cfg.host_bots;
   snprintf(port, sizeof port, "%d", g_cfg.mp_port);
   snprintf(bots, sizeof bots, "%d", bc);
@@ -22999,7 +23537,7 @@ static int mp_host_start(void) {
                   "--cap-public", capp, "--cap-bots", bots, "--skill", skill,
                   "--fraglimit", frag, "--rounds", rounds, "--name", name,
                   "--team-size", tsz, "--team-fill", tfl, "--friendly-fire", tff,
-                  g_cfg.ballistics ? "--ballistics" : NULL, NULL};
+                  "--squad", sq, g_cfg.ballistics ? "--ballistics" : NULL, NULL};
   g_mp_host_fail = 0;
   // The port must be FREE first: with another server already on it, the
   // child would fail its bind and exit while this client happily joined the
@@ -23402,6 +23940,22 @@ static int ui_cycle(const char *label, const char *const *opts, int n, int *idx,
   if (click && hot && g_ui_rebind < 0) { *idx = (*idx + 1) % n; return 1; }
   return chg;
 }
+
+// HOSTAGE RESCUE's squad row and the guard count it brings (both pages).
+static float ui_squad_rows(int *squad, float px, float pw, float y, int click, float cx, float cy) {
+  static const char *const SQ[RESC_SQUAD_MAX] = {"SOLO", "2 OPERATORS", "3 OPERATORS"};
+  int si = *squad - 1;
+  if (si < 0 || si >= RESC_SQUAD_MAX) si = RESC_SQUAD_MAX - 1;
+  ui_cycle("SQUAD", SQ, RESC_SQUAD_MAX, &si, px, pw, y, click, cx, cy);
+  *squad = si + 1;
+  y += 15;
+  char gl[40];
+  snprintf(gl, sizeof gl, "%d ON COMPOUND", resc_guard_count(g_cfg.sp_diff, *squad));
+  ui_text("GUARDS", px + 16, y + 3, 1, C_TEXT, 1);
+  ui_text(gl, px + pw - 16 - ui_text_width(gl, 1), y + 4, 1, C_HAZE, 1);
+  return y + 15;
+}
+
 
 // A toggle IS a two-option cycle, and keeping it as its own copy of the pill
 // widget is how the two drift: the font is monospace, so max("OFF","ON") is
@@ -24521,13 +25075,9 @@ static void ui_menu(void) {
       y += 12;
     }
     if (g_cfg.sp_mode == GM_RESCUE) {
-      // A mission fields its own guards (by difficulty) on its own map.
-      char gl[40];
-      snprintf(gl, sizeof gl, "%d ON COMPOUND",
-               RESC_DIFF[g_cfg.sp_diff < 0 ? 0 : g_cfg.sp_diff > 2 ? 2 : g_cfg.sp_diff].guards);
-      ui_text("GUARDS", px + 16, y + 3, 1, C_TEXT, 1);
-      ui_text(gl, px + pw - 16 - ui_text_width(gl, 1), y + 4, 1, C_HAZE, 1);
-      y += 15;
+      // A mission fields its own guards (by difficulty and squad) on its own
+      // map; the squad is you and bots.
+      y = ui_squad_rows(&g_cfg.sp_squad, px, pw, y, click, cx, cy);
     } else if (g_cfg.sp_mode == GM_TDM) {
       // TEAM DEATHMATCH offline: places per side (1v1 .. 9v9, bots fill them
       // all) and which side this player starts on. Bot fill and friendly fire
@@ -24642,8 +25192,7 @@ static void ui_menu(void) {
     if (s_wait && st == NC_FAILED) s_wait = 0;
     y += 4;
     {
-      int gm = g_cfg.host_mode == GM_RESCUE || g_cfg.host_mode < 0 ||
-               g_cfg.host_mode >= GM_COUNT ? 0 : g_cfg.host_mode;
+      int gm = g_cfg.host_mode < 0 || g_cfg.host_mode >= GM_COUNT ? 0 : g_cfg.host_mode;
       int mi = g_cfg.host_map >= 0 && g_cfg.host_map <= MAP_ROTATE ? g_cfg.host_map : 0;
       const char *hl = !HOST_SUPPORTED ? "HOSTING NEEDS THE LINUX BUILD"
                      : busy && g_mp_hosting ? "STARTING SERVER..." : "HOST A GAME";
@@ -24661,6 +25210,8 @@ static void ui_menu(void) {
         snprintf(hs, sizeof hs, "TEAM DM / %s / %dV%d%s%s", MAP_PICK_NAMES[mi],
                  g_cfg.host_team_size, g_cfg.host_team_size,
                  g_cfg.host_team_fill ? " + BOTS" : "", g_cfg.host_team_ff ? " / FF" : "");
+      else if (gm == GM_RESCUE)
+        snprintf(hs, sizeof hs, "RESCUE / COMPOUND / SQUAD OF %d", g_cfg.host_squad);
       else
         snprintf(hs, sizeof hs, "%s / %s / %d BOT%s", GM_NAMES[gm],
                  MAP_PICK_NAMES[mi], g_cfg.host_bots, g_cfg.host_bots == 1 ? "" : "S");
@@ -24751,7 +25302,7 @@ static void ui_menu(void) {
     // Apart from SINGLEPLAYER's mode/map/bots, so setting up a team game for
     // friends never rewrites the solo match (and the reverse). Difficulty,
     // the frag limit / rounds and ballistics are the shared match rules.
-    static const int HMODES[] = {GM_DM, GM_TDM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS};
+    static const int HMODES[] = {GM_DM, GM_TDM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE};
     enum { NHM = (int)(sizeof HMODES / sizeof HMODES[0]) };
     const char *hmn[NHM];
     int hi = 0;
@@ -24764,7 +25315,12 @@ static void ui_menu(void) {
     ui_cycle("MODE", hmn, NHM, &hi, px, pw, y, click, cx, cy);
     g_cfg.host_mode = HMODES[hi];
     y += 15;
-    ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.host_map, px, pw, y, click, cx, cy);
+    if (g_cfg.host_mode == GM_RESCUE) {          // the mission has its own map
+      ui_text("MAP", px + 16, y + 3, 1, C_TEXT, 1);
+      ui_text("COMPOUND", px + pw - 16 - ui_text_width("COMPOUND", 1), y + 4, 1, C_HAZE, 1);
+    } else {
+      ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.host_map, px, pw, y, click, cx, cy);
+    }
     y += 15;
     ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
     y += 15;
@@ -24775,6 +25331,11 @@ static void ui_menu(void) {
       float v = (float)g_cfg.sp_rounds;
       y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
       g_cfg.sp_rounds = (int)v;
+    } else if (g_cfg.host_mode == GM_RESCUE) {
+      ui_text("WIN", px + 16, y + 3, 1, C_TEXT, 1);
+      const char *gw = "ALL 3 HOSTAGES TO THE LZ";
+      ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
+      y += 15;
     } else if (g_cfg.host_mode != GM_GUN) {
       float v = (float)g_cfg.sp_frag;
       y = ui_param_row(&SP_FRAG_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
@@ -24797,6 +25358,13 @@ static void ui_menu(void) {
       y += 15;
       ui_text_ex("PLAYERS WHO JOIN CHOOSE ALPHA OR BRAVO", px + 16, y + 1, 0.8f, TXT_REG,
                  1.0f, C4(C_HAZE, 0.75f));
+      y += 12;
+    } else if (g_cfg.host_mode == GM_RESCUE) {
+      ui_section("SQUAD", px, pw, y);
+      y += 14;
+      y = ui_squad_rows(&g_cfg.host_squad, px, pw, y, click, cx, cy);
+      ui_text_ex("PLAYERS JOIN THE SQUAD; BOTS TAKE THE PLACES LEFT", px + 16, y + 1, 0.8f,
+                 TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
       y += 12;
     } else {
       ui_section("BOTS", px, pw, y);
@@ -25114,7 +25682,7 @@ static void ui_scoreboard(void) {
   float top = g_match.over ? 96.0f : 24.0f;
   // ...and at match end the personal summary (hud_match_summary, 44 units)
   // needs its own room under the board.
-  float sum_h = g_match.over && !rescue_on() ? 44.0f : 0.0f;
+  float sum_h = g_match.over && !rescue_view() ? 44.0f : 0.0f;
   int fit = (int)((g_ui_vh - top - 12.0f - 46.0f - sum_h) / 11.0f);
   if (fit < 1) fit = 1;
   int shown = n < fit ? n : fit;
@@ -25268,7 +25836,7 @@ static void ui_scoreboard(void) {
 static int rescue_proj(v3 w, float *sx, float *sy);   // world -> HUD units
 static void perf_draw(void);   // the PERF overlay, defined with app_frame
 static void hud_enemy_marks(const player_t *p) {
-  if (!g_cfg.enemy_mark || rescue_on() || g_match.over || !p->alive) return;
+  if (!g_cfg.enemy_mark || rescue_view() || g_match.over || !p->alive) return;
   v3 eye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
   ENT_FOREACH(e) {
     if (e == g_local_ent || !ent_alive(e)) continue;
@@ -25338,7 +25906,7 @@ static void hud_hints(const player_t *p, float ccx) {
   if (!was_on || g_tick < t0 - HINT_DELAY_TICKS) {       // fresh, or a new match's clock
     idx = 0; t0 = g_tick + HINT_DELAY_TICKS; was_on = 1;
   }
-  if (g_home || rescue_on() || g_match.over || !p->alive || g_menu_open) return;
+  if (g_home || rescue_view() || g_match.over || !p->alive || g_menu_open) return;
   if (idx >= HINT_COUNT) { g_cfg.hints = 0; return; }
   const hint_def_t *h = &HINTS[idx];
   int done = p->prev_held[h->act] || (h->act2 >= 0 && p->prev_held[h->act2]);
@@ -25372,7 +25940,7 @@ static void hud_hints(const player_t *p, float ccx) {
 // thing in the game that carries over from one session to the next.
 static void hud_match_summary(void) {
   static int was_over = -1;
-  int over = g_match.over && !rescue_on();
+  int over = g_match.over && !rescue_view();
   if (was_over == 1 && !g_match.over) g_ms = (typeof(g_ms)){0};   // live again
   was_over = g_match.over;
   if (!over) return;
@@ -26982,7 +27550,7 @@ static void vfx_on_event(const event_t *e) {
   case EV_END:
     // Once per match: LMS ends rounds without an EV_END, the rescue keeps its
     // own debrief and is not a match against anyone.
-    if (!g_home && !rescue_on() && !g_ms.counted) {
+    if (!g_home && !rescue_view() && !g_ms.counted) {
       g_ms.counted = 1;
       g_cfg.st_matches++;
       if (won_by_me(e->k)) g_cfg.st_wins++;
@@ -33351,6 +33919,29 @@ static int g_fig_var;
 // and fatigues, the three biggest masses, so a side reads at any range and
 // from behind. Set by the draw sites from the entity's side.
 static int g_fig_team = -1;
+// TWO FORCES, TWO SILHOUETTES. The player's side are OPERATORS (helmet,
+// goggles, NVG, plate carrier, assault pack); the other side are INSURGENTS:
+// a head wrap with a tail and an eye slit, a light chest rig over a civilian
+// shirt, no helmet, no goggles, no pack. Every mode and map: an enemy is an
+// insurgent (fig_ins_of). The difference is in the SHAPE, so it reads at range
+// and in silhouette, and it never replaces the team colours a team game needs.
+// Set by the draw sites; g_fig_ins_force (harness `figins`) pins it so the
+// figure proofs can check the insurgent build too.
+static int g_fig_ins;
+static int g_fig_ins_force = -1;
+#define FIG_INS (g_fig_ins_force >= 0 ? g_fig_ins_force : g_fig_ins)
+static const float FIG_INS_SHIRT[4][3] = {
+  {0.440f, 0.400f, 0.310f},   // khaki
+  {0.300f, 0.300f, 0.290f},   // charcoal
+  {0.400f, 0.330f, 0.260f},   // brown
+  {0.370f, 0.380f, 0.300f},   // faded olive
+};
+static const float FIG_INS_WRAP[4][3] = {
+  {0.660f, 0.250f, 0.210f},   // dusty red (bot 0: the red head is the old hostile cue)
+  {0.170f, 0.170f, 0.180f},   // black
+  {0.700f, 0.660f, 0.560f},   // sand / off-white
+  {0.420f, 0.430f, 0.320f},   // olive
+};
 static const float FIG_CARRIER_VAR[4][3] = {
   {0.660f, 0.560f, 0.415f},   // sand (shipped)
   {0.520f, 0.600f, 0.440f},   // ranger green
@@ -33468,6 +34059,17 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     nyl   = (v3){{0.700f, 0.610f, 0.470f}};
     rub   = (v3){{0.160f, 0.168f, 0.190f}};
     bala  = (v3){{0.260f, 0.275f, 0.305f}};
+  }
+  if (FIG_INS) {   // the insurgent: civilian shirt, drab rig, leather, a head wrap
+    const float *sh = FIG_INS_SHIRT[g_fig_var & 3], *wr = FIG_INS_WRAP[g_fig_var & 3];
+    olive = (v3){{sh[0], sh[1], sh[2]}};
+    dark  = (v3){{0.300f, 0.280f, 0.255f}};
+    helm  = (v3){{wr[0], wr[1], wr[2]}};
+    nyl   = (v3){{0.330f, 0.355f, 0.255f}};   // dark olive webbing over the shirt
+    web   = (v3){{0.270f, 0.210f, 0.150f}};
+    boot  = (v3){{0.170f, 0.150f, 0.130f}};
+    rub   = (v3){{0.250f, 0.235f, 0.215f}};
+    bala  = (v3){{0.160f, 0.150f, 0.150f}};   // the eye slit's shadow
   }
   if (g_fig_team == 0) {        // ALPHA: red
     olive = (v3){{0.335f, 0.320f, 0.330f}};
@@ -33625,6 +34227,17 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     CN(0.278f, 0.016f, 0.196f, 0.170f, 0.84f, 0.0f),
     CN(0.352f, 0.018f, 0.204f, 0.170f, 0.94f, 0.0f),
     CN(0.415f, 0.012f, 0.184f, 0.148f, 0.99f, 0.0f)};
+  // The INSURGENT's chest rig: a low band round the ribs, no plates, so it
+  // stands only 11-18 mm off the shirt (still strictly outside every torso
+  // station, and on the torso's own twist) and stops below the collarbones.
+  if (FIG_INS) {
+    fnode_t rg[4] = {
+      CN(0.196f, 0.010f, 0.168f, 0.138f, 0.64f, 0.72f),
+      CN(0.250f, 0.014f, 0.178f, 0.146f, 0.78f, 0.0f),
+      CN(0.300f, 0.016f, 0.186f, 0.152f, 0.88f, 0.0f),
+      CN(0.322f, 0.016f, 0.184f, 0.146f, 0.91f, 0.0f)};
+    memcpy(pc, rg, sizeof pc);
+  }
   #undef CN
   probe("carrier");
   g_fig_jit = 0.45f;
@@ -33639,10 +34252,11 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     v3 cfw_p = v3_norm(v3_cross(spine, crt));
     v3 dk_web = v3_scale(kt->web, 0.92f);
     v3 pouch_c = v3_scale(kt->gear, 0.86f);
+    float rig_in = FIG_INS ? -0.010f : 0.0f;   // the rig's face is lower than a plate's
     for (int mp_i = -1; mp_i <= 1; mp_i++) {
       float mx = (float)mp_i * 0.052f;
       #define MP_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
-                         v3_add(v3_scale(crt, mx), v3_scale(cfw_p, (D)))))
+                         v3_add(v3_scale(crt, mx), v3_scale(cfw_p, (D) + rig_in))))
       fnode_t fmp[4] = {
         {MP_P(0.204f, 0.166f), pouch_c, pouch_c, 0.018f, 0.016f, 0, 0.58f},
         {MP_P(0.220f, 0.174f), pouch_c, pouch_c, 0.023f, 0.022f, 0, 0.0f},
@@ -33654,6 +34268,8 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       fig_chain(fmp, 4, 8, 1, 1, crt);
       g_fig_jit = 1.0f;
     }
+    if (FIG_INS) goto no_admin;   // a rig has no admin panel up on a plate
+    {
     v3 urt = v3_rot_axis(pbase, spine, 0.94f * tw);
     v3 ufw = v3_norm(v3_cross(spine, urt));
     #define AP_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), v3_scale(ufw, (D))))
@@ -33667,11 +34283,15 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     g_fig_jit = 0.30f;
     fig_chain(adm, 3, 8, 1, 1, urt);
     g_fig_jit = 1.0f;
+    }
+  no_admin:;
   }
   // Shoulder straps: the carrier is otherwise one black slab across the chest
   // with a hard top edge and nothing holding it up. Two short runs over each
   // trapezius break that mass and give the torso a visible harness.
-  {
+  // (Not on the insurgent: they were sized to ride a plate carrier's top
+  // edge, and without it they would sink into the shirt at a grazing angle.)
+  if (!FIG_INS) {
     v3 cf2 = v3_norm(v3_cross(spine, Rc));
     for (int e = 0; e < 2; e++) {
       float es = e ? 1.0f : -1.0f;
@@ -33724,7 +34344,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // moves as one rigid assembly with the upper torso instead of shearing
   // against pelvis-framed geometry.
   v3 cfw = v3_norm(v3_cross(spine, Rc));
-  {
+  if (!FIG_INS) {   // the insurgent travels light: no pack, no radio
     #define PP(X, Y, Z) v3_add(P->chest, v3_add(v3_scale(Rc, (X)), \
                         v3_add(v3_scale(spine, (Y)), v3_scale(cfw, (Z)))))
     v3 pack_col = v3_scale(kt->gear, 0.72f);
@@ -33936,7 +34556,8 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // Articulated composite shoulder pauldron: crowns P->sho[i] along the
       // live bladed clavicle (sdir) and tilts smoothly with upper-arm elevation
       // without rolling onto the chest or floating off the deltoid.
-      {
+      // (Armour: the insurgent wears none.)
+      if (!FIG_INS) {
         v3 sdir = fig_perp(spine, v3_sub(P->sho[i], P->chest));
         v3 sfw  = v3_norm(v3_cross(spine, v3_scale(sdir, s)));
         float arm_up = 0.24f * (v3_dot(uad, spine) + 0.55f);
@@ -34118,6 +34739,13 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     #define HP(a, b, c) v3_add(P.head, v3_add(v3_scale(hr, (a)), \
                         v3_add(v3_scale(hu, (b)), v3_scale(hf, (c)))))
     mat_set(MAT_CLOTH_R, 0.0f);   // balaclava: the whole head is cloth now
+    // The insurgent's head is the WRAP's cloth (a shemagh over face and neck)
+    // with one dark band across the eyes; the operator's is the balaclava.
+    int ins = FIG_INS;
+    // The scarf across the face is the wrap's cloth a shade paler (a shemagh
+    // is a light check), so wrap and face read as two windings of one cloth.
+    v3 face = ins ? v3_lerp(kt.helm, (v3){{0.80f, 0.78f, 0.72f}}, 0.30f) : kt.bala;
+    v3 slit = kt.bala;            // the eye line stays the dark cloth on both
     // Neck, MEASURED: ANSUR II (n=4082) gives 433 mm base circumference and 395
     // at the narrow point — 138 and 126 mm across. This was 162 -> 116, so the
     // base was 24 mm too thick while the top was 10 mm too thin, which put the
@@ -34139,8 +34767,8 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       {v3_add(P.chest, v3_scale(spine, 0.133f)), kt.olive, kt.olive, 0.064f, 0.066f, 0, 0.80f},
       // The throat band is balaclava now — the whole head is covered. Slightly
       // darker than the face cloth: it lives in the helmet's shadow.
-      {v3_add(P.head, v3_scale(hu, -0.056f)), v3_scale(kt.bala, 0.82f),
-       v3_scale(kt.bala, 0.82f), 0.058f, 0.061f, 0, 0.62f}};
+      {v3_add(P.head, v3_scale(hu, -0.056f)), v3_scale(face, 0.82f),
+       v3_scale(face, 0.82f), 0.058f, 0.061f, 0, 0.62f}};
     probe("neck");
     fig_chain(nk, 5, 12, 1, 1, Rc);
     // Seven rings up the skull. A head is not an egg: the jaw is narrower than
@@ -34168,13 +34796,13 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // range) and the ramp contract says the face is never the peak. The
       // face is now goggles-over-dark-cloth; the goggle band carries the
       // facing cue with its one specular gleam.
-      {HP(0, -0.0880f, 0.0210f), kt.bala, kt.bala, 0.0505f, 0.0570f, 0, 0.74f},
-      {HP(0, -0.0640f, 0.0075f), kt.bala, kt.bala, 0.0680f, 0.0830f, 0, 0.80f},
-      {HP(0, -0.0400f, -0.0035f), kt.bala, kt.bala, 0.0752f, 0.0930f, 0, 0.88f},
-      {HP(0, -0.0056f, -0.0090f), kt.bala, kt.bala, 0.0790f, 0.0980f, 0, 0.94f},
-      {HP(0, 0.0372f, -0.0110f), kt.bala, kt.bala, 0.0780f, 0.0965f, 0, 0.78f},
-      {HP(0, 0.0818f, -0.0190f), kt.bala, kt.bala, 0.0692f, 0.0850f, 0, 0.0f},
-      {HP(0, 0.1116f, -0.0250f), kt.bala, kt.bala, 0.0480f, 0.0605f, 0, 0.0f}};
+      {HP(0, -0.0880f, 0.0210f), face, face, 0.0505f, 0.0570f, 0, 0.74f},
+      {HP(0, -0.0640f, 0.0075f), face, face, 0.0680f, 0.0830f, 0, 0.80f},
+      {HP(0, -0.0400f, -0.0035f), face, face, 0.0752f, 0.0930f, 0, 0.88f},
+      {HP(0, -0.0056f, -0.0090f), slit, slit, 0.0790f, 0.0980f, 0, 0.94f},
+      {HP(0, 0.0372f, -0.0110f), face, face, 0.0780f, 0.0965f, 0, 0.78f},
+      {HP(0, 0.0818f, -0.0190f), face, face, 0.0692f, 0.0850f, 0, 0.0f},
+      {HP(0, 0.1116f, -0.0250f), face, face, 0.0480f, 0.0605f, 0, 0.0f}};
     probe("skull");
     fig_chain(hd, 7, 16, 1, 1, hr);
     // Nose: the one feature that decides whether a head has a FRONT at 10 m. A
@@ -34193,179 +34821,214 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       for (int e = 0; e < 2; e++) {
         float es = e ? 1.0f : -1.0f;
         fnode_t er[2] = {
-          {HP(es * 0.068f, -0.030f, 0), kt.bala, kt.bala, 0.014f, 0.020f, 0, 0.0f},
-          {HP(es * 0.082f, -0.026f, 0), kt.bala, kt.bala, 0.011f, 0.017f, 0, 0.0f}};
+          {HP(es * 0.068f, -0.030f, 0), face, face, 0.014f, 0.020f, 0, 0.0f},
+          {HP(es * 0.082f, -0.026f, 0), face, face, 0.011f, 0.017f, 0, 0.0f}};
         probe("ear");
         fig_chain(er, 2, 8, 1, 1, hu);
       }
     }
-    mat_set(MAT_HELM_R, 0.0f);           // helmet: a hard shell, not cloth
-    // THE BUCKET, diagnosed by reading the radii rather than the screenshot.
-    // The old shell held rx between 0.088 and 0.093 from hu -0.024 all the way
-    // to +0.104 — a CYLINDER 128 mm tall — and then closed it with a domed lid.
-    // That is a coal scuttle, and it was the single largest silhouette element
-    // on the figure. It was also 200 mm deep against 244 needed: a helmet as
-    // deep as it is wide reads as a pot, one a quarter longer than wide reads as
-    // a helmet. Nine rings now taper CONTINUOUSLY from the brim line up.
-    // Sized from the head it has to fit: ANSUR head breadth 154 + 2*(15 mm pad +
-    // 7 mm shell) = 198, head length 200 + 44 = 244. Every station is checked
-    // clear of the skull below it by >= 12 mm.
-    // The crown BALL is gone with the cylinder. A ball wide enough to close a
-    // dome is necessarily wider than the shell near its own equator and narrower
-    // further down, so the two surfaces CROSS — and along a crossing line depth
-    // is decided by rounding, which is a hairline seam that wanders as the head
-    // turns. figcheck cannot see it (two curved surfaces that intersect are
-    // nowhere coplanar), and the old pairing was 0.1 mm from tangent at one
-    // ring. Tapering to an 36 mm final ring costs one flat disc at the very top
-    // of a helmet, which no camera in this game can get above.
-    // FACETED shell, k=8: the redesign's helmet is a designed low-poly object
-    // with visible plane breaks, not a smooth dome — the dome was the single
-    // largest smooth surface on the figure and the loudest "vinyl toy" tell
-    // against the arena's chamfered crates. Ring logic unchanged (nape flap,
-    // buried front edges, the LIP as a fat node of the one shell — see the
-    // history above fig_chain for why a nested brim cannot work). Grown ~4%
-    // toward the x1.15 stylised helmet; every station still clears the skull
-    // by >= 12 mm. Value jitter is DAMPED: a shell is one moulded object, and
-    // full crate-jitter striped it horizontally.
-    g_fig_jit = 0.35f;
-    fnode_t hm[9] = {
-      // Nape pulled 8 mm further down and back and 8 mm wider: at (0.054,
-      // 0.064) against the base ring's (0.088, 0.095) 30 mm away, the shell
-      // flared 49 degrees in one step and fig_chain's own bevel folded back
-      // through the ring behind it — three helm_shell/helm_shell crossings, a
-      // surface intersecting ITSELF. 36 degrees does not fold.
-      {HP(0, -0.076f, -0.066f), kt.helm, kt.helm, 0.0620f, 0.0720f, 0, 0.42f},  // nape flap
-      // Base dropped 8 mm and the LIP pulled in 5 mm, for the same reason the
-      // nape moved: the brim flared 31 mm of radius in 25 mm of run — 51
-      // degrees — and fig_chain's bevel folded the flare back through the ring
-      // behind it, so the shell intersected ITSELF for a 25 mm seam right on
-      // the brow line. 39 degrees does not fold, and the brim still reads as a
-      // brim because it is still the widest ring on the helmet by 12 mm.
-      {HP(0, -0.058f, -0.044f), kt.helm, kt.helm, 0.0880f, 0.0950f, 0, 0.55f},  // base
-      {HP(0, -0.032f, -0.020f), kt.helm, kt.helm, 0.1075f, 0.1215f, 0, 0.0f},   // THE LIP
-      {HP(0, -0.016f, -0.014f), kt.helm, kt.helm, 0.1040f, 0.1200f, 0, 0.0f},
-      {HP(0, 0.024f, -0.012f), kt.helm, kt.helm, 0.1050f, 0.1205f, 0, 0.0f},
-      {HP(0, 0.066f, -0.011f), kt.helm, kt.helm, 0.1000f, 0.1140f, 0, 0.0f},
-      {HP(0, 0.104f, -0.012f), kt.helm, kt.helm, 0.0885f, 0.1000f, 0, 0.0f},
-      {HP(0, 0.136f, -0.014f), kt.helm, kt.helm, 0.0680f, 0.0765f, 0, 0.0f},
-      {HP(0, 0.156f, -0.016f), kt.helm, kt.helm, 0.0330f, 0.0375f, 0, 0.0f}};
-    probe("helm_shell");
-    fig_chain(hm, 9, 8, 1, 1, hr);
-    g_fig_jit = 1.0f;
-    // (The brim is a node of the shell above — see the LIP comment. It used to
-    // be its own chain and could not be kept proud of a pushed-back base ring.)
-    // NVG mount: the shrouded plate on the front of every modern helmet. Two
-    // boxes, and it does more for "this is a soldier" than any amount of shell
-    // resolution because it is the one asymmetric hard-edged thing up there.
-    // NO NVG SHROUD. Two boxes stacked on the brow, and at the size a head
-    // actually draws they read as a lump on the forehead rather than as a
-    // mount — the same argument that took the nose chain and the goggle straps
-    // off this head. They also crossed the shell they sat on. The helmet keeps
-    // its asymmetric hard-edged detail in the side rails, which are on the axis
-    // the eye reads a head by.
-    mat_set(MAT_HELM_R, 0.0f);
-    // Side rails / ear covers: two short pads over the temples. They also give
-    // the helmet a left-right axis, which a dome does not have.
-    for (int e = 0; e < 2; e++) {
-      float es = e ? 1.0f : -1.0f;
-      // Pushed out with the k=8 shell (rx ~0.107 at this height): the cover's
-      // outer face rides 3 mm proud — buried is invisible, far proud is lumps.
-      v3 ec = HP(es * 0.083f, -0.024f, 0);
-      fnode_t er[2] = {
-        {v3_add(ec, v3_scale(hf, 0.028f)), kt.helm, kt.helm, 0.024f, 0.020f, 0, 0.0f},
-        {v3_add(ec, v3_scale(hf, -0.044f)), kt.helm, kt.helm, 0.027f, 0.024f, 0, 0.0f}};
-      probe("helm_ear");
-      fig_chain(er, 2, 8, 1, 1, hu);
-    }
-    // Visor: ONE box spanning exactly the skull's flat front facet, which is
-    // 2*0.42*rx wide for the chamfered profile. Two earlier attempts failed for
-    // opposite reasons and both are worth remembering: a shallow bar sinks into
-    // the nose bridge and reads as two disconnected patches, while a band CHAIN
-    // that follows the face gets its corners bevel-cut (that is what fig_chain
-    // does at every bend) and the chamfer edge then pokes through the cut as a
-    // skin-coloured sliver. A single box inside the flat facet has no corner to
-    // cut and nothing to sink into.
-    // Goggles: a band that WRAPS the face, swept temple to temple along five
-    // nodes that follow the skull's own curve. The box this replaces was sized to
-    // the old chamfered head's flat front facet — once the skull became round
-    // there was no flat facet left for it to sit in, and it stood off the face at
-    // the cheeks like a pair of wings. A chain has no such assumption: it follows
-    // whatever curve its nodes describe, and its ends bury themselves under the
-    // helmet's ear covers.
-    mat_set(MAT_GLASS_R, 0.0f);          // ballistic lens: the one wet gleam
-    {
-      // Re-fitted to the deeper skull. The face front at eye height moved from
-      // 0.076 to 0.087, which would have left the whole band 11 mm INSIDE the
-      // face — a goggle you cannot see is worse than none, because the geometry
-      // is still paid for. Each node now stands 9-11 mm proud of the skull
-      // ellipse at its own lateral station, computed rather than nudged.
-      // WIDER: the goggle band is the face now (the head is balaclava cloth
-      // underneath), so it carries the whole facing cue and gets a third more
-      // height — a wide dark visor with one wet gleam.
-      // THICKER, AND FACETED. At 14 mm of depth the band stood 9-11 mm proud of
-      // a skull it only bit 3-5 mm into, so over most of its length two curved
-      // surfaces ran nearly PARALLEL a couple of millimetres apart — which is
-      // the wandering depth seam this file calls a z-glitch, and which figcheck
-      // cannot see because two curved surfaces that intersect are nowhere
-      // coplanar. 24 mm buries it properly. The profile drops from 12-gon to
-      // 8-gon at the same time: a visor is a moulded plate with plane breaks,
-      // not a tube, and a flat band grazing a round skull grazes it in four
-      // places instead of everywhere.
-      const float gz_[5] = {-0.072f, -0.050f, 0.000f, 0.050f, 0.072f};  // across
-      const float gd_[5] = {-0.026f, 0.056f, 0.080f, 0.056f, -0.026f};  // forward
-      const float gu_[5] = {0.006f, 0.016f, 0.020f, 0.016f, 0.006f};    // up
-      const float gr_[5] = {0.016f, 0.034f, 0.038f, 0.034f, 0.016f};    // height
-      fnode_t gg[5];
-      // The temple ends are a QUIET step, not a bright one. At 1.55 the rim
-      // read as two pale wings either side of a dark visor — the loudest thing
-      // on a head that is supposed to be one dark mass with one hard band
-      // across it, and the first thing the eye found on the whole figure.
-      v3 gfr = v3_scale(kt.bala, 1.12f);   // frame rim: a step over the cloth,
-      for (int q = 0; q < 5; q++)          // still far under the helmet
-        gg[q] = (fnode_t){.p = HP(gz_[q], gu_[q], gd_[q]),
-                          .col = (q == 0 || q == 4) ? gfr : kt.gm2,
-                          .bcol = (q == 0 || q == 4) ? gfr : kt.gm2,
-                          .rx = gr_[q], .rz = 0.024f};
-      probe("goggle");
-      fig_chain(gg, 5, 8, 1, 1, hu);
-      // NO STRAP. It existed because "goggles that stop at the temples look
-      // like a sleep mask" — true of the narrow band it was written for, and no
-      // longer true of this one: the band is 144 mm across and the helmet's ear
-      // covers sit at 178, so its ends bury under them with nothing left
-      // hanging in the air. What the strap actually contributed at the size a
-      // head renders was two pale coyote strips either side of the visor,
-      // poking out from under the helmet brim — the brightest thing on the
-      // figure's face and the first thing the eye found on the whole model.
-      // Two chains per head x 21 heads, removed.
-    }
-    // Chin strap: two thin runs from the ear covers down under the jaw. Nothing
-    // says "helmet" like the thing that holds it on.
-    mat_set(MAT_GEAR_R, 0.0f);
-    for (int e = 0; e < 2; e++) {
-      float es = e ? 1.0f : -1.0f;
-      fnode_t cs[3] = {
-        // 0.078, not 0.089: the top node's outer edge stood at 99 mm where the
-        // shell has already narrowed past it, so the strap emerged THROUGH the
-        // helmet for five pairs. It hangs off the ear cover, so it belongs
-        // inside its shadow.
-        {HP(es * 0.084f, -0.028f, 0), kt.gear, kt.gear, 0.010f, 0.008f, 0, 0.0f},
-        {HP(es * 0.066f, -0.088f, 0), kt.gear, kt.gear, 0.009f, 0.007f, 0, 0.0f},
-        {HP(es * 0.024f, -0.098f, -0.014f), kt.gear, kt.gear, 0.009f, 0.007f, 0, 0.0f}};
-      probe("chinstrap");
-      fig_chain(cs, 3, 8, 1, 1, hf);
-    }
-    // Low-profile NVG brow shroud bolted flush to the helmet's front facet in
-    // the head's own canted frame (hr, hu, hf), tagged cleanly as its own part.
-    {
-      v3 sh_col = v3_scale(kt.web, 0.90f);
-      fnode_t nv[3] = {
-        {HP(0, 0.054f, 0.098f), sh_col, sh_col, 0.024f, 0.016f, 0, 0.0f},
-        {HP(0, 0.074f, 0.094f), sh_col, sh_col, 0.026f, 0.017f, 0, 0.0f},
-        {HP(0, 0.092f, 0.086f), sh_col, sh_col, 0.020f, 0.014f, 0, 0.0f}};
-      probe("nvg");
-      g_fig_jit = 0.30f;
-      fig_chain(nv, 3, 8, 1, 1, hr);
+    if (ins) {
+      // THE HEAD WRAP. Five rings over the crown, each 9-15 mm clear of the
+      // skull station under it and on the skull's own fore/aft centre line, so
+      // the two surfaces never run parallel; the bottom cap meets the skull at
+      // a right angle and reads as the wrap's folded edge over the brow.
+      // FULL value jitter: each ring its own shade, which is exactly what a
+      // cloth wound round a head in turns looks like (a shell damps it).
       g_fig_jit = 1.0f;
+      v3 wdk = v3_scale(kt.helm, 0.80f);
+      fnode_t wr[5] = {
+        // Wound cloth, not a shell: a fat fold over the brow, the bulk carried
+        // HIGH and wide, and a broad flat crown — a helmet tapers to a dome,
+        // a wrap does not.
+        // Alternate turns a shade apart: the stripes are the winding.
+        {HP(0, 0.010f, -0.010f), kt.helm, wdk, 0.0900f, 0.1080f, 0, 0.55f},
+        {HP(0, 0.032f, -0.011f), wdk, kt.helm, 0.0970f, 0.1140f, 0, 0.0f},   // the fold
+        {HP(0, 0.060f, -0.015f), kt.helm, wdk, 0.0920f, 0.1080f, 0, 0.0f},
+        {HP(0, 0.095f, -0.022f), wdk, kt.helm, 0.0880f, 0.1020f, 0, 0.0f},
+        {HP(0, 0.124f, -0.026f), kt.helm, kt.helm, 0.0620f, 0.0740f, 0, 0.0f}};
+      probe("wrap");
+      fig_chain(wr, 5, 8, 1, 1, hr);
+      // ...and its TAIL, hanging down the back of the neck: rooted inside the
+      // wrap, it leaves the cloth on a diagonal (never parallel to it) and
+      // stands >= 4 mm off the back of the skull below.
+      v3 tl = v3_scale(kt.helm, 0.88f);
+      fnode_t tw3[4] = {
+        {HP(0, 0.028f, -0.108f), tl, tl, 0.040f, 0.010f, 0, 0.0f},
+        {HP(0, -0.010f, -0.134f), tl, tl, 0.046f, 0.009f, 0, 0.0f},
+        {HP(0, -0.072f, -0.132f), tl, tl, 0.044f, 0.009f, 0, 0.0f},
+        {HP(0, -0.118f, -0.128f), tl, tl, 0.034f, 0.008f, 0, 0.0f}};
+      probe("wraptail");
+      fig_chain(tw3, 4, 8, 1, 1, hr);
+      g_fig_jit = 1.0f;
+    } else {
+      mat_set(MAT_HELM_R, 0.0f);           // helmet: a hard shell, not cloth
+      // THE BUCKET, diagnosed by reading the radii rather than the screenshot.
+      // The old shell held rx between 0.088 and 0.093 from hu -0.024 all the way
+      // to +0.104 — a CYLINDER 128 mm tall — and then closed it with a domed lid.
+      // That is a coal scuttle, and it was the single largest silhouette element
+      // on the figure. It was also 200 mm deep against 244 needed: a helmet as
+      // deep as it is wide reads as a pot, one a quarter longer than wide reads as
+      // a helmet. Nine rings now taper CONTINUOUSLY from the brim line up.
+      // Sized from the head it has to fit: ANSUR head breadth 154 + 2*(15 mm pad +
+      // 7 mm shell) = 198, head length 200 + 44 = 244. Every station is checked
+      // clear of the skull below it by >= 12 mm.
+      // The crown BALL is gone with the cylinder. A ball wide enough to close a
+      // dome is necessarily wider than the shell near its own equator and narrower
+      // further down, so the two surfaces CROSS — and along a crossing line depth
+      // is decided by rounding, which is a hairline seam that wanders as the head
+      // turns. figcheck cannot see it (two curved surfaces that intersect are
+      // nowhere coplanar), and the old pairing was 0.1 mm from tangent at one
+      // ring. Tapering to an 36 mm final ring costs one flat disc at the very top
+      // of a helmet, which no camera in this game can get above.
+      // FACETED shell, k=8: the redesign's helmet is a designed low-poly object
+      // with visible plane breaks, not a smooth dome — the dome was the single
+      // largest smooth surface on the figure and the loudest "vinyl toy" tell
+      // against the arena's chamfered crates. Ring logic unchanged (nape flap,
+      // buried front edges, the LIP as a fat node of the one shell — see the
+      // history above fig_chain for why a nested brim cannot work). Grown ~4%
+      // toward the x1.15 stylised helmet; every station still clears the skull
+      // by >= 12 mm. Value jitter is DAMPED: a shell is one moulded object, and
+      // full crate-jitter striped it horizontally.
+      g_fig_jit = 0.35f;
+      fnode_t hm[9] = {
+        // Nape pulled 8 mm further down and back and 8 mm wider: at (0.054,
+        // 0.064) against the base ring's (0.088, 0.095) 30 mm away, the shell
+        // flared 49 degrees in one step and fig_chain's own bevel folded back
+        // through the ring behind it — three helm_shell/helm_shell crossings, a
+        // surface intersecting ITSELF. 36 degrees does not fold.
+        {HP(0, -0.076f, -0.066f), kt.helm, kt.helm, 0.0620f, 0.0720f, 0, 0.42f},  // nape flap
+        // Base dropped 8 mm and the LIP pulled in 5 mm, for the same reason the
+        // nape moved: the brim flared 31 mm of radius in 25 mm of run — 51
+        // degrees — and fig_chain's bevel folded the flare back through the ring
+        // behind it, so the shell intersected ITSELF for a 25 mm seam right on
+        // the brow line. 39 degrees does not fold, and the brim still reads as a
+        // brim because it is still the widest ring on the helmet by 12 mm.
+        {HP(0, -0.058f, -0.044f), kt.helm, kt.helm, 0.0880f, 0.0950f, 0, 0.55f},  // base
+        {HP(0, -0.032f, -0.020f), kt.helm, kt.helm, 0.1075f, 0.1215f, 0, 0.0f},   // THE LIP
+        {HP(0, -0.016f, -0.014f), kt.helm, kt.helm, 0.1040f, 0.1200f, 0, 0.0f},
+        {HP(0, 0.024f, -0.012f), kt.helm, kt.helm, 0.1050f, 0.1205f, 0, 0.0f},
+        {HP(0, 0.066f, -0.011f), kt.helm, kt.helm, 0.1000f, 0.1140f, 0, 0.0f},
+        {HP(0, 0.104f, -0.012f), kt.helm, kt.helm, 0.0885f, 0.1000f, 0, 0.0f},
+        {HP(0, 0.136f, -0.014f), kt.helm, kt.helm, 0.0680f, 0.0765f, 0, 0.0f},
+        {HP(0, 0.156f, -0.016f), kt.helm, kt.helm, 0.0330f, 0.0375f, 0, 0.0f}};
+      probe("helm_shell");
+      fig_chain(hm, 9, 8, 1, 1, hr);
+      g_fig_jit = 1.0f;
+      // (The brim is a node of the shell above — see the LIP comment. It used to
+      // be its own chain and could not be kept proud of a pushed-back base ring.)
+      // NVG mount: the shrouded plate on the front of every modern helmet. Two
+      // boxes, and it does more for "this is a soldier" than any amount of shell
+      // resolution because it is the one asymmetric hard-edged thing up there.
+      // NO NVG SHROUD. Two boxes stacked on the brow, and at the size a head
+      // actually draws they read as a lump on the forehead rather than as a
+      // mount — the same argument that took the nose chain and the goggle straps
+      // off this head. They also crossed the shell they sat on. The helmet keeps
+      // its asymmetric hard-edged detail in the side rails, which are on the axis
+      // the eye reads a head by.
+      mat_set(MAT_HELM_R, 0.0f);
+      // Side rails / ear covers: two short pads over the temples. They also give
+      // the helmet a left-right axis, which a dome does not have.
+      for (int e = 0; e < 2; e++) {
+        float es = e ? 1.0f : -1.0f;
+        // Pushed out with the k=8 shell (rx ~0.107 at this height): the cover's
+        // outer face rides 3 mm proud — buried is invisible, far proud is lumps.
+        v3 ec = HP(es * 0.083f, -0.024f, 0);
+        fnode_t er[2] = {
+          {v3_add(ec, v3_scale(hf, 0.028f)), kt.helm, kt.helm, 0.024f, 0.020f, 0, 0.0f},
+          {v3_add(ec, v3_scale(hf, -0.044f)), kt.helm, kt.helm, 0.027f, 0.024f, 0, 0.0f}};
+        probe("helm_ear");
+        fig_chain(er, 2, 8, 1, 1, hu);
+      }
+      // Visor: ONE box spanning exactly the skull's flat front facet, which is
+      // 2*0.42*rx wide for the chamfered profile. Two earlier attempts failed for
+      // opposite reasons and both are worth remembering: a shallow bar sinks into
+      // the nose bridge and reads as two disconnected patches, while a band CHAIN
+      // that follows the face gets its corners bevel-cut (that is what fig_chain
+      // does at every bend) and the chamfer edge then pokes through the cut as a
+      // skin-coloured sliver. A single box inside the flat facet has no corner to
+      // cut and nothing to sink into.
+      // Goggles: a band that WRAPS the face, swept temple to temple along five
+      // nodes that follow the skull's own curve. The box this replaces was sized to
+      // the old chamfered head's flat front facet — once the skull became round
+      // there was no flat facet left for it to sit in, and it stood off the face at
+      // the cheeks like a pair of wings. A chain has no such assumption: it follows
+      // whatever curve its nodes describe, and its ends bury themselves under the
+      // helmet's ear covers.
+      mat_set(MAT_GLASS_R, 0.0f);          // ballistic lens: the one wet gleam
+      {
+        // Re-fitted to the deeper skull. The face front at eye height moved from
+        // 0.076 to 0.087, which would have left the whole band 11 mm INSIDE the
+        // face — a goggle you cannot see is worse than none, because the geometry
+        // is still paid for. Each node now stands 9-11 mm proud of the skull
+        // ellipse at its own lateral station, computed rather than nudged.
+        // WIDER: the goggle band is the face now (the head is balaclava cloth
+        // underneath), so it carries the whole facing cue and gets a third more
+        // height — a wide dark visor with one wet gleam.
+        // THICKER, AND FACETED. At 14 mm of depth the band stood 9-11 mm proud of
+        // a skull it only bit 3-5 mm into, so over most of its length two curved
+        // surfaces ran nearly PARALLEL a couple of millimetres apart — which is
+        // the wandering depth seam this file calls a z-glitch, and which figcheck
+        // cannot see because two curved surfaces that intersect are nowhere
+        // coplanar. 24 mm buries it properly. The profile drops from 12-gon to
+        // 8-gon at the same time: a visor is a moulded plate with plane breaks,
+        // not a tube, and a flat band grazing a round skull grazes it in four
+        // places instead of everywhere.
+        const float gz_[5] = {-0.072f, -0.050f, 0.000f, 0.050f, 0.072f};  // across
+        const float gd_[5] = {-0.026f, 0.056f, 0.080f, 0.056f, -0.026f};  // forward
+        const float gu_[5] = {0.006f, 0.016f, 0.020f, 0.016f, 0.006f};    // up
+        const float gr_[5] = {0.016f, 0.034f, 0.038f, 0.034f, 0.016f};    // height
+        fnode_t gg[5];
+        // The temple ends are a QUIET step, not a bright one. At 1.55 the rim
+        // read as two pale wings either side of a dark visor — the loudest thing
+        // on a head that is supposed to be one dark mass with one hard band
+        // across it, and the first thing the eye found on the whole figure.
+        v3 gfr = v3_scale(kt.bala, 1.12f);   // frame rim: a step over the cloth,
+        for (int q = 0; q < 5; q++)          // still far under the helmet
+          gg[q] = (fnode_t){.p = HP(gz_[q], gu_[q], gd_[q]),
+                            .col = (q == 0 || q == 4) ? gfr : kt.gm2,
+                            .bcol = (q == 0 || q == 4) ? gfr : kt.gm2,
+                            .rx = gr_[q], .rz = 0.024f};
+        probe("goggle");
+        fig_chain(gg, 5, 8, 1, 1, hu);
+        // NO STRAP. It existed because "goggles that stop at the temples look
+        // like a sleep mask" — true of the narrow band it was written for, and no
+        // longer true of this one: the band is 144 mm across and the helmet's ear
+        // covers sit at 178, so its ends bury under them with nothing left
+        // hanging in the air. What the strap actually contributed at the size a
+        // head renders was two pale coyote strips either side of the visor,
+        // poking out from under the helmet brim — the brightest thing on the
+        // figure's face and the first thing the eye found on the whole model.
+        // Two chains per head x 21 heads, removed.
+      }
+      // Chin strap: two thin runs from the ear covers down under the jaw. Nothing
+      // says "helmet" like the thing that holds it on.
+      mat_set(MAT_GEAR_R, 0.0f);
+      for (int e = 0; e < 2; e++) {
+        float es = e ? 1.0f : -1.0f;
+        fnode_t cs[3] = {
+          // 0.078, not 0.089: the top node's outer edge stood at 99 mm where the
+          // shell has already narrowed past it, so the strap emerged THROUGH the
+          // helmet for five pairs. It hangs off the ear cover, so it belongs
+          // inside its shadow.
+          {HP(es * 0.084f, -0.028f, 0), kt.gear, kt.gear, 0.010f, 0.008f, 0, 0.0f},
+          {HP(es * 0.066f, -0.088f, 0), kt.gear, kt.gear, 0.009f, 0.007f, 0, 0.0f},
+          {HP(es * 0.024f, -0.098f, -0.014f), kt.gear, kt.gear, 0.009f, 0.007f, 0, 0.0f}};
+        probe("chinstrap");
+        fig_chain(cs, 3, 8, 1, 1, hf);
+      }
+      // Low-profile NVG brow shroud bolted flush to the helmet's front facet in
+      // the head's own canted frame (hr, hu, hf), tagged cleanly as its own part.
+      {
+        v3 sh_col = v3_scale(kt.web, 0.90f);
+        fnode_t nv[3] = {
+          {HP(0, 0.054f, 0.098f), sh_col, sh_col, 0.024f, 0.016f, 0, 0.0f},
+          {HP(0, 0.074f, 0.094f), sh_col, sh_col, 0.026f, 0.017f, 0, 0.0f},
+          {HP(0, 0.092f, 0.086f), sh_col, sh_col, 0.020f, 0.014f, 0, 0.0f}};
+        probe("nvg");
+        g_fig_jit = 0.30f;
+        fig_chain(nv, 3, 8, 1, 1, hr);
+        g_fig_jit = 1.0f;
+      }
     }
     #undef HP
   }
@@ -34955,11 +35618,13 @@ static void scene_draw_bot(const bot_t *b, float alpha) {
   // issuing the AR — but any figure drawn through this path holding the SR
   // would render an AR, and the far SR report bake becomes reachable with it.
   g_fig_var = (int)(b - g_bots) & 3;              // entity id - 1
-  g_fig_team = teams_on() ? team_of((int)(b - g_bots) + 1) : -1;
+  g_fig_team = fig_team_of((int)(b - g_bots) + 1);
+  g_fig_ins = fig_ins_of((int)(b - g_bots) + 1);
   scene_draw_figure(&b->anim, pos, yaw, &dth, alpha, flash01, fc, 0, b->wp.cur,
                     gun_anim(&b->wp, alpha));
   g_fig_var = 0;
   g_fig_team = -1;
+  g_fig_ins = 0;
 }
 
 // Perpendicular frame for marks/tracers whose only anchor is one direction.
@@ -35540,12 +36205,16 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     int local = ent_of_human(h) == g_local_ent;
     if (local && !show_player) continue;
     if (!hp->alive) continue;
-    g_fig_team = teams_on() ? team_of(ent_of_human(h)) : -1;
+    g_fig_team = fig_team_of(ent_of_human(h));
+    g_fig_ins = fig_ins_of(ent_of_human(h));
+    g_fig_var = ent_of_human(h) & 3;
     scene_draw_figure(&g_player_anim[h], v3_lerp(hp->prev_pos, hp->pos, alpha),
                       hp->yaw, NULL, alpha, ent_flash01(hp->flash, hp->flash_head),
                       hp->flash_head ? (v3){{1.0f, 0.22f, 0.14f}} : (v3){{1, 1, 1}},
                       1, hp->wp.cur, gun_anim(&hp->wp, alpha));
     g_fig_team = -1;
+    g_fig_ins = 0;
+    g_fig_var = 0;
   }
   for (int i = 0; i < g_match.nbots; i++)
     if (g_bots[i].active) scene_draw_bot(&g_bots[i], alpha);
@@ -35571,11 +36240,13 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_diss_seed = cp->seed;
     g_fig_kcap = CORPSE_K;
     g_fig_var = cp->owner > 0 ? (cp->owner - 1) & 3 : 0;
-    g_fig_team = teams_on() ? team_of(cp->owner) : -1;
+    g_fig_team = fig_team_of(cp->owner);
+    g_fig_ins = fig_ins_of(cp->owner);
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
     g_fig_var = 0;
     g_fig_team = -1;
+    g_fig_ins = 0;
   }
   g_fig_diss = 0.0f;
   g_fig_kcap = 0;
@@ -36787,7 +37458,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // rendered mean luminance of the bluish pixels, 95 on the body against 75
     // on the viewmodel before this was compensated at all). That factor lives
     // here, once, instead of in a second set of colours that can drift.
-    g_fig_team = teams_on() && g_local_ent >= 0 ? team_of(g_local_ent) : -1;
+    g_fig_team = g_local_ent >= 0 ? fig_team_of(g_local_ent) : -1;
     kit_t vkt = fig_kit(1, 0.0f, (v3){{1, 1, 1}});
     g_fig_team = -1;
     v3 glove  = v3_scale(vkt.glove, 1.055f);    // ...and his own gloves
@@ -38515,7 +39186,7 @@ static const char *rescue_rating(void) {
 }
 
 static void rescue_hud(const player_t *p, float ccx, float ccy) {
-  if (!rescue_on()) return;
+  if (!rescue_view()) return;
   char b[64];
   float t = (float)g_tick * TICK_DT;
   // THE ALARM VIGNETTE.
@@ -38552,9 +39223,18 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
       snprintf(b, sizeof b, "%d FOLLOWING  \x05  LZ MARKED", g_resc.freed - g_resc.extracted);
       ui_text_sh(b, x, y + 13, 0.66f, TXT_REG, 1.2f, C4(C_HAZE, 0.9f));
     }
+    // The meters on ME (a guard looking at a teammate is his business, and
+    // the squad line below says so when it is serious).
     float maxd = 0.0f;
-    for (int i = 0; i < g_match.nbots; i++)
-      if (g_bots[i].active && g_bots[i].alive && g_resc.detect[i] > maxd) maxd = g_resc.detect[i];
+    int mate_spotted = 0;
+    for (int i = 0; i < g_resc.nguards && i < g_match.nbots; i++) {
+      if (!g_bots[i].active || !g_bots[i].alive) continue;
+      if (g_resc.det_who[i] == g_local_ent || g_resc.det_who[i] < 0) {
+        if (g_resc.detect[i] > maxd) maxd = g_resc.detect[i];
+      } else if (g_resc.detect[i] >= 1.0f) {
+        mate_spotted = 1;
+      }
+    }
     // A real array, not a pointer to C4(...): a compound literal dies with
     // the if-branch that made it, and the pill read back garbage colours.
     const char *st;
@@ -38571,6 +39251,8 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
       st = b; SC_SET(1.000f, 0.294f, 0.227f); stp = 0.65f + 0.35f * sinf(t * 7.0f);
     } else if (maxd >= 1.0f) {
       st = "SPOTTED  KILL HIM BEFORE THE RADIO"; SC_SET(1.000f, 0.294f, 0.227f);
+    } else if (mate_spotted) {
+      st = "TEAMMATE SPOTTED  TAKE THE GUARD DOWN"; SC_SET(1.000f, 0.294f, 0.227f);
     } else if (maxd > 0.22f) {
       st = "SUSPICIOUS"; SC_SET(1.000f, 0.549f, 0.102f);
     } else if (g_resc.lit) {
@@ -38587,11 +39269,12 @@ static void rescue_hud(const player_t *p, float ccx, float ccy) {
     ui_text_ex(st, x + 9, sy + 0.5f, 0.66f, TXT_BOLD, 1.4f, C4(sc[0], sc[1], sc[2], 0.95f * stp));
   }
   if (g_match.over) goto debrief;
-  // DETECTION ARCS: one per guard building suspicion, on its bearing.
-  for (int i = 0; i < g_match.nbots; i++) {
+  // DETECTION ARCS: one per guard building suspicion of ME, on its bearing.
+  for (int i = 0; i < g_resc.nguards && i < g_match.nbots; i++) {
     const bot_t *bt = &g_bots[i];
     float d = g_resc.detect[i];
     if (!bt->active || !bt->alive || d < 0.02f) continue;
+    if (g_resc.det_who[i] >= 0 && g_resc.det_who[i] != g_local_ent) continue;
     float dx = bt->pos.x - p->pos.x, dz = bt->pos.z - p->pos.z;
     float rel = wrap_pi(atan2f(dx, -dz) - p->yaw);
     float R0 = 58.0f, half = 0.10f + 0.26f * d;
@@ -38699,6 +39382,7 @@ debrief:
                ok ? C4(0.5f, 1.0f, 0.6f, 1) : C4(C_THREAT, 1));
     const char *h2 = ok ? "ALL THREE HOSTAGES ARE ON THE HELICOPTER"
                    : g_resc.why == RF_EXECUTED ? "THE HOSTAGES WERE EXECUTED"
+                   : g_resc.squad > 1 ? "THE WHOLE SQUAD WAS KILLED IN ACTION"
                    : "YOU WERE KILLED IN ACTION";
     float w2 = ui_text_width_tr(h2, 1.0f, 1.6f);
     ui_text_ex(h2, ccx - w2 * 0.5f, y + 34, 1.0f, TXT_REG, 1.6f, C4(C_BONE, 0.9f));
@@ -38726,7 +39410,8 @@ debrief:
       float w3 = ui_text_width_tr(b, 1.6f, 2.2f);
       ui_text_ex(b, ccx - w3 * 0.5f, y + 164, 1.6f, TXT_BLACK, 2.2f, C4(C_BLAZE, 1));
     }
-    const char *h4 = ok ? "PRESS FIRE TO PLAY AGAIN" : "PRESS FIRE TO RETRY";
+    const char *h4 = g_online ? "THE NEXT MISSION STARTS SHORTLY"
+                   : ok ? "PRESS FIRE TO PLAY AGAIN" : "PRESS FIRE TO RETRY";
     ui_text_ex(h4, ccx - ui_text_width_tr(h4, 0.9f, 1.4f) * 0.5f, y + 192, 0.9f, TXT_REG, 1.4f,
                C4(C_BONE, 0.85f));
   }
@@ -39729,10 +40414,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // TEAMMATES ARE MARKED. Two sides in the same kit is a game of guessing
     // who to shoot, so every living teammate carries a small SIGNAL chevron
     // over his head, and his name while he is near; enemies carry nothing.
-    if (teams_on() && !g_match.over && g_local_ent >= 0) {
+    // HOSTAGE RESCUE marks the squad the same way (in the squad's green).
+    if ((teams_on() || rescue_view()) && !g_match.over && g_local_ent >= 0) {
       v3 me_p = ent_pos(g_local_ent);
       ENT_FOREACH(e) {
         if (!team_mates(g_local_ent, e) || !ent_alive(e)) continue;
+        if (rescue_view() && !resc_is_squad(e)) continue;
         v3 hp = ent_pos(e);
         float dd = v3_len(v3_sub(hp, me_p));
         hp.y += 2.05f;
@@ -39740,12 +40427,14 @@ static void render_frame(const player_t *p, float alpha, int fps,
         if (!rescue_proj(hp, &sx, &sy)) continue;
         float a = 0.95f - 0.45f * f_clamp((dd - 10.0f) / 40.0f, 0.0f, 1.0f);
         int tc = team_of(e);
-        ui_line(sx - 4.0f, sy - 3.0f, sx, sy + 1.5f, 1.3f, TEAM_RGB(tc), a);
-        ui_line(sx, sy + 1.5f, sx + 4.0f, sy - 3.0f, 1.3f, TEAM_RGB(tc), a);
+        float mc[3] = {TEAM_RGB(tc)};
+        if (rescue_view()) { mc[0] = 0.45f; mc[1] = 0.95f; mc[2] = 0.60f; }
+        ui_line(sx - 4.0f, sy - 3.0f, sx, sy + 1.5f, 1.3f, mc[0], mc[1], mc[2], a);
+        ui_line(sx, sy + 1.5f, sx + 4.0f, sy - 3.0f, 1.3f, mc[0], mc[1], mc[2], a);
         if (dd < 22.0f) {
           const char *nm = ent_name(e);
           ui_text_sh(nm, sx - ui_text_width_tr(nm, 0.6f, 1.2f) * 0.5f, sy - 12.0f, 0.6f,
-                     TXT_REG, 1.2f, C4(TEAM_RGB(tc), a));
+                     TXT_REG, 1.2f, C4(mc[0], mc[1], mc[2], a));
         }
       }
     }
@@ -39909,7 +40598,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
     int spec_on = !p->alive && !g_match.over ? spec_target() : -1;
     if (spec_on >= 0) {
       ui_vgrad(0, g_ui_vh - 30, g_ui_vw, 30, C4(0, 0, 0, 0), C4(0, 0, 0, 0.55f));
-      const char *l = "SPECTATING ", *r = "  \x05  BACK IN NEXT ROUND";
+      const char *l = "SPECTATING ";
+      const char *r = game_mode() == GM_RESCUE ? "  \x05  THE SQUAD FIGHTS ON" : "  \x05  BACK IN NEXT ROUND";
       const char *nm = ent_name(spec_on);
       const float sc = 0.8f, tr = 1.2f;
       float lw = ui_text_width_tr(l, sc, tr) + tr, nw = ui_text_width_tr(nm, sc, tr) + tr;
@@ -39959,7 +40649,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // the scoreboard forces on below. VICTORY is gated on g_local_ent, not
     // on a literal 0 — a high-human-id client wins matches too.
     rescue_hud(p, ccx, ccy);
-    if (g_match.over && !rescue_on()) {
+    if (g_match.over && !rescue_view()) {
       ui_vgrad(0, 0, g_ui_vw, 96, C4(0, 0, 0, 0.60f), C4(0, 0, 0, 0));
       char msg[32];
       if (g_match.winner >= MAX_ENTS)   // a side took it
@@ -39987,7 +40677,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
 
     hud_enemy_marks(p);
-    if (g_score_held || (g_match.over && !rescue_on())) ui_scoreboard();
+    if (g_score_held || (g_match.over && !rescue_view())) ui_scoreboard();
     hud_match_summary();
     hud_hints(p, ccx);
     g_ui_alpha = 1.0f;
@@ -40576,6 +41266,7 @@ static void client_online_tick(player_t *p, const int held[IN_COUNT]) {
   match_over_countdown();
   net_cl_tick(held, wx, wy, p->yaw, p->pitch);
   net_cl_extrapolate();        // foreign entities advance at tick cadence too
+  rescue_client_tick();
 }
 
 // Begin a join: the LOCAL match keeps running (the caller is already in
@@ -41891,6 +42582,8 @@ static void usage(void) {
        "  --server           dedicated server: sim only, no GL/audio/window.\n"       "  --name NAME        server name shown in the MULTIPLAYER page's LAN list\n"       "  --team-size N      TEAM DEATHMATCH places per side, 1..9 (default 5)\n"
        "  --team-fill 0|1    bots fill the places no player holds (default 1)\n"
        "  --friendly-fire 0|1  teammates can hurt each other (default 0)\n"
+       "  --squad N          HOSTAGE RESCUE squad, 1..3 (default 3): players\n"
+       "                     first, bots in the places nobody holds\n"
        "                     with --port N --cap-bots N (bots in the arena)\n"
        "                     --cap-public N (arena size, public door)\n"
        "                     --lobbies N (independent arenas in this ONE\n"
@@ -44482,6 +45175,7 @@ static void netclient_proof(void) {
         // still and no scenario could separate standing from walking.
         net_cl_tick(held, 0.0f, 0.0f, p->yaw, p->pitch);   // predict + send
         net_cl_poll();                     // recv snapshots -> reconcile
+        rescue_client_tick();              // a mission's presentation half
         net_cl_extrapolate();              // the rig aims at the same dead-
                                            // reckoned targets the player
                                            // sees — view ticks assume it
@@ -44520,6 +45214,16 @@ static void netclient_proof(void) {
              g_match.kills[g_cl.my_ent], g_match.deaths[g_cl.my_ent],
              g_match.shots[g_cl.my_ent], g_match.hits[g_cl.my_ent],
              g_net_fraglimit, g_cl.reject);
+      // A mission online: what NP_RESCUE delivered (the client runs none of it).
+      if (g_match.mode == GM_RESCUE)
+        printf("netclient rescue view=%d sim=%d squad=%d guards=%d nbots=%d alarm=%d "
+               "freed=%d extracted=%d result=%d clock=%d msg=\"%s\" h0=(%.1f %.1f %.1f) st=%d,%d,%d "
+               "mates=%d\n",
+               rescue_view(), rescue_on(), g_resc.squad, g_resc.nguards, g_match.nbots,
+               g_resc.alarm, g_resc.freed, g_resc.extracted, g_resc.result, g_resc.clock,
+               g_resc.msg, (double)g_resc.h[0].pos.x, (double)g_resc.h[0].pos.y,
+               (double)g_resc.h[0].pos.z, g_resc.h[0].state, g_resc.h[1].state, g_resc.h[2].state,
+               g_match.nbots - g_resc.nguards);
     }
     net_cl_disconnect();
   }
@@ -46334,6 +47038,11 @@ static void run_script(char *script, sim_ctx_t *s) {
              "flip=%d dup=%d zfight=%d near=%d cross=%d degen=%d\n", n,
              (double)fdist, g_fig_k, (int)tris, wt, worst.open, worst.flip,
              worst.dup, worst.zfight, worst.near, wcross, worst.degen);
+    } else if (!strcmp(t, "figins")) {
+      // figins 0|1|-1: draw every figure as an operator / an insurgent / as
+      // the seat decides (default) — so figcheck can gate both builds.
+      long v = next_n();
+      g_fig_ins_force = v < 0 ? -1 : v ? 1 : 0;
     } else if (!strcmp(t, "figbury")) {
       figbury_proof();
     } else if (!strcmp(t, "figm")) {
@@ -46483,6 +47192,9 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_cfg.sp_team_fill = next_n() ? 1 : 0;
     } else if (!strcmp(t, "teamff")) {
       g_cfg.sp_team_ff = next_n() ? 1 : 0;
+    } else if (!strcmp(t, "squad")) {           // HOSTAGE RESCUE squad size: next `restart`
+      long n = next_n();
+      g_cfg.sp_squad = n < 1 ? 1 : n > RESC_SQUAD_MAX ? RESC_SQUAD_MAX : (int)n;
     } else if (!strcmp(t, "team")) {            // the local player's side (0/1)
       g_cfg.sp_team = next_n() ? 1 : 0;
     } else if (!strcmp(t, "teams")) {
@@ -46517,6 +47229,7 @@ static void run_script(char *script, sim_ctx_t *s) {
         long k = next_n();
         if (k >= 0 && k < RESC_HOSTAGES && g_resc.h[k].state == HS_CAPTIVE) {
           g_resc.h[k].state = HS_FOLLOW;
+          g_resc.h[k].leader = g_local_ent;
           g_resc.freed++;
         }
         continue;
@@ -46527,18 +47240,22 @@ static void run_script(char *script, sim_ctx_t *s) {
              s->tick, rescue_on(), g_resc.alarm, g_resc.exec_t, g_resc.freed, g_resc.extracted,
              g_resc.result, g_resc.why, g_resc.kills, g_resc.takedowns, g_resc.heads,
              g_resc.spotted_n, g_resc.bodies, g_resc.lit, g_resc.reach_i, g_resc.clock);
+      printf("rescue squad=%d guards=%d nbots=%d humans=%d\n", g_resc.squad, g_resc.nguards,
+             g_match.nbots, resc_humans());
       if (!strcmp(a, "all")) {
         for (int i = 0; i < g_match.nbots; i++) {
           const bot_t *b = &g_bots[i];
-          printf("guard %d kind=%d alive=%d pos=(%.1f %.1f %.1f) yaw=%.2f det=%.2f tgt=%d alert=%d wpn=%s\n",
-                 i, rescue_post(i)->kind, b->alive, (double)b->pos.x, (double)b->pos.y,
-                 (double)b->pos.z, (double)b->yaw, (double)g_resc.detect[i], b->tgt, b->alert_t,
-                 WPN_DEF[b->wp.cur].name);
+          int gd = i < g_resc.nguards;
+          printf("%s %d kind=%d alive=%d pos=(%.1f %.1f %.1f) yaw=%.2f det=%.2f who=%d tgt=%d alert=%d crouch=%d wpn=%s\n",
+                 gd ? "guard" : "squadbot", i, gd ? rescue_post(i)->kind : -1, b->alive,
+                 (double)b->pos.x, (double)b->pos.y, (double)b->pos.z, (double)b->yaw,
+                 gd ? (double)g_resc.detect[i] : 0.0, gd ? g_resc.det_who[i] : -1, b->tgt,
+                 b->alert_t, b->crouch, WPN_DEF[b->wp.cur].name);
         }
         for (int i = 0; i < RESC_HOSTAGES; i++)
-          printf("hostage %d state=%d pos=(%.1f %.1f %.1f) free=%.2f\n", i, g_resc.h[i].state,
-                 (double)g_resc.h[i].pos.x, (double)g_resc.h[i].pos.y, (double)g_resc.h[i].pos.z,
-                 (double)g_resc.h[i].free_t);
+          printf("hostage %d state=%d leader=%d pos=(%.1f %.1f %.1f) free=%.2f\n", i, g_resc.h[i].state,
+                 g_resc.h[i].leader, (double)g_resc.h[i].pos.x, (double)g_resc.h[i].pos.y,
+                 (double)g_resc.h[i].pos.z, (double)g_resc.h[i].free_t);
       }
     } else if (!strcmp(t, "rescuecheck")) {
       // Every post and waypoint stands on floor a body fits on, and the grid
@@ -48828,10 +49545,14 @@ static int server_main(uint32_t seed) {
   g_cfg.sp_team_size = g_srv.team_size;
   g_cfg.sp_team_fill = g_srv.team_fill;
   g_cfg.sp_team_ff = g_srv.team_ff;
+  g_cfg.sp_squad = g_srv.squad;
   // A team game seats exactly two teams' worth of humans; bots are the
   // team math's, not the --cap-bots fill's (see tdm_bot_want).
   if (g_srv.mode == GM_TDM)
     g_srv.cap_public = 2 * g_srv.team_size < MAX_HUMANS ? 2 * g_srv.team_size : MAX_HUMANS;
+  // A mission seats its squad and no more; the guards and the squad's bots
+  // are the mission's own (rescue_bot_count).
+  if (g_srv.mode == GM_RESCUE) g_srv.cap_public = g_srv.squad;
   signal(SIGINT, srv_sig);
   signal(SIGTERM, srv_sig);
   // EVERY ARENA IS BROUGHT UP THE SAME WAY, through the one shared entry
@@ -48893,6 +49614,7 @@ static int server_main(uint32_t seed) {
       server_tick_once(NULL);
       if (ticks % 2 == 0) net_srv_broadcast();        // snapshots at 60 Hz
       if (ticks % 30 == 0) net_srv_scores_broadcast(); // score rows at 4 Hz
+      if (ticks % 6 == 0) net_srv_rescue_broadcast();  // a mission's state at 20 Hz
       if (ticks % TICK_HZ == 0)        // reset the per-second input budget
         for (int h = 0; h < MAX_HUMANS; h++) g_srv_in_budget[h] = 0;
     }
@@ -48968,12 +49690,17 @@ int main(int argc, char **argv) {
     }
     else if (arg && !strcmp(a, "--mode")) {
       int m = gm_parse(argv[++i]);
-      if (m < 0 || m == GM_RESCUE) {
-        fprintf(stderr, m == GM_RESCUE ? "--mode rescue is a single-player mission\n"
-                                       : "unknown --mode '%s' (dm|gun|sniper|blades|lms|tdm)\n", argv[i]);
+      if (m < 0) {
+        fprintf(stderr, "unknown --mode '%s' (dm|gun|sniper|blades|lms|rescue|tdm)\n", argv[i]);
         return 1;
       }
       g_srv.mode = m;
+    }
+    else if (arg && !strcmp(a, "--squad")) {
+      g_srv.squad = atoi(argv[++i]);
+      if (g_srv.squad < 1 || g_srv.squad > RESC_SQUAD_MAX) {
+        fprintf(stderr, "--squad must be 1..%d\n", RESC_SQUAD_MAX); return 1;
+      }
     }
     else if (arg && !strcmp(a, "--ticks"))      g_srv.ticks = atol(argv[++i]);
     else if (arg && !strcmp(a, "--team-size")) {

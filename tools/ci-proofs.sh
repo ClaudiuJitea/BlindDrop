@@ -10,7 +10,8 @@
 #
 # Asserted (each must hold on every architecture):
 #   figcheck: surface closed + wound + no coplanar overlap (open/flip/zfight/
-#             degen = 0) at four profile tiers, and `near` AND `cross` at their
+#             degen = 0) at four profile tiers, for the operator AND the
+#             insurgent build, and `near` AND `cross` at their
 #             documented fresh-config baselines (the WANT_NEAR / WANT_CROSS
 #             lines below are the single authority — the config is part of the
 #             number, so the script writes fresh defaults itself)
@@ -56,6 +57,16 @@ for d in 0 3 12 30; do
   c="$(field "$line" cross)"
   CROSS="${CROSS:+$CROSS }$c"
   i=$((i + 1))
+done
+# The INSURGENT build (head wrap, chest rig) is a second figure: the same four
+# invariants at the same four tiers. Not in the near/cross baselines, which
+# measure the operator build the default figcheck draws.
+for d in 0 3 12 30; do
+  line="$(run "figins 1; figcheck 60 $d" | grep '^figcheck' | head -1)"
+  for k in open flip zfight degen; do
+    v="$(field "$line" "$k")"
+    [ "${v:-x}" = 0 ] || { say "GATE figcheck insurgent dist=$d $k=$v (want 0)"; fail=1; }
+  done
 done
 # near is config-conditioned; fresh defaults give the WANT_NEAR quadruple
 # below. A change here is a geometry regression OR a config that
