@@ -1,13 +1,14 @@
 BlindDrop is an arena FPS in one C file. No engine, no asset files: maps, weapons and sounds are all generated in code.
 
-## What's new in 0.7.3
+## What's new in 0.7.7
 
-- **Hostage Rescue co-op:** Operation Nightfall is now a squad mission for one to three operators. Host it from Multiplayer > Host settings (or `--server --mode rescue --squad 3`) and friends join the squad; bots take the places nobody holds and step aside as players join. Squad bots follow the nearest player, crouch when you crouch, cover your flanks, help cut hostages loose and hold fire until the squad is compromised. Every extra operator brings two more guards (up to 18). The mission only fails when the whole squad is down, and a fallen operator watches the rest carry on.
-- **Squad setting offline too:** Singleplayer > Hostage Rescue has a SQUAD row: go in solo, or with one or two bot operators.
-- **Two forces you can tell apart:** you and your side are operators (helmet, goggles, plate carrier, pack); whoever you fight are insurgents (striped head wrap with a tail, a scarf over the face, a light chest rig over a civilian shirt, no armour). Every map and every mode; team games keep their red and blue on top.
-- **Steadier automatic fire:** the rifle and pistol no longer shake the view side to side at full rate; the bolt sniper keeps its full kick.
+- **Your operator, your kit:** Armory > Gear now dresses the whole operator, not just the gloves. **OUTFIT** (slate, coyote, ranger, shadow, arctic) colours the fatigues, plate carrier, helmet, webbing, boots, pads, gloves and goggles; **HEADGEAR** is a helmet, cap, head wrap or bare; **VEST** a plate carrier, chest rig or none; **PACK** an assault pack or none. You see it in third person (`V`); team games keep your side's colours on top.
+- **Weapons you carry:** in third person the carbine rides on your back, the sniper down your left side and the pistol in a drop-leg holster with leg straps. Switching weapons plays a stow-and-draw: the old weapon goes away, then the new one comes over the shoulder (or out of the holster) to the ready. Bots carry theirs too.
+- **Foundry, Bazaar and Outpost rebuilt:** a steelworks yard with furnace stacks, an overhead crane, a railed gantry, roofed sheds, containers and a conveyor; a market quarter with real houses, striped canopies, stalls, palms and a fountain; a forward base with T-wall lanes, HESCO and sandbags, a watchtower, camo nets and container perches. Arena's walls get piers.
+- **Cleaner rendering:** characters no longer get a glowing dashed outline on every facet edge in sunlight.
+- **Hostage Rescue menu:** the MAP row shows COMPOUND (the mission's own map) instead of a picker that did nothing.
 
-0.7.3 uses a new network protocol (14): everyone in a game needs 0.7.3.
+0.7.7 uses a new network protocol (15): everyone in a game needs 0.7.7.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

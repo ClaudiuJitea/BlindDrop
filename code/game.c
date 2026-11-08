@@ -1165,6 +1165,19 @@ static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
 #define GEAR_THEME_COUNT 5
 static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
   "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC"};
+// The third-person body's own pieces (fig_kit and the figure builders). Index
+// 0 of each is the shipped operator, so an untouched config is unchanged.
+#define HEAD_GEAR_COUNT 4
+enum { HEAD_HELMET, HEAD_CAP, HEAD_WRAP, HEAD_BARE };
+static const char *const HEAD_GEAR_NAMES[HEAD_GEAR_COUNT] = {
+  "HELMET", "CAP", "HEAD WRAP", "BARE"};
+#define VEST_GEAR_COUNT 3
+enum { VEST_CARRIER, VEST_RIG, VEST_NONE };
+static const char *const VEST_GEAR_NAMES[VEST_GEAR_COUNT] = {
+  "PLATE CARRIER", "CHEST RIG", "NONE"};
+#define PACK_GEAR_COUNT 2
+enum { PACK_ASSAULT, PACK_NONE };
+static const char *const PACK_GEAR_NAMES[PACK_GEAR_COUNT] = {"ASSAULT PACK", "NONE"};
 static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
 // Crosshair options. The colours are chosen for VALUE as much as hue: each
 // reads against both the bright sand/sky and the dark interiors, and the set
@@ -1513,6 +1526,7 @@ typedef struct {
   int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
   int   wpn_theme;           // ARMORY: WPN_THEME_NAMES index, 0 = factory
   int   gear_theme;          // ARMORY: GEAR_THEME_NAMES index, 0 = slate
+  int   head_gear, vest_gear, pack_gear;   // ARMORY: *_GEAR_NAMES, 0 = operator
   // CAREER: lifetime totals for the local player, shown on the end screen.
   // Counted on the presentation side (vfx_on_event), so offline and online
   // matches both add to them; the boot screen's showcase match never does.
@@ -1680,6 +1694,8 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
+  fprintf(f, "head_gear %d\nvest_gear %d\npack_gear %d\n",
+          c->head_gear, c->vest_gear, c->pack_gear);
   fprintf(f, "hints %d\n", c->hints);
   fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\nperf_overlay %d\n",
           c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale,
@@ -1862,6 +1878,12 @@ static void config_load_or_create(const char *path, config_t *c) {
       c->wpn_theme = parse_int(val, c->wpn_theme, 0, WPN_THEME_COUNT - 1);
     else if (!strcmp(key, "gear_theme"))
       c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
+    else if (!strcmp(key, "head_gear"))
+      c->head_gear = parse_int(val, c->head_gear, 0, HEAD_GEAR_COUNT - 1);
+    else if (!strcmp(key, "vest_gear"))
+      c->vest_gear = parse_int(val, c->vest_gear, 0, VEST_GEAR_COUNT - 1);
+    else if (!strcmp(key, "pack_gear"))
+      c->pack_gear = parse_int(val, c->pack_gear, 0, PACK_GEAR_COUNT - 1);
     else if (!strcmp(key, "hints")) c->hints = parse_long(val, c->hints) ? 1 : 0;
     else if (!strcmp(key, "crosshair_style")) c->ch_style = parse_int(val, c->ch_style, 0, CH_STYLE_COUNT - 1);
     else if (!strcmp(key, "crosshair_color")) c->ch_color = parse_int(val, c->ch_color, 0, CH_COLOR_COUNT - 1);
@@ -2733,36 +2755,6 @@ static void mk1(float x0, float z0, float x1, float z1, float y0, float y1, v3 c
   map_add((v3){{x0, y0, z0}}, (v3){{x1, y1, z1}}, c);
 }
 
-// FOUNDRY — a gantry you can stand on or run under, furnace stacks for
-// landmarks, and two side halls you enter at either end or through the middle.
-static void map_foundry(void) {
-  const theme_t *t = &g_theme;
-  // The gantry deck (1.9 m clear underneath) on four legs, a stair at each end.
-  mk1(-5.0f, -2.0f, 5.0f, 2.0f, 1.90f, 2.20f, t->crate_b);
-  mk(4.2f, 1.2f, 4.8f, 1.8f, 0.0f, 1.90f, t->cover);
-  mk(4.2f, -1.8f, 4.8f, -1.2f, 0.0f, 1.90f, t->cover);
-  mk(5.2f, -1.4f, 6.2f, 1.4f, 0.0f, 1.45f, col_tint(t->crate_b, 0.94f, 1.0f));
-  mk(6.2f, -1.4f, 7.2f, 1.4f, 0.0f, 0.72f, t->crate_a);
-  // Furnace stacks, each with a collar.
-  mk(9.0f, -11.0f, 11.0f, -9.0f, 0.0f, 4.6f, t->mid);
-  mk(8.8f, -11.2f, 11.2f, -8.8f, 1.3f, 1.6f, t->cover);
-  // The side halls: one wall each side of the middle door, both halls.
-  mk(13.0f, -14.0f, 13.6f, -4.0f, 0.0f, 2.6f, t->wall);
-  mk(13.0f, 4.0f, 13.6f, 14.0f, 0.0f, 2.6f, t->wall);
-  mk(17.0f, -8.0f, 18.4f, -6.6f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(18.4f, -7.7f, 19.0f, -6.9f, 0.0f, 0.55f, t->crate_b);
-  mk(19.5f, 2.0f, 20.7f, 3.2f, 0.0f, 1.0f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(19.8f, 2.3f, 20.4f, 2.9f, 0.98f, 1.45f, t->crate_b);
-  mk(16.0f, 10.0f, 21.0f, 10.5f, 0.0f, 1.0f, t->cover);
-  // The yards at either end: a conveyor to shoot over, a stacked container.
-  mk(-8.0f, 15.0f, 2.0f, 15.6f, 0.0f, 1.05f, t->cover);
-  mk(-16.0f, 16.0f, -12.0f, 19.0f, 0.0f, 2.5f, col_tint(t->crate_a, 0.9f, 1.0f));
-  mk(-15.6f, 16.4f, -12.4f, 18.6f, 2.5f, 4.9f, col_tint(t->crate_b, 0.9f, 1.0f));
-  // Crates either side of the gantry.
-  mk(2.0f, 5.0f, 3.2f, 6.2f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(-7.0f, 6.0f, -6.0f, 8.0f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
-}
-
 // A market stall: counter, two posts at the back, an awning over both. ax 0
 // runs the counter along x with its back to +z; ax 1 along z, back to +x.
 static void stall(float cx, float cz, int ax, v3 awn) {
@@ -2775,60 +2767,6 @@ static void stall(float cx, float cz, int ax, v3 awn) {
   ST(1.22f, 0.82f, 1.38f, 0.98f, 0.0f, 2.30f, t->crate_b);
   ST(-1.50f, -0.70f, 1.50f, 1.30f, 2.30f, 2.42f, awn);
 #undef ST
-}
-
-// BAZAAR — four buildings make a plus of streets through a fountain square,
-// stalls crowd the streets and the outer ring, and two rooftops are reachable
-// by a stair: close quarters everywhere except from the roofs.
-static void map_bazaar(void) {
-  const theme_t *t = &g_theme;
-  mk(5.0f, 5.0f, 11.0f, 11.0f, 0.0f, 3.2f, col_tint(t->wall, 0.92f, 0.98f));
-  mk(-11.0f, 5.0f, -5.0f, 11.0f, 0.0f, 3.2f, col_tint(t->cover, 0.95f, 1.05f));
-  mk(3.4f, 9.0f, 4.2f, 10.4f, 0.0f, 1.05f, t->crate_a);           // roof stair
-  mk(4.2f, 9.0f, 5.0f, 10.4f, 0.0f, 2.10f, t->crate_b);
-  mk(5.3f, 5.05f, 10.7f, 5.45f, 3.2f, 3.9f, t->crate_b);          // parapet
-  mk1(-1.6f, -1.6f, 1.6f, 1.6f, 0.0f, 0.8f, t->crate_b);          // fountain
-  mk1(-0.4f, -0.4f, 0.4f, 0.4f, 0.0f, 3.0f, t->mid);
-  stall(-2.5f, 8.0f, 1, t->band_s);
-  stall(8.0f, -2.5f, 0, t->band_n);
-  stall(17.0f, 1.0f, 1, t->mid);
-  stall(17.0f, 9.0f, 1, t->band_s);
-  stall(15.0f, -16.0f, 0, t->band_n);
-  stall(2.0f, 16.0f, 0, t->mid);
-  mk(12.5f, -3.0f, 13.0f, 3.0f, 0.0f, 1.0f, t->cover);            // barriers
-  mk(20.0f, -7.0f, 21.2f, -5.8f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(-21.0f, 6.0f, -19.8f, 7.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
-}
-
-// OUTPOST — three lanes split by long walls with offset gaps, a tower in the
-// middle, a gated bunker at each end and a climbable container in each side
-// lane: long sightlines, built for the sniper.
-static void map_outpost(void) {
-  const theme_t *t = &g_theme;
-  mk1(-1.5f, -1.5f, 1.5f, 1.5f, 0.0f, 5.0f, t->mid);
-  mk(-8.3f, -12.0f, -7.7f, -4.0f, 0.0f, 2.8f, t->wall);
-  mk(-8.3f, 1.5f, -7.7f, 12.0f, 0.0f, 2.8f, t->wall);
-  // Bunkers: two platforms either side of a gate, parapets in front, a step up
-  // at each outer end.
-  mk(-6.0f, 17.0f, -1.0f, 21.0f, 0.0f, 1.6f, t->cover);
-  mk(1.0f, 17.0f, 6.0f, 21.0f, 0.0f, 1.6f, t->cover);
-  mk(-5.8f, 16.6f, -1.2f, 17.0f, 0.0f, 2.6f, t->crate_b);
-  mk(1.2f, 16.6f, 5.8f, 17.0f, 0.0f, 2.6f, t->crate_b);
-  mk(6.0f, 18.0f, 7.0f, 20.0f, 0.0f, 0.8f, t->crate_a);
-  mk(-7.0f, 18.0f, -6.0f, 20.0f, 0.0f, 0.8f, t->crate_a);
-  // Middle lane cover.
-  mk(-3.0f, 8.0f, 1.0f, 8.5f, 0.0f, 1.0f, t->cover);
-  mk(3.0f, -6.0f, 4.2f, -4.8f, 0.0f, 1.15f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(-4.5f, 13.0f, -3.3f, 14.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
-  // Side lanes: the container perch (two steps up), a low wall, crates.
-  mk(17.0f, -12.0f, 19.4f, -6.0f, 0.0f, 2.5f, col_tint(t->crate_a, 0.9f, 1.0f));
-  mk(17.2f, -11.5f, 19.2f, -8.5f, 2.5f, 5.0f, col_tint(t->crate_b, 0.9f, 1.0f));
-  mk(19.4f, -8.0f, 20.4f, -6.6f, 0.0f, 0.85f, t->crate_b);
-  mk(19.4f, -9.4f, 20.4f, -8.0f, 0.0f, 1.70f, t->crate_b);
-  mk(12.0f, -2.0f, 12.5f, 5.0f, 0.0f, 1.0f, t->cover);
-  mk(14.0f, 12.0f, 15.2f, 13.2f, 0.0f, 1.1f, col_tint(t->crate_a, 0.93f, 1.07f));
-  mk(15.2f, 12.3f, 15.8f, 12.9f, 0.0f, 0.55f, t->crate_b);
-  mk(21.0f, 0.0f, 22.2f, 1.2f, 0.0f, 1.0f, col_tint(t->crate_b, 0.93f, 1.07f));
 }
 
 // ---------------------------------------------------------------------------
@@ -3608,6 +3546,621 @@ static void truck(float x, float z, int ax, v3 c) {
   container(ax ? x : x - 0.1f, ax ? z - 0.1f : z, ax, 1.2f, c);
 }
 
+// ---------------------------------------------------------------------------
+// THE SMALL MAPS' DRESSING KIT. The 48 m maps were built from a dozen palette
+// boxes each — a place you could fight in but not a place. These are the real
+// objects that stand in those boxes' footprints (sandbags, HESCO, blast walls,
+// crates, pallets, pipe runs, furnaces, a crane) and they obey the same three
+// rules every map does: nothing taller than a step without a step up to it,
+// no two same-facing faces sharing a plane (`mapcheck`), and — because these
+// maps are 180-degree symmetric — every half-map piece is built through `s`,
+// the rotation sign (x, z) -> (s x, s z). Nothing here draws from g_rng: a
+// tint comes from a hash of the position, so dressing never re-rolls a map.
+// ---------------------------------------------------------------------------
+static float g_ks = 1.0f;   // the half being built: +1, or -1 for its mirror
+#define KB(x0, y0, z0, x1, y1, z1, c) \
+  bx(g_ks * (x0), y0, g_ks * (z0), g_ks * (x1), y1, g_ks * (z1), c)
+static float khash(float x, float z, int salt) {
+  uint32_t h = (uint32_t)(int32_t)(x * 97.0f) * 73856093u ^
+               (uint32_t)(int32_t)(z * 89.0f) * 19349663u ^ (uint32_t)salt * 83492791u;
+  h ^= h >> 15; h *= 2246822519u; h ^= h >> 13;
+  return (float)(h >> 8) * (1.0f / 16777216.0f);
+}
+static v3 kt_(v3 c, float x, float z, int salt, float lo, float hi) {
+  float t = lo + (hi - lo) * khash(x, z, salt);
+  return (v3){{c.x * t, c.y * t, c.z * t}};
+}
+// Forced material for the boxes a statement adds.
+#define KMAT(m, ...) do { int _pm = g_mat_force; g_mat_force = (m); __VA_ARGS__; g_mat_force = _pm; } while (0)
+
+// A wooden crate: body, a lid band proud at the top, a skid under it.
+static void k_crate(float x, float z, float hw, float hd, float h, v3 c) {
+  KMAT(SMAT_WOOD, {
+    KB(x - hw, 0.10f, z - hd, x + hw, h - 0.07f, z + hd, kt_(c, x, z, 1, 0.92f, 1.06f));
+    KB(x - hw - 0.02f, h - 0.07f, z - hd - 0.02f, x + hw + 0.02f, h, z + hd + 0.02f,
+       kt_(c, x, z, 2, 0.70f, 0.78f));
+    KB(x - hw + 0.06f, 0.0f, z - hd + 0.06f, x + hw - 0.06f, 0.10f, z + hd - 0.06f,
+       kt_(c, x, z, 3, 0.55f, 0.62f));
+  });
+}
+// A stack of n pallets (1.2 x 1.0 each), slat gaps shown as a darker core.
+static void k_pallets(float x, float z, int ax, int n) {
+  v3 w = rgb(0.56f, 0.44f, 0.30f);
+  float a = ax ? 0.5f : 0.6f, b = ax ? 0.6f : 0.5f;
+  KMAT(SMAT_WOOD, for (int i = 0; i < n; i++) {
+    float y = 0.144f * (float)i;
+    KB(x - a, y, z - b, x + a, y + 0.024f, z + b, kt_(w, x, z, 10 + i, 0.88f, 1.08f));
+    KB(x - a + 0.04f, y + 0.024f, z - b + 0.04f, x + a - 0.04f, y + 0.120f, z + b - 0.04f,
+       kt_(w, x, z, 20 + i, 0.50f, 0.58f));
+    KB(x - a, y + 0.120f, z - b, x + a, y + 0.144f, z + b, kt_(w, x, z, 30 + i, 0.90f, 1.10f));
+  });
+}
+// SANDBAGS. A wall of bags laid in courses, alternate courses offset half a
+// bag, each course stepped in 15 mm (a battered face), each bag its own shade.
+// Along x (ax 0) from a0 to a1 centred on `c`, `rows` courses high.
+static void k_sandbags(int ax, float c, float a0, float a1, float yb, int rows, float th) {
+  v3 sb = rgb(0.62f, 0.56f, 0.42f);
+  const float BL = 0.56f, BH = 0.155f;
+  KMAT(SMAT_STUCCO, for (int r = 0; r < rows; r++) {
+    float y0 = yb + BH * (float)r, y1 = y0 + BH;
+    float d = th * 0.5f - 0.015f * (float)r;
+    float off = (r & 1) ? BL * 0.5f : 0.0f;
+    float u = a0;
+    for (int k = 0; u < a1 - 0.01f; k++) {
+      float v = k == 0 && off > 0.0f ? a0 + off : u + BL;
+      if (v > a1) v = a1;
+      float dj = 0.012f * (khash(u, c, r) - 0.5f);
+      v3 col = kt_(sb, u, c + (float)r, r, 0.84f, 1.10f);
+      if (ax == 0) KB(u, y0, c - d - dj, v, y1, c + d + dj, col);
+      else         KB(c - d - dj, y0, u, c + d + dj, y1, v, col);
+      u = v;
+    }
+  });
+}
+// HESCO: wire-mesh baskets of fill, 1.06 m square, `h` tall, a row of n along
+// ax from (x, z). The fill is the collision; the corner posts and the top rim
+// are proud by 15 mm, so the mesh reads at range as a grid of bays.
+static void k_hesco(float x, float z, int ax, int n, float h) {
+  const float U = 1.06f;
+  v3 fill = rgb(0.66f, 0.60f, 0.47f), wire = rgb(0.34f, 0.35f, 0.33f);
+  for (int i = 0; i < n; i++) {
+    float cx = x + (ax ? 0.0f : U * (float)i), cz = z + (ax ? U * (float)i : 0.0f);
+    float x0 = cx - U * 0.5f, x1 = cx + U * 0.5f, z0 = cz - U * 0.5f, z1 = cz + U * 0.5f;
+    KMAT(SMAT_STUCCO, KB(x0, 0.0f, z0, x1, h, z1, kt_(fill, cx, cz, 5, 0.90f, 1.06f)));
+    KMAT(SMAT_STEEL, {
+      // posts on the two long faces at each bay end (the shared post of two
+      // bays is drawn once: only the leading end of each bay gets one)
+      float p = 0.03f;
+      if (ax == 0) {
+        KB(x0, 0.0f, z0 - 0.015f, x0 + p, h + 0.02f, z0, wire);
+        KB(x0, 0.0f, z1, x0 + p, h + 0.02f, z1 + 0.015f, wire);
+        if (i == n - 1) {
+          KB(x1 - p, 0.0f, z0 - 0.015f, x1, h + 0.02f, z0, wire);
+          KB(x1 - p, 0.0f, z1, x1, h + 0.02f, z1 + 0.015f, wire);
+        }
+        KB(x0, h, z0, x1, h + 0.03f, z0 + 0.03f, wire);
+        KB(x0, h, z1 - 0.03f, x1, h + 0.03f, z1, wire);
+      } else {
+        KB(x0 - 0.015f, 0.0f, z0, x0, h + 0.02f, z0 + p, wire);
+        KB(x1, 0.0f, z0, x1 + 0.015f, h + 0.02f, z0 + p, wire);
+        if (i == n - 1) {
+          KB(x0 - 0.015f, 0.0f, z1 - p, x0, h + 0.02f, z1, wire);
+          KB(x1, 0.0f, z1 - p, x1 + 0.015f, h + 0.02f, z1, wire);
+        }
+        KB(x0, h, z0, x0 + 0.03f, h + 0.03f, z1, wire);
+        KB(x1 - 0.03f, h, z0, x1, h + 0.03f, z1, wire);
+      }
+    });
+  }
+}
+// JERSEY BARRIER: the stepped concrete profile (base, waist, crown), 0.82 m.
+static void k_jersey(int ax, float c, float a0, float a1) {
+  v3 cc = rgb(0.70f, 0.69f, 0.65f);
+  for (float u = a0; u < a1 - 0.05f; u += 2.0f) {
+    float v = fminf(u + 1.98f, a1);
+    v3 t = kt_(cc, u, c, 7, 0.92f, 1.04f);
+    KMAT(SMAT_CONCRETE, {
+      if (ax == 0) {
+        KB(u, 0.00f, c - 0.30f, v, 0.25f, c + 0.30f, t);
+        KB(u, 0.25f, c - 0.20f, v, 0.55f, c + 0.20f, t);
+        KB(u, 0.55f, c - 0.11f, v, 0.82f, c + 0.11f, t);
+      } else {
+        KB(c - 0.30f, 0.00f, u, c + 0.30f, 0.25f, v, t);
+        KB(c - 0.20f, 0.25f, u, c + 0.20f, 0.55f, v, t);
+        KB(c - 0.11f, 0.55f, u, c + 0.11f, 0.82f, v, t);
+      }
+    });
+  }
+}
+// T-WALL blast barrier sections: a flared foot and a 0.3 m slab, h tall, each
+// 1.5 m section its own pour (tint), a lifting eye on top. ax 0: along x.
+static void k_twall(int ax, float c, float a0, float a1, float h) {
+  v3 cc = rgb(0.72f, 0.70f, 0.66f), eye = rgb(0.30f, 0.30f, 0.30f);
+  for (float u = a0; u < a1 - 0.05f; u += 1.5f) {
+    float v = fminf(u + 1.5f, a1), m = 0.5f * (u + v);
+    v3 t = kt_(cc, u, c, 9, 0.88f, 1.05f);
+    KMAT(SMAT_CONCRETE, {
+      if (ax == 0) {
+        KB(u, 0.0f, c - 0.45f, v, 0.40f, c + 0.45f, t);
+        KB(u, 0.40f, c - 0.15f, v, h, c + 0.15f, t);
+      } else {
+        KB(c - 0.45f, 0.0f, u, c + 0.45f, 0.40f, v, t);
+        KB(c - 0.15f, 0.40f, u, c + 0.15f, h, v, t);
+      }
+    });
+    KMAT(SMAT_STEEL, {
+      if (ax == 0) KB(m - 0.08f, h, c - 0.03f, m + 0.08f, h + 0.10f, c + 0.03f, eye);
+      else         KB(c - 0.03f, h, m - 0.08f, c + 0.03f, h + 0.10f, m + 0.08f, eye);
+    });
+  }
+}
+// A pipe run on a wall: `n` pipes stacked from y0, along ax at plane `c`
+// (standing `inw` metres off it toward the room), with a bracket every 3 m.
+static void k_pipes(int ax, float c, float inw, float off, float a0, float a1, float y0, int n,
+                    v3 col) {
+  v3 br = rgb(0.22f, 0.23f, 0.24f);
+  float sgn = inw > 0.0f ? 1.0f : -1.0f;
+  KMAT(SMAT_STEEL, {
+    for (int i = 0; i < n; i++) {
+      float y = y0 + 0.22f * (float)i, d0 = c + sgn * off, d1 = c + sgn * (off + 0.14f);
+      v3 pc = kt_(col, (float)i, c, 11, 0.85f, 1.05f);
+      if (ax == 0) KB(a0, y, fminf(d0, d1), a1, y + 0.14f, fmaxf(d0, d1), pc);
+      else         KB(fminf(d0, d1), y, a0, fmaxf(d0, d1), y + 0.14f, a1, pc);
+    }
+    for (float u = a0 + 0.4f; u < a1 - 0.2f; u += 3.0f) {
+      float yb0 = y0 - 0.08f, yb1 = y0 + 0.22f * (float)(n - 1) + 0.22f;
+      float d0 = c, d1 = c + sgn * off;
+      if (ax == 0) KB(u, yb0, fminf(d0, d1), u + 0.10f, yb1, fmaxf(d0, d1), br);
+      else         KB(fminf(d0, d1), yb0, u, fmaxf(d0, d1), yb1, u + 0.10f, br);
+    }
+  });
+}
+// The arena shell, dressed: a pier every 6 m on the inside face of each wall
+// (full height through the compass band, with a cap), so a 48 m wall reads as
+// a built thing with a module instead of one extruded slab. Symmetric by
+// construction; built once (not through g_ks).
+static void k_shell_piers(v3 col) {
+  const float H = ARENA_HALF;
+  v3 cap = {{col.x * 0.86f, col.y * 0.86f, col.z * 0.86f}};
+  KMAT(SMAT_CONCRETE, for (float u = -H + 3.0f; u <= H - 2.9f; u += 6.0f) {
+    bx(u - 0.25f, 0.0f, -H, u + 0.25f, 3.30f, -H + 0.22f, col);          // north wall
+    bx(u - 0.25f, 0.0f, H - 0.22f, u + 0.25f, 3.30f, H, col);            // south
+    bx(-H, 0.0f, u - 0.25f, -H + 0.22f, 3.30f, u + 0.25f, col);          // west
+    bx(H - 0.22f, 0.0f, u - 0.25f, H, 3.30f, u + 0.25f, col);            // east
+    bx(u - 0.31f, 3.30f, -H - 0.02f, u + 0.31f, 3.42f, -H + 0.28f, cap);
+    bx(u - 0.31f, 3.30f, H - 0.28f, u + 0.31f, 3.42f, H + 0.02f, cap);
+    bx(-H - 0.02f, 3.30f, u - 0.31f, -H + 0.28f, 3.42f, u + 0.31f, cap);
+    bx(H - 0.28f, 3.30f, u - 0.31f, H + 0.02f, 3.42f, u + 0.31f, cap);
+  });
+}
+// Painted floor line (a 6 mm film; a step, not cover).
+static void k_line(float x0, float z0, float x1, float z1, v3 c) {
+  KMAT(SMAT_HAZARD, KB(x0, 0.0f, z0, x1, 0.006f, z1, c));
+}
+// The small maps borrow the town props (car, truck, tank), which read glass
+// and trim from the town palette: give them a neutral one.
+static void small_map_style(void) {
+  memset(&g_town, 0, sizeof g_town);
+  g_town.glass = rgb(0.10f, 0.12f, 0.15f);
+  g_town.trim = rgb(0.30f, 0.31f, 0.32f);
+  g_town.door = rgb(0.30f, 0.19f, 0.11f);
+  g_ks = 1.0f;
+}
+
+// FOUNDRY — a steelworks yard under a storm sky. The layout is the one the map
+// was balanced on (a gantry you stand on or run under, two furnace stacks, a
+// shed down each side entered at the ends or the middle door, a conveyor and a
+// container stack in the yards); what changed is that every block is now the
+// thing it stood for, plus an overhead crane, roofs on the sheds, pipe runs,
+// drums, a forklift and the yard's safety markings.
+static void foundry_half(void) {
+  const theme_t *t = &g_theme;
+  v3 steel = rgb(0.30f, 0.32f, 0.35f), dark = rgb(0.17f, 0.18f, 0.19f);
+  v3 yel = rgb(0.86f, 0.66f, 0.12f), rust = rgb(0.46f, 0.31f, 0.22f);
+  // GANTRY: legs, the steel stair (two treads with yellow nosings), a handrail
+  // along this half's long edge of the deck (the stair ends stay open).
+  KMAT(SMAT_STEEL, {
+    KB(4.2f, 0.0f, 1.2f, 4.8f, 1.90f, 1.8f, steel);
+    KB(4.2f, 0.0f, -1.8f, 4.8f, 1.90f, -1.2f, steel);
+    KB(5.2f, 0.0f, -1.4f, 6.2f, 1.45f, 1.4f, rgb(0.36f, 0.38f, 0.40f));
+    KB(6.2f, 0.0f, -1.4f, 7.2f, 0.72f, 1.4f, rgb(0.38f, 0.40f, 0.42f));
+    for (float x = -4.6f; x <= 4.01f; x += 1.15f)
+      KB(x, 2.20f, 1.90f, x + 0.06f, 3.15f, 1.96f, dark);
+    KB(-4.63f, 3.15f, 1.89f, 4.08f, 3.21f, 1.97f, dark);
+    KB(-4.63f, 2.68f, 1.91f, 4.08f, 2.72f, 1.95f, dark);
+  });
+  KMAT(SMAT_HAZARD, {
+    KB(6.12f, 1.45f, -1.4f, 6.20f, 1.465f, 1.4f, yel);
+    KB(7.12f, 0.72f, -1.4f, 7.20f, 0.735f, 1.4f, yel);
+    KB(-5.0f, 2.20f, 1.80f, 5.0f, 2.215f, 1.88f, yel);   // deck edge stripe
+  });
+  // FURNACE: a round body in the map's signal colour, a steel collar, and a
+  // chimney to 11 m banded twice — the landmark you navigate by.
+  {
+    float cx = g_ks * 10.0f, cz = g_ks * -10.0f;
+    octa(cx, cz, 1.15f, 0.0f, 4.6f, t->mid);
+    KMAT(SMAT_STEEL, {
+      octa(cx, cz, 1.24f, 1.30f, 1.62f, steel);
+      octa(cx, cz, 1.22f, 4.6f, 4.9f, steel);
+      octa(cx, cz, 0.55f, 4.9f, 11.0f, dark);
+      octa(cx, cz, 0.62f, 7.0f, 7.25f, steel);
+      octa(cx, cz, 0.62f, 9.6f, 9.85f, steel);
+      octa(cx, cz, 0.66f, 11.0f, 11.3f, steel);
+    });
+    // the tap hole and its glow, on the face toward the gantry
+    KB(9.55f, 0.4f, -8.88f, 10.45f, 1.1f, -8.84f, rgb(1.0f, 0.46f, 0.10f));
+  }
+  // THE SHEDS: corrugated walls, the roof on four columns over the whole shed
+  // to the shell wall, a gutter, pipe runs inside along the shell wall.
+  KMAT(SMAT_CLAD, {
+    KB(13.0f, 0.0f, -14.0f, 13.6f, 2.6f, -4.0f, t->wall);
+    KB(13.0f, 0.0f, 4.0f, 13.6f, 2.6f, 14.0f, t->wall);
+    KB(12.6f, 3.60f, -14.3f, 24.0f, 3.72f, 14.3f, rgb(0.40f, 0.43f, 0.46f));
+  });
+  KMAT(SMAT_STEEL, {
+    KB(13.0f, 2.6f, -14.0f, 13.6f, 3.60f, -13.6f, steel);
+    KB(13.0f, 2.6f, -4.4f, 13.6f, 3.60f, -4.0f, steel);
+    KB(13.0f, 2.6f, 4.0f, 13.6f, 3.60f, 4.4f, steel);
+    KB(13.0f, 2.6f, 13.6f, 13.6f, 3.60f, 14.0f, steel);
+    KB(12.48f, 3.50f, -14.3f, 12.6f, 3.66f, 14.3f, dark);         // gutter
+  });
+  k_pipes(1, 24.0f, -1.0f, 0.06f, -13.8f, 13.8f, 1.75f, 3, rust);
+  // the sheds' contents: crates, a pallet stack, drums
+  k_crate(17.7f, -7.3f, 0.70f, 0.70f, 1.10f, t->crate_a);
+  k_crate(18.7f, -7.3f, 0.30f, 0.40f, 0.55f, t->crate_b);
+  k_crate(20.1f, 2.6f, 0.60f, 0.60f, 1.00f, t->crate_a);
+  KMAT(SMAT_WOOD, KB(19.8f, 0.98f, 2.3f, 20.4f, 1.45f, 2.9f, kt_(t->crate_b, 20.1f, 2.6f, 4, 0.9f, 1.0f)));
+  k_pallets(21.6f, -11.5f, 1, 5);
+  k_jersey(0, 10.25f, 16.0f, 21.0f);
+  barrel(g_ks * 16.2f, g_ks * -16.0f, rgb(0.62f, 0.18f, 0.12f));
+  barrel(g_ks * 16.9f, g_ks * -16.3f, rgb(0.20f, 0.30f, 0.50f));
+  barrel(g_ks * 16.2f, g_ks * -17.0f, rgb(0.74f, 0.56f, 0.16f));
+  barrel(g_ks * 22.8f, g_ks * 12.6f, rgb(0.62f, 0.18f, 0.12f));
+  barrel(g_ks * 22.8f, g_ks * 11.9f, rgb(0.62f, 0.18f, 0.12f));
+  // THE CONVEYOR: legs, a frame, the belt and its end drums. You can shoot
+  // under it now; you cannot walk under it.
+  KMAT(SMAT_STEEL, {
+    KB(-8.0f, 0.78f, 15.0f, 2.0f, 0.96f, 15.6f, steel);
+    for (float x = -7.8f; x < 2.0f; x += 2.4f) {
+      KB(x, 0.0f, 15.05f, x + 0.1f, 0.78f, 15.15f, dark);
+      KB(x, 0.0f, 15.45f, x + 0.1f, 0.78f, 15.55f, dark);
+    }
+    KB(-8.2f, 0.80f, 15.02f, -8.0f, 1.0f, 15.58f, dark);
+    KB(2.0f, 0.80f, 15.02f, 2.2f, 1.0f, 15.58f, dark);
+  });
+  KB(-7.95f, 0.96f, 15.05f, 1.95f, 1.05f, 15.55f, rgb(0.10f, 0.10f, 0.11f));   // belt
+  // THE CONTAINER STACK and the forklift working it.
+  container(g_ks * -14.0f, g_ks * 17.5f, 0, 0.0f, rgb(0.20f, 0.36f, 0.52f));
+  container(g_ks * -14.3f, g_ks * 17.5f, 0, 2.6f, rgb(0.62f, 0.24f, 0.16f));
+  {
+    v3 fy = rgb(0.86f, 0.64f, 0.12f);
+    KMAT(SMAT_HAZARD, KB(-9.1f, 0.30f, 19.4f, -7.9f, 1.15f, 21.2f, fy));
+    KMAT(SMAT_STEEL, {
+      KB(-9.1f, 0.30f, 21.2f, -7.9f, 1.25f, 21.55f, dark);           // counterweight
+      KB(-9.05f, 1.15f, 19.45f, -8.98f, 2.15f, 19.52f, dark);        // cage posts
+      KB(-8.02f, 1.15f, 19.45f, -7.95f, 2.15f, 19.52f, dark);
+      KB(-9.05f, 1.15f, 20.9f, -8.98f, 2.15f, 20.97f, dark);
+      KB(-8.02f, 1.15f, 20.9f, -7.95f, 2.15f, 20.97f, dark);
+      KB(-9.08f, 2.15f, 19.42f, -7.92f, 2.21f, 21.0f, dark);         // roof
+      KB(-9.0f, 0.05f, 19.10f, -8.88f, 2.40f, 19.25f, steel);        // mast
+      KB(-8.12f, 0.05f, 19.10f, -8.0f, 2.40f, 19.25f, steel);
+      KB(-8.9f, 0.10f, 18.0f, -8.78f, 0.15f, 19.10f, steel);         // forks
+      KB(-8.22f, 0.10f, 18.0f, -8.10f, 0.15f, 19.10f, steel);
+    });
+    KB(-9.18f, 0.0f, 19.6f, -9.1f, 0.55f, 20.2f, dark);              // wheels
+    KB(-7.9f, 0.0f, 19.6f, -7.82f, 0.55f, 20.2f, dark);
+    KB(-9.18f, 0.0f, 20.8f, -9.1f, 0.50f, 21.3f, dark);
+    KB(-7.9f, 0.0f, 20.8f, -7.82f, 0.50f, 21.3f, dark);
+  }
+  k_crate(2.6f, 5.6f, 0.60f, 0.60f, 1.10f, t->crate_a);
+  k_crate(-6.5f, 7.0f, 0.50f, 1.00f, 1.00f, t->crate_b);
+  // THE OVERHEAD CRANE: a column at each end of this half's runway, the
+  // runway beam along the east side, and this half's bridge girder across the
+  // whole yard with its trolley, hoist rope and hook block.
+  KMAT(SMAT_STEEL, {
+    KB(20.55f, 0.0f, -19.75f, 21.05f, 7.0f, -19.25f, steel);
+    KB(20.55f, 0.0f, 19.25f, 21.05f, 7.0f, 19.75f, steel);
+    KB(20.45f, 0.0f, -19.85f, 21.15f, 0.12f, -19.15f, dark);
+    KB(20.45f, 0.0f, 19.15f, 21.15f, 0.12f, 19.85f, dark);
+  });
+  KMAT(SMAT_HAZARD, {
+    KB(20.50f, 7.0f, -20.3f, 21.10f, 7.45f, 20.3f, yel);              // runway
+    KB(-21.10f, 7.45f, -7.45f, 21.10f, 8.05f, -6.55f, yel);           // bridge
+    KB(-3.6f, 8.05f, -7.5f, -2.4f, 8.55f, -6.5f, rgb(0.24f, 0.25f, 0.27f));   // trolley
+  });
+  KMAT(SMAT_STEEL, {
+    KB(-3.02f, 4.1f, -7.02f, -2.98f, 7.45f, -6.98f, dark);            // rope
+    KB(-3.18f, 3.75f, -7.15f, -2.82f, 4.1f, -6.85f, yel);             // hook block
+  });
+  // Safety lines: the walkway along each shed front and the gantry's apron.
+  k_line(12.20f, -14.0f, 12.32f, 14.0f, yel);
+  k_line(-5.6f, 2.55f, 4.1f, 2.67f, yel);
+  lamp(g_ks * 12.3f, g_ks * -16.8f, 1, g_ks > 0.0f ? 1 : -1);
+}
+static void map_foundry(void) {
+  small_map_style();
+  const theme_t *t = &g_theme;
+  mk1(-5.0f, -2.0f, 5.0f, 2.0f, 1.90f, 2.20f, t->crate_b);   // the gantry deck
+  k_shell_piers(t->wall);
+  g_ks = 1.0f;  foundry_half();
+  g_ks = -1.0f; foundry_half();
+  g_ks = 1.0f;
+}
+
+// BAZAAR — a market quarter at golden hour. Four houses make a plus of streets
+// through the fountain square, stalls crowd the streets, two roofs are reached
+// by a stair. Now the houses are houses (render, doors, shuttered windows, a
+// cornice, parapets, water tanks, rugs hung out), the streets are shaded by
+// striped canopies, the square has palms and a real fountain, and the stalls
+// carry their goods.
+static void bazaar_half(void) {
+  const theme_t *t = &g_theme;
+  v3 rA = kt_(t->wall, 5.0f, 5.0f, 1, 0.92f, 0.98f);
+  v3 rB = kt_(t->cover, -5.0f, 5.0f, 2, 0.95f, 1.05f);
+  v3 door = rgb(0.32f, 0.20f, 0.12f), glass = rgb(0.10f, 0.12f, 0.15f);
+  v3 shut = rgb(0.18f, 0.40f, 0.52f), shut2 = rgb(0.56f, 0.30f, 0.18f);
+  v3 stone = rgb(0.62f, 0.56f, 0.46f);
+  // HOUSE A (roof reachable) and HOUSE B.
+  KMAT(SMAT_STUCCO, {
+    KB(5.0f, 0.0f, 5.0f, 11.0f, 3.2f, 11.0f, rA);
+    KB(-11.0f, 0.0f, 5.0f, -5.0f, 3.2f, 11.0f, rB);
+    // cornices, abutting at the corners rather than overlapping
+    v3 cA = kt_(rA, 1, 1, 3, 0.86f, 0.88f), cB = kt_(rB, 1, 1, 4, 0.86f, 0.88f);
+    KB(4.9f, 2.92f, 4.9f, 11.1f, 3.06f, 5.0f, cA);
+    KB(4.9f, 2.92f, 5.0f, 5.0f, 3.06f, 11.1f, cA);
+    KB(11.0f, 2.92f, 5.0f, 11.1f, 3.06f, 11.1f, cA);
+    KB(5.0f, 2.92f, 11.0f, 11.0f, 3.06f, 11.1f, cA);
+    KB(-11.1f, 2.92f, 4.9f, -4.9f, 3.06f, 5.0f, cB);
+    KB(-5.0f, 2.92f, 5.0f, -4.9f, 3.06f, 11.1f, cB);
+    KB(-11.1f, 2.92f, 5.0f, -11.0f, 3.06f, 11.1f, cB);
+    KB(-11.0f, 2.92f, 11.0f, -5.0f, 3.06f, 11.1f, cB);
+    // parapets: A's north edge (the original), east and south; B all round
+    KB(5.3f, 3.2f, 5.05f, 10.7f, 3.9f, 5.45f, t->crate_b);
+    KB(10.6f, 3.2f, 5.45f, 11.0f, 3.7f, 11.0f, cA);
+    KB(5.0f, 3.2f, 10.6f, 10.6f, 3.7f, 11.0f, cA);
+    KB(-11.0f, 3.2f, 5.0f, -5.0f, 3.6f, 5.35f, cB);
+    KB(-11.0f, 3.2f, 10.65f, -5.0f, 3.6f, 11.0f, cB);
+    KB(-11.0f, 3.2f, 5.35f, -10.65f, 3.6f, 10.65f, cB);
+    KB(-5.35f, 3.2f, 5.35f, -5.0f, 3.6f, 10.65f, cB);
+  });
+  // the roof stair, in stone
+  KMAT(SMAT_STONE, {
+    KB(3.4f, 0.0f, 9.0f, 4.2f, 1.05f, 10.4f, stone);
+    KB(4.2f, 0.0f, 9.0f, 5.0f, 2.10f, 10.4f, kt_(stone, 4, 9, 5, 0.92f, 0.96f));
+  });
+  // doors with lintels, windows with sills and shutters (flush colour below
+  // head height, the way the town facades are), an AC box and a hung rug
+  KMAT(SMAT_WOOD, {
+    KB(4.97f, 0.0f, 6.0f, 5.0f, 2.2f, 7.1f, door);
+    KB(-5.0f, 0.0f, 6.6f, -4.97f, 2.2f, 7.7f, door);
+    KB(7.0f, 0.0f, 11.0f, 8.1f, 2.2f, 11.03f, door);
+    KB(7.4f, 1.3f, 4.985f, 8.4f, 2.2f, 5.0f, glass);
+    KB(6.92f, 1.3f, 4.975f, 7.4f, 2.2f, 5.0f, shut);
+    KB(8.4f, 1.3f, 4.975f, 8.88f, 2.2f, 5.0f, shut);
+    KB(-8.6f, 1.3f, 4.985f, -7.6f, 2.2f, 5.0f, glass);
+    KB(-9.08f, 1.3f, 4.975f, -8.6f, 2.2f, 5.0f, shut2);
+    KB(-7.6f, 1.3f, 4.975f, -7.12f, 2.2f, 5.0f, shut2);
+    KB(11.0f, 1.3f, 7.4f, 11.015f, 2.2f, 8.4f, glass);
+    KB(-11.015f, 1.3f, 8.0f, -11.0f, 2.2f, 9.0f, glass);
+  });
+  KMAT(SMAT_STONE, {
+    KB(4.88f, 2.2f, 5.92f, 5.0f, 2.34f, 7.18f, stone);
+    KB(-5.0f, 2.2f, 6.52f, -4.88f, 2.34f, 7.78f, stone);
+    KB(7.3f, 1.20f, 4.92f, 8.5f, 1.30f, 5.0f, stone);
+    KB(-8.7f, 1.20f, 4.92f, -7.5f, 1.30f, 5.0f, stone);
+  });
+  KMAT(SMAT_STEEL, KB(4.55f, 2.40f, 8.0f, 5.0f, 2.85f, 8.8f, rgb(0.74f, 0.74f, 0.72f)));
+  KB(-6.6f, 0.9f, 10.99f, -5.4f, 2.6f, 11.02f, t->band_s);             // rug, back wall
+  KB(-6.6f, 0.82f, 10.99f, -5.4f, 0.9f, 11.02f, kt_(t->band_s, 1, 1, 6, 0.6f, 0.65f));
+  KB(-10.4f, 1.0f, 4.97f, -9.4f, 2.7f, 5.0f, t->band_n);               // rug, street
+  // roof kit: a water tank on A, a dish on B
+  KMAT(SMAT_STEEL, {
+    octa(g_ks * 9.4f, g_ks * 9.4f, 0.55f, 3.2f, 4.3f, rgb(0.22f, 0.24f, 0.28f));
+    KB(-8.3f, 3.2f, 8.3f, -8.1f, 3.9f, 8.5f, rgb(0.30f, 0.30f, 0.30f));
+    KB(-8.6f, 3.9f, 8.1f, -7.8f, 4.5f, 8.18f, rgb(0.82f, 0.82f, 0.80f));
+  });
+  // CANOPIES over this half's two streets: striped cloth on poles from the
+  // roofs, high enough (4.5 m) that nobody stands on them from a parapet.
+  {
+    v3 cl[3] = {t->band_s, rgb(0.86f, 0.82f, 0.72f), t->band_n};
+    for (int i = 0; i < 3; i++) {
+      float z0 = 6.0f + 1.6f * (float)i;
+      KB(-5.0f, 4.56f, z0, 5.0f, 4.60f, z0 + 0.95f, cl[i]);
+      KB(-5.0f, 3.2f, z0 + 0.43f, -4.9f, 4.56f, z0 + 0.53f, rgb(0.34f, 0.24f, 0.15f));
+      KB(4.9f, 3.2f, z0 + 0.43f, 5.0f, 4.56f, z0 + 0.53f, rgb(0.34f, 0.24f, 0.15f));
+      float x0 = 6.0f + 1.6f * (float)i;
+      KB(x0, 4.62f, -5.0f, x0 + 0.95f, 4.66f, 5.0f, cl[(i + 1) % 3]);
+    }
+  }
+  // the square: palms and pots
+  palm(g_ks * 3.7f, g_ks * 3.7f, 5.0f);
+  palm(g_ks * -3.7f, g_ks * 3.7f, 5.4f);
+  KMAT(SMAT_BRICK, {
+    octa(g_ks * 4.4f, g_ks * 5.6f, 0.28f, 0.0f, 0.55f, t->cover);
+    octa(g_ks * 4.4f, g_ks * 5.6f, 0.32f, 0.55f, 0.64f, kt_(t->cover, 1, 1, 7, 0.8f, 0.85f));
+    octa(g_ks * -4.4f, g_ks * 7.6f, 0.24f, 0.0f, 0.48f, t->cover);
+  });
+  // a handcart with sacks
+  KMAT(SMAT_WOOD, {
+    KB(13.6f, 0.45f, 3.6f, 15.2f, 0.70f, 4.5f, rgb(0.50f, 0.36f, 0.22f));
+    KB(15.2f, 0.62f, 3.75f, 16.4f, 0.68f, 3.85f, rgb(0.40f, 0.28f, 0.17f));
+    KB(15.2f, 0.62f, 4.25f, 16.4f, 0.68f, 4.35f, rgb(0.40f, 0.28f, 0.17f));
+    KB(14.1f, 0.0f, 3.48f, 14.8f, 0.70f, 3.56f, rgb(0.24f, 0.17f, 0.11f));
+    KB(14.1f, 0.0f, 4.54f, 14.8f, 0.70f, 4.62f, rgb(0.24f, 0.17f, 0.11f));
+  });
+  KMAT(SMAT_STUCCO, {
+    KB(13.75f, 0.70f, 3.7f, 14.45f, 1.02f, 4.1f, rgb(0.78f, 0.72f, 0.58f));
+    KB(14.5f, 0.70f, 3.8f, 15.1f, 0.98f, 4.4f, rgb(0.74f, 0.68f, 0.55f));
+  });
+  // the street barrier is a stone wall with a coping; the crates are crates
+  KMAT(SMAT_STONE, {
+    KB(12.5f, 0.0f, -3.0f, 13.0f, 0.9f, 3.0f, stone);
+    KB(12.45f, 0.9f, -3.05f, 13.05f, 1.0f, 3.05f, kt_(stone, 1, 1, 8, 1.06f, 1.1f));
+  });
+  k_crate(20.6f, -6.4f, 0.6f, 0.6f, 1.1f, t->crate_a);
+  k_crate(21.3f, -4.9f, 0.4f, 0.4f, 0.6f, t->crate_b);
+  lamp(g_ks * 4.4f, g_ks * -13.0f, 1, g_ks > 0.0f ? 1 : -1);
+  lamp(g_ks * 13.0f, g_ks * 4.4f, 0, g_ks > 0.0f ? -1 : 1);
+}
+static void map_bazaar(void) {
+  small_map_style();
+  const theme_t *t = &g_theme;
+  k_shell_piers(t->wall);
+  // THE FOUNTAIN: an octagonal stone basin with water, a column, an upper
+  // bowl and the blue spire the map is navigated by.
+  v3 stone = rgb(0.66f, 0.60f, 0.50f);
+  KMAT(SMAT_STONE, {
+    octa(0.0f, 0.0f, 1.6f, 0.0f, 0.62f, stone);
+    octa(0.0f, 0.0f, 0.36f, 0.64f, 1.60f, stone);
+    octa(0.0f, 0.0f, 0.80f, 1.60f, 1.76f, stone);
+  });
+  octa(0.0f, 0.0f, 1.40f, 0.62f, 0.64f, rgb(0.10f, 0.22f, 0.26f));
+  octa(0.0f, 0.0f, 0.62f, 1.76f, 1.78f, rgb(0.10f, 0.22f, 0.26f));
+  octa(0.0f, 0.0f, 0.20f, 1.78f, 3.0f, t->mid);
+  g_ks = 1.0f;  bazaar_half();
+  g_ks = -1.0f; bazaar_half();
+  g_ks = 1.0f;
+  stall(-2.5f, 8.0f, 1, t->band_s);
+  stall(8.0f, -2.5f, 0, t->band_n);
+  stall(17.0f, 1.0f, 1, t->mid);
+  stall(17.0f, 9.0f, 1, t->band_s);
+  stall(15.0f, -16.0f, 0, t->band_n);
+  stall(2.0f, 16.0f, 0, t->mid);
+}
+
+// OUTPOST — a forward operating base at high noon. Three lanes split by long
+// walls with offset gaps, a tower in the middle, a gated bunker at each end, a
+// climbable container in each side lane: long sightlines, built for the
+// sniper. The walls are T-wall blast barriers now, the perimeter is lined with
+// HESCO, the bunkers are sandbagged under camo nets, the tower is a sandbagged
+// watchtower with a mast, and the base has its floodlights, generator, water
+// tank and fuel.
+static void outpost_half(void) {
+  const theme_t *t = &g_theme;
+  v3 ply = rgb(0.56f, 0.48f, 0.36f), pole = rgb(0.40f, 0.36f, 0.30f);
+  v3 olive = rgb(0.34f, 0.36f, 0.24f), dark = rgb(0.17f, 0.18f, 0.19f);
+  // HESCO along this half's north and east shell walls.
+  k_hesco(-23.45f, -23.45f, 0, 45, 2.2f);
+  k_hesco(23.45f, -22.37f, 1, 43, 2.2f);
+  // T-WALLS for the lane walls.
+  k_twall(1, -8.0f, -12.0f, -4.0f, 2.8f);
+  k_twall(1, -8.0f, 1.5f, 12.0f, 2.8f);
+  // THE BUNKERS: two fill platforms either side of the gate, a sandbag
+  // parapet along their front, crates as the step up at the outer ends, a
+  // raised boom at the gate and a camo net over the lot.
+  KMAT(SMAT_STUCCO, {
+    KB(-6.0f, 0.0f, 16.6f, -1.0f, 1.6f, 21.0f, kt_(rgb(0.66f, 0.60f, 0.47f), 1, 1, 1, 0.95f, 1.0f));
+    KB(1.0f, 0.0f, 16.6f, 6.0f, 1.6f, 21.0f, kt_(rgb(0.66f, 0.60f, 0.47f), 2, 2, 1, 0.95f, 1.0f));
+  });
+  KMAT(SMAT_STEEL, for (float x = -6.0f; x < 6.01f; x += 1.0f) {
+    if (x > -1.01f && x < 1.01f) continue;
+    KB(x, 0.0f, 16.585f, x + 0.03f, 1.58f, 16.6f, rgb(0.34f, 0.35f, 0.33f));
+  });
+  k_sandbags(0, 16.85f, -5.8f, -1.2f, 1.6f, 7, 0.46f);
+  k_sandbags(0, 16.85f, 1.2f, 5.8f, 1.6f, 7, 0.46f);
+  k_crate(6.5f, 19.0f, 0.5f, 1.0f, 0.8f, olive);
+  for (int i = 0; i < 6; i++)
+    KB(0.95f, 1.2f + 0.5f * (float)i, 16.95f, 1.07f, 1.7f + 0.5f * (float)i, 17.07f,
+       (i & 1) ? rgb(0.86f, 0.84f, 0.80f) : rgb(0.72f, 0.16f, 0.12f));
+  KMAT(SMAT_STEEL, KB(0.90f, 0.0f, 16.9f, 1.12f, 1.2f, 17.12f, dark));
+  KMAT(SMAT_WOOD, {
+    KB(-6.5f, 0.0f, 16.2f, -6.4f, 3.75f, 16.3f, pole);
+    KB(6.4f, 0.0f, 16.2f, 6.5f, 3.75f, 16.3f, pole);
+    KB(-6.5f, 1.6f, 21.4f, -6.4f, 3.75f, 21.5f, pole);
+    KB(6.4f, 1.6f, 21.4f, 6.5f, 3.75f, 21.5f, pole);
+  });
+  for (int i = 0; i < 7; i++) {
+    float z0 = 16.1f + 0.78f * (float)i;
+    KB(-6.7f, 3.75f + 0.01f * (float)(i & 1), z0, 6.7f, 3.78f + 0.01f * (float)(i & 1), z0 + 0.62f,
+       kt_(i & 1 ? rgb(0.44f, 0.42f, 0.30f) : rgb(0.36f, 0.38f, 0.26f), (float)i, 1, 12, 0.9f, 1.1f));
+  }
+  // middle-lane cover: a jersey barrier and ammo crates
+  k_jersey(0, 8.25f, -3.0f, 1.0f);
+  k_crate(3.6f, -5.4f, 0.6f, 0.6f, 1.15f, olive);
+  k_crate(-3.9f, 13.6f, 0.6f, 0.6f, 1.0f, t->crate_a);
+  // SIDE LANE: the container, a 10 ft box on it, crates as the steps up, a
+  // sandbag wall, a crate pile and the fuel point.
+  container(g_ks * 18.2f, g_ks * -9.0f, 1, 0.0f, rgb(0.48f, 0.42f, 0.28f));
+  KMAT(SMAT_CONTAINER, KB(17.08f, 2.6f, -11.6f, 19.32f, 5.2f, -8.6f, rgb(0.34f, 0.38f, 0.26f)));
+  k_crate(19.9f, -7.3f, 0.5f, 0.7f, 0.85f, olive);
+  k_crate(19.9f, -8.7f, 0.5f, 0.7f, 1.70f, kt_(olive, 1, 1, 13, 0.9f, 0.95f));
+  k_sandbags(1, 12.25f, -2.0f, 5.0f, 0.0f, 6, 0.5f);
+  k_crate(14.6f, 12.6f, 0.6f, 0.6f, 1.1f, olive);
+  k_crate(15.5f, 12.6f, 0.3f, 0.3f, 0.55f, t->crate_a);
+  barrel(g_ks * 21.2f, g_ks * 0.3f, olive);
+  barrel(g_ks * 21.9f, g_ks * 0.8f, olive);
+  barrel(g_ks * 21.2f, g_ks * 1.05f, rgb(0.62f, 0.18f, 0.12f));
+  // FLOODLIGHT on a mast, aimed at the middle.
+  KMAT(SMAT_STEEL, {
+    KB(20.3f, 0.0f, 20.3f, 20.5f, 6.4f, 20.5f, dark);
+    KB(19.7f, 6.4f, 20.2f, 20.6f, 6.85f, 20.4f, dark);
+  });
+  KB(19.75f, 6.45f, 20.18f, 20.55f, 6.8f, 20.2f, rgb(1.0f, 0.96f, 0.84f));
+  // GENERATOR with its exhaust, a water tank on legs.
+  KMAT(SMAT_STEEL, {
+    KB(-21.6f, 0.0f, 7.0f, -20.4f, 1.25f, 9.2f, olive);
+    KB(-21.5f, 1.25f, 7.2f, -20.5f, 1.32f, 8.9f, dark);
+    KB(-21.15f, 1.25f, 8.95f, -21.0f, 2.1f, 9.1f, dark);
+  });
+  KMAT(SMAT_STEEL, {
+    KB(-21.4f, 0.0f, 12.6f, -21.3f, 1.2f, 12.7f, dark);
+    KB(-19.9f, 0.0f, 12.6f, -19.8f, 1.2f, 12.7f, dark);
+    KB(-21.4f, 0.0f, 14.1f, -21.3f, 1.2f, 14.2f, dark);
+    KB(-19.9f, 0.0f, 14.1f, -19.8f, 1.2f, 14.2f, dark);
+    octa(g_ks * -20.6f, g_ks * 13.4f, 0.9f, 1.2f, 2.6f, rgb(0.16f, 0.16f, 0.17f));
+  });
+  (void)ply;
+}
+static void map_outpost(void) {
+  small_map_style();
+  const theme_t *t = &g_theme;
+  // THE WATCHTOWER (built once, it stands on the origin): a 3 x 3 block of
+  // HESCO, a sandbag parapet on it, four posts, a roof and the radio mast.
+  // One fill block (nine baskets' worth) wired on its OUTSIDE only: baskets
+  // built one by one would put their posts face to face inside the block.
+  {
+    const float R = 1.59f, Hh = 2.6f;
+    v3 wire = rgb(0.34f, 0.35f, 0.33f);
+    KMAT(SMAT_STUCCO, bx(-R, 0.0f, -R, R, Hh, R, rgb(0.66f, 0.60f, 0.47f)));
+    KMAT(SMAT_STEEL, {
+      for (int k = 0; k <= 3; k++) {
+        float u = -R + 1.06f * (float)k;
+        float u0 = k == 3 ? u - 0.03f : u, u1 = u0 + 0.03f;
+        bx(u0, 0.0f, -R - 0.015f, u1, Hh + 0.02f, -R, wire);
+        bx(u0, 0.0f, R, u1, Hh + 0.02f, R + 0.015f, wire);
+        bx(-R - 0.015f, 0.0f, u0, -R, Hh + 0.02f, u1, wire);
+        bx(R, 0.0f, u0, R + 0.015f, Hh + 0.02f, u1, wire);
+      }
+      // (no top rim: the sandbag parapet sits on that edge)
+    });
+  }
+  k_sandbags(0, -1.36f, -1.59f, 1.59f, 2.6f, 4, 0.40f);
+  g_ks = -1.0f;
+  k_sandbags(0, -1.36f, -1.59f, 1.59f, 2.6f, 4, 0.40f);
+  g_ks = 1.0f;
+  k_sandbags(1, -1.36f, -1.16f, 1.16f, 2.6f, 4, 0.40f);
+  g_ks = -1.0f;
+  k_sandbags(1, -1.36f, -1.16f, 1.16f, 2.6f, 4, 0.40f);
+  g_ks = 1.0f;
+  v3 pole = rgb(0.40f, 0.36f, 0.30f), dark = rgb(0.17f, 0.18f, 0.19f);
+  KMAT(SMAT_WOOD, {
+    bx(-1.5f, 2.45f, -1.5f, -1.38f, 4.9f, -1.38f, pole);   // seated in the fill
+    bx(1.38f, 2.45f, -1.5f, 1.5f, 4.9f, -1.38f, pole);
+    bx(-1.5f, 2.45f, 1.38f, -1.38f, 4.9f, 1.5f, pole);
+    bx(1.38f, 2.45f, 1.38f, 1.5f, 4.9f, 1.5f, pole);
+    bx(-1.75f, 4.9f, -1.75f, 1.75f, 5.02f, 1.75f, rgb(0.50f, 0.44f, 0.32f));
+  });
+  bx(-1.8f, 5.02f, -1.8f, 1.8f, 5.06f, 1.8f, t->mid);
+  KMAT(SMAT_STEEL, {
+    bx(0.9f, 5.06f, 0.9f, 1.0f, 9.4f, 1.0f, dark);
+    bx(0.6f, 7.6f, 0.93f, 1.3f, 7.65f, 0.97f, dark);
+    bx(0.7f, 8.6f, 0.93f, 1.2f, 8.65f, 0.97f, dark);
+  });
+  g_ks = 1.0f;  outpost_half();
+  g_ks = -1.0f; outpost_half();
+  g_ks = 1.0f;
+}
+
 // Water: a dark sheet on the floor, and a quay railing along every edge that
 // borders walkable ground — top rail above a jump (1.35 m), mid rail, posts.
 static void water_rect(float x0, float z0, float x1, float z1) {
@@ -4298,7 +4851,10 @@ static void map_generate_layout(uint32_t seed) {
       }
       break;
     }
-  }
+  }  // THE ARENA'S SHELL, dressed last: after every draw from the map stream, so a
+  // recorded seed lays out exactly as it always did.
+  small_map_style();
+  k_shell_piers(g_theme.wall);
 }
 
 // ---------------------------------------------------------------------------
@@ -7838,7 +8394,9 @@ typedef struct {
 // climbs them; a 12 client would mispredict every climb and fail the world hash.
 // 14: HOSTAGE RESCUE goes online (NP_RESCUE, the squad/guard sides in
 // team_mates); a 13 client would neither draw nor predict the mission.
-#define NET_PROTO 14   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
+// 15: the small maps re-dressed (FOUNDRY, BAZAAR, OUTPOST rebuilt, piers on
+// every shell): a 14 client would build a different world and fail the hash.
+#define NET_PROTO 15   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -21212,7 +21770,13 @@ static const char *WORLD_FS =
   "    }\n"
   "  }\n"
   "  col = mix(col, sky_env(-V, 0.0), 1.0 - exp(-d * d * uFog));\n"
-  "  oCol = vec4(tonemap(col), 1.0);\n"
+  // ALPHA = "this is the static world". Nothing read the scene's alpha, so it
+  // carries the one bit the composite needs to keep the edge catch-light (see
+  // AO_FS) on the world's chamfered corners and OFF the moving geometry: the
+  // figures are flat-faceted by design, every facet edge is a convex crease in
+  // the depth buffer, and the catch-light outlined the whole body in a dashed,
+  // glowing wireframe.
+  "  oCol = vec4(tonemap(col), uDetail > 0.0 ? 1.0 : 0.0);\n"
   "}\n";
 
 // Sky: fullscreen triangle at depth 1.0 drawn after the world (LEQUAL passes
@@ -21688,7 +22252,7 @@ static const char *POST_FS =
   "    }\n"
   "    a /= ws;\n"
   "    c *= mix(1.0, a.r, 0.80) * mix(1.0, a.g, 0.55);\n"
-  "    c += uSunC * a.b * 0.10 * a.g;\n"
+  "    c += uSunC * a.b * 0.10 * a.g * texture(uTex, uv).a;\n"
   "  }\n"
   "  if (!vm && uFx > 0.5) c += texture(uVol, uv).rgb;\n"
   "  if (uFx > 0.5) c += texture(uBloom, uv).rgb * uBloomK;\n"
@@ -25064,13 +25628,21 @@ static void ui_menu(void) {
     ui_cycle("MODE", GM_NAMES, GM_COUNT, &g_cfg.sp_mode, px, pw, y, click, cx, cy);
     y += 15;
     // MAP latches the same way. ROTATE steps to the next map every match.
-    ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
+    // HOSTAGE RESCUE is played on its own map (map_pick_apply), so the row is
+    // a fixed label there, as on HOST SETTINGS: a picker that did nothing.
+    if (g_cfg.sp_mode == GM_RESCUE) {
+      ui_text("MAP", px + 16, y + 3, 1, C_TEXT, 1);
+      ui_text("COMPOUND", px + pw - 16 - ui_text_width("COMPOUND", 1), y + 4, 1, C_HAZE, 1);
+    } else {
+      ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
+    }
     y += 15;
     // Latches at the next restart, like MODE and MAP.
     ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
     y += 15;
     if (!g_home && !g_online &&
-        (g_cfg.sp_mode != g_match.mode || g_cfg.sp_map != g_map_pick)) {
+        (g_cfg.sp_mode != g_match.mode ||
+         (g_cfg.sp_mode != GM_RESCUE && g_cfg.sp_map != g_map_pick))) {
       ui_text("APPLIES ON RESTART", px + 16, y + 1, 0.9f, C_BLAZE, 0.9f);
       y += 12;
     }
@@ -25397,7 +25969,16 @@ static void ui_menu(void) {
     y += 4;
     ui_section("GEAR", px, pw, y);
     y += 14;
-    ui_cycle("GLOVES + GAUNTLET", GEAR_THEME_NAMES, GEAR_THEME_COUNT, &g_cfg.gear_theme,
+    ui_cycle("OUTFIT", GEAR_THEME_NAMES, GEAR_THEME_COUNT, &g_cfg.gear_theme,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("HEADGEAR", HEAD_GEAR_NAMES, HEAD_GEAR_COUNT, &g_cfg.head_gear,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("VEST", VEST_GEAR_NAMES, VEST_GEAR_COUNT, &g_cfg.vest_gear,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("PACK", PACK_GEAR_NAMES, PACK_GEAR_COUNT, &g_cfg.pack_gear,
              px, pw, y, click, cx, cy);
     y += 15;
     // How the weapon sits in view. Here rather than under Settings > Graphics,
@@ -32384,6 +32965,32 @@ static const gear_theme_t GEAR_THEMES[GEAR_THEME_COUNT] = {
   {{0.70f, 0.72f, 0.75f}, {0.50f, 0.52f, 0.56f}, {0.80f, 0.82f, 0.85f},
    {0.28f, 0.31f, 0.36f}, {0.30f, 0.31f, 0.34f}, {0.25f, 0.80f, 1.00f}},
 };
+// ...and the same colourway on the WHOLE third-person kit, not just the hands:
+// fatigues, trousers, plate carrier, helmet, webbing, boots, pads, balaclava
+// and the goggle glow. Each row keeps fig_kit's value contract — boots the
+// floor, carrier a clear step off the uniform, helmet a peak or an accent — so
+// a re-dyed operator still reads as one at 25 m. Row 0 is the authored player
+// kit exactly (fig_kit's palette 1), so SLATE changes nothing.
+typedef struct {
+  float uni[3], pants[3], carrier[3], helm[3], web[3], boot[3], rub[3], bala[3], gog[3];
+} body_kit_t;
+static const body_kit_t BODY_KITS[GEAR_THEME_COUNT] = {
+  {{0.335f, 0.375f, 0.440f}, {0.290f, 0.320f, 0.380f}, {0.700f, 0.610f, 0.470f},   // SLATE
+   {0.900f, 0.480f, 0.120f}, {0.150f, 0.160f, 0.190f}, {0.130f, 0.130f, 0.150f},
+   {0.160f, 0.168f, 0.190f}, {0.260f, 0.275f, 0.305f}, {0.360f, 1.700f, 2.000f}},
+  {{0.500f, 0.430f, 0.320f}, {0.430f, 0.370f, 0.280f}, {0.400f, 0.390f, 0.290f},   // COYOTE
+   {0.620f, 0.530f, 0.380f}, {0.240f, 0.200f, 0.150f}, {0.200f, 0.160f, 0.120f},
+   {0.300f, 0.260f, 0.200f}, {0.360f, 0.310f, 0.240f}, {2.000f, 1.200f, 0.250f}},
+  {{0.300f, 0.335f, 0.235f}, {0.260f, 0.285f, 0.210f}, {0.640f, 0.540f, 0.400f},   // RANGER
+   {0.420f, 0.450f, 0.310f}, {0.160f, 0.160f, 0.130f}, {0.150f, 0.140f, 0.120f},
+   {0.200f, 0.210f, 0.170f}, {0.240f, 0.250f, 0.200f}, {0.800f, 2.000f, 0.600f}},
+  {{0.140f, 0.140f, 0.150f}, {0.120f, 0.120f, 0.130f}, {0.230f, 0.230f, 0.240f},   // SHADOW
+   {0.620f, 0.120f, 0.090f}, {0.090f, 0.090f, 0.100f}, {0.080f, 0.080f, 0.090f},
+   {0.180f, 0.180f, 0.190f}, {0.120f, 0.120f, 0.130f}, {2.000f, 0.300f, 0.150f}},
+  {{0.700f, 0.720f, 0.750f}, {0.600f, 0.620f, 0.660f}, {0.300f, 0.330f, 0.380f},   // ARCTIC
+   {0.820f, 0.840f, 0.870f}, {0.280f, 0.300f, 0.340f}, {0.300f, 0.310f, 0.340f},
+   {0.480f, 0.500f, 0.540f}, {0.620f, 0.640f, 0.680f}, {0.500f, 1.600f, 2.000f}},
+};
 static const mdl_ref_t *armory_knife(void) {
   return &KNIFE_MODELS[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)];
 }
@@ -33904,6 +34511,7 @@ typedef struct {
   v3 olive, boot, helm, web, rub, gm2;         // base materials
   v3 gear, belt, pad, pants, dust1;            // carrier, webbing, rubber, trouser
   v3 vest, sleeve, glove, bala;                // derived / balaclava
+  v3 gnt;                                      // the glove's cuff / gauntlet
 } kit_t;
 
 // THE OPPOSING FORCE IS NOT ONE MAN. Every bot wore the identical kit, so a
@@ -33929,6 +34537,32 @@ static int g_fig_team = -1;
 // figure proofs can check the insurgent build too.
 static int g_fig_ins;
 static int g_fig_ins_force = -1;
+// THE ARMORY'S GEAR ON THE BODY. The GLOVES + GAUNTLET colourway used to dye
+// only the first-person meshes, so the shoulder cam (and the mirror of the same
+// man in every other view of himself) showed the authored coyote glove whatever
+// the player had picked. A GEAR_THEMES index for the figure being built — the
+// LOCAL player's own body and corpse only, since a theme is a client setting
+// and nobody else's is known here — or -1: the figure's authored kit. Set by
+// the draw sites, like g_fig_team.
+static int g_fig_gear = -1;
+// ...and the PIECES that figure wears, the same way: a *_GEAR index, or -1 to
+// follow the side it is on (the insurgent's wrap / rig / no pack, else the
+// operator's helmet / plate carrier / assault pack).
+static int g_fig_head = -1, g_fig_vest = -1, g_fig_pack = -1;
+// The entity the figure being built belongs to (-1: none — a corpse, a proof).
+// Read only by the sling (fig_sling), which needs the mode's weapon rules.
+static int g_fig_ent = -1;
+static int g_fig_free;   // fig_arms: bit i = hand i closes on nothing (weapon swap)
+// The local player's armory picks onto the figure about to be built (own = 1),
+// or back to "follow the side" (own = 0).
+static void fig_own_pieces(int own) {
+  g_fig_head = own ? armory_idx(g_cfg.head_gear, HEAD_GEAR_COUNT) : -1;
+  g_fig_vest = own ? armory_idx(g_cfg.vest_gear, VEST_GEAR_COUNT) : -1;
+  g_fig_pack = own ? armory_idx(g_cfg.pack_gear, PACK_GEAR_COUNT) : -1;
+}
+#define FIG_HEAD (g_fig_head >= 0 ? g_fig_head : FIG_INS ? HEAD_WRAP : HEAD_HELMET)
+#define FIG_VEST (g_fig_vest >= 0 ? g_fig_vest : FIG_INS ? VEST_RIG : VEST_CARRIER)
+#define FIG_PACK (g_fig_pack >= 0 ? g_fig_pack : FIG_INS ? PACK_NONE : PACK_ASSAULT)
 #define FIG_INS (g_fig_ins_force >= 0 ? g_fig_ins_force : g_fig_ins)
 static const float FIG_INS_SHIRT[4][3] = {
   {0.440f, 0.400f, 0.310f},   // khaki
@@ -34091,6 +34725,25 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     gm2   = (v3){{0.360f, 1.700f, 2.000f}};
     bala  = (v3){{0.255f, 0.275f, 0.315f}};
   }
+  if (palette == 1 && g_fig_gear >= 0 && g_fig_gear < GEAR_THEME_COUNT) {
+    // The armory's colourway on the whole kit. In a team game the side's
+    // three identity masses (fatigues, carrier, helmet) stay the team's, so a
+    // player still sees which side he is on; everything else is his choice.
+    const body_kit_t *bk = &BODY_KITS[g_fig_gear];
+    #define BK(f) ((v3){{bk->f[0], bk->f[1], bk->f[2]}})
+    if (g_fig_team < 0) {
+      olive = BK(uni);
+      dark  = BK(pants);
+      nyl   = BK(carrier);
+      helm  = BK(helm);
+    }
+    web  = BK(web);
+    boot = BK(boot);
+    rub  = BK(rub);
+    bala = BK(bala);
+    gm2  = BK(gog);
+    #undef BK
+  }
   if (flash01 > 0) {  // hit flash: every surface washes toward the flash color
     olive = v3_lerp(olive, flash_col, flash01);
     dark  = v3_lerp(dark, flash_col, flash01);
@@ -34136,7 +34789,22 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   // tone stays a charcoal with a breath of warmth rather than a void black.
   v3 glove = palette == 1 ? (v3){{0.470f, 0.385f, 0.270f}}   // coyote tan
                           : (v3){{0.160f, 0.155f, 0.165f}};
-  if (flash01 > 0) glove = v3_lerp(glove, flash_col, flash01);
+  v3 gnt = v3_scale(glove, 0.88f);
+  if (g_fig_gear >= 0 && g_fig_gear < GEAR_THEME_COUNT) {
+    // The viewmodel glove's own colours: its fabric shell and the gauntlet's
+    // hard plate. SLATE (row 0) is the identity row of GEAR_THEMES, so its
+    // colours are the meshes' authored references (gear_dye's SLATE_R/HARD_R).
+    static const float SLATE_FAB[3] = {0.204f, 0.224f, 0.268f},
+                       SLATE_HARD[3] = {0.166f, 0.186f, 0.230f};
+    const gear_theme_t *gt = &GEAR_THEMES[g_fig_gear];
+    const float *f = g_fig_gear ? gt->fab : SLATE_FAB, *h = g_fig_gear ? gt->hard : SLATE_HARD;
+    glove = (v3){{f[0], f[1], f[2]}};
+    gnt   = (v3){{h[0], h[1], h[2]}};
+  }
+  if (flash01 > 0) {
+    glove = v3_lerp(glove, flash_col, flash01);
+    gnt   = v3_lerp(gnt, flash_col, flash01);
+  }
   kit_t kt;
   kt.olive = olive;
   kt.boot = boot;
@@ -34152,6 +34820,7 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   kt.vest = vest;
   kt.sleeve = sleeve;
   kt.glove = glove;
+  kt.gnt = gnt;
   kt.bala = flash01 > 0 ? v3_lerp(bala, flash_col, flash01) : bala;
   return kt;
 }
@@ -34230,7 +34899,8 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // The INSURGENT's chest rig: a low band round the ribs, no plates, so it
   // stands only 11-18 mm off the shirt (still strictly outside every torso
   // station, and on the torso's own twist) and stops below the collarbones.
-  if (FIG_INS) {
+  int vest = FIG_VEST;
+  if (vest == VEST_RIG) {
     fnode_t rg[4] = {
       CN(0.196f, 0.010f, 0.168f, 0.138f, 0.64f, 0.72f),
       CN(0.250f, 0.014f, 0.178f, 0.146f, 0.78f, 0.0f),
@@ -34239,6 +34909,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     memcpy(pc, rg, sizeof pc);
   }
   #undef CN
+  if (vest != VEST_NONE) {
   probe("carrier");
   g_fig_jit = 0.45f;
   fig_chain(pc, 4, 8, 1, 1, prt);
@@ -34252,7 +34923,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     v3 cfw_p = v3_norm(v3_cross(spine, crt));
     v3 dk_web = v3_scale(kt->web, 0.92f);
     v3 pouch_c = v3_scale(kt->gear, 0.86f);
-    float rig_in = FIG_INS ? -0.010f : 0.0f;   // the rig's face is lower than a plate's
+    float rig_in = vest == VEST_RIG ? -0.010f : 0.0f;   // the rig's face is lower than a plate's
     for (int mp_i = -1; mp_i <= 1; mp_i++) {
       float mx = (float)mp_i * 0.052f;
       #define MP_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
@@ -34268,7 +34939,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       fig_chain(fmp, 4, 8, 1, 1, crt);
       g_fig_jit = 1.0f;
     }
-    if (FIG_INS) goto no_admin;   // a rig has no admin panel up on a plate
+    if (vest == VEST_RIG) goto no_admin;   // a rig has no admin panel up on a plate
     {
     v3 urt = v3_rot_axis(pbase, spine, 0.94f * tw);
     v3 ufw = v3_norm(v3_cross(spine, urt));
@@ -34286,12 +34957,13 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     }
   no_admin:;
   }
+  }   // vest != VEST_NONE
   // Shoulder straps: the carrier is otherwise one black slab across the chest
   // with a hard top edge and nothing holding it up. Two short runs over each
   // trapezius break that mass and give the torso a visible harness.
   // (Not on the insurgent: they were sized to ride a plate carrier's top
   // edge, and without it they would sink into the shirt at a grazing angle.)
-  if (!FIG_INS) {
+  if (vest == VEST_CARRIER) {
     v3 cf2 = v3_norm(v3_cross(spine, Rc));
     for (int e = 0; e < 2; e++) {
       float es = e ? 1.0f : -1.0f;
@@ -34344,7 +35016,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // moves as one rigid assembly with the upper torso instead of shearing
   // against pelvis-framed geometry.
   v3 cfw = v3_norm(v3_cross(spine, Rc));
-  if (!FIG_INS) {   // the insurgent travels light: no pack, no radio
+  if (FIG_PACK == PACK_ASSAULT) {   // the insurgent travels light: no pack, no radio
     #define PP(X, Y, Z) v3_add(P->chest, v3_add(v3_scale(Rc, (X)), \
                         v3_add(v3_scale(spine, (Y)), v3_scale(cfw, (Z)))))
     v3 pack_col = v3_scale(kt->gear, 0.72f);
@@ -34556,8 +35228,8 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // Articulated composite shoulder pauldron: crowns P->sho[i] along the
       // live bladed clavicle (sdir) and tilts smoothly with upper-arm elevation
       // without rolling onto the chest or floating off the deltoid.
-      // (Armour: the insurgent wears none.)
-      if (!FIG_INS) {
+      // (Armour: the insurgent wears none — it rides with the plate carrier.)
+      if (FIG_VEST == VEST_CARRIER) {
         v3 sdir = fig_perp(spine, v3_sub(P->sho[i], P->chest));
         v3 sfw  = v3_norm(v3_cross(spine, v3_scale(sdir, s)));
         float arm_up = 0.24f * (v3_dot(uad, spine) + 0.55f);
@@ -34592,7 +35264,8 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     {
       v3 hc, ha; float hr;
       gun_hold(wpn, i ? GH_GRIP : GH_FORE3, g_org, g_rt, g_up, g_fw, &hc, &ha, &hr);
-      if (i == 0 && (wpn == WPN_KN || wpn == WPN_GR)) {  // the free hand closes on nothing
+      if ((i == 0 && (wpn == WPN_KN || wpn == WPN_GR)) || (g_fig_free >> i & 1)) {
+        // the free hand closes on nothing
         ha = g_rt;
         hr = 0.013f;
         hc = v3_add(P->wri[i], v3_scale(v3_norm(v3_sub(P->wri[i], P->elb[i])), 0.075f));
@@ -34630,7 +35303,7 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         v3 lat = v3_cross(back, spine);
         lat = v3_dot(lat, lat) > 1e-8f ? v3_norm(lat) : Rc;
         fig_forearm(P->wri[i], back, pd, lat, s, kt->sleeve,
-                    v3_scale(kt->glove, 0.88f), &P->elb[i], 12);
+                    kt->gnt, &P->elb[i], 12);
       }
     }
     mat_set(MAT_CLOTH_R, 0.0f);
@@ -34640,6 +35313,238 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
 // Draw one skeleton figure from its anim state. palette 0 = bot olive,
 // 1 = the player's slate blue; wpn picks which rifle the hands are holding.
 // flash01 washes the clothes toward flash_col.
+// THE CARRIED WEAPONS. A soldier does not put his rifle in his pocket when he
+// draws a sidearm: whatever long gun is not in his hands is SLUNG — on his back,
+// diagonally, muzzle up behind one shoulder and the butt at the opposite hip,
+// with the strap over that shoulder and across the chest. The same gun_build
+// that draws the weapon in his hands draws it here, at the same 3P girth, so a
+// slung rifle is the rifle and not a stand-in.
+//
+// Placed from the gun's OWN measured box (gun_box), never from constants: the
+// carbine and the sniper differ by 30 cm in length and by where their grip
+// origin sits along it, and the box keeps the whole gun outside the back — the
+// pack's rear face when one is worn, the plate carrier's back plate or the
+// shirt otherwise.
+static void gun_box(int w, v3 *mn, v3 *mx) {
+  static v3 bmn[WPN_COUNT], bmx[WPN_COUNT];
+  static int have[WPN_COUNT];
+  if (!have[w]) {
+    // Built into the scene and immediately rewound: the only way to know what
+    // gun_build emits is to let it emit. Axis-aligned, so a vertex's position
+    // IS its model coordinate.
+    int f0 = g_scene_floats, want0 = g_scene_want;
+    float gg = g_gun_girth;
+    g_gun_girth = GUN_GIRTH_3P;
+    gun_build(w, (v3){{0, 0, 0}}, (v3){{1, 0, 0}}, (v3){{0, 1, 0}}, (v3){{0, 0, 1}},
+              0.0f, 0.0f, 0.0f);
+    g_gun_girth = gg;
+    v3 lo = {{1e9f, 1e9f, 1e9f}}, hi = {{-1e9f, -1e9f, -1e9f}};
+    for (int f = f0; f + VERT_FLOATS <= g_scene_floats; f += VERT_FLOATS)
+      for (int k = 0; k < 3; k++) {
+        float v = g_scene[f + k];
+        if (v < lo.e[k]) lo.e[k] = v;
+        if (v > hi.e[k]) hi.e[k] = v;
+      }
+    g_scene_floats = f0;
+    g_scene_want = want0;
+    if (hi.x < lo.x) { *mn = lo; *mx = hi; return; }   // scene full: next frame
+    bmn[w] = lo; bmx[w] = hi; have[w] = 1;
+  }
+  *mn = bmn[w]; *mx = bmx[w];
+}
+// A weapon frame: origin and the three axes gun_build takes (rt = fw x up is
+// the pose frame's own convention, see pose_gun_frame).
+typedef struct { v3 o, rt, up, fw; } gframe_t;
+// Place weapon `w` so its measured BOX CENTRE sits at `c` with axes fw/up.
+static gframe_t gframe_at(int w, v3 c, v3 fw, v3 up) {
+  v3 mn, mx;
+  gun_box(w, &mn, &mx);
+  gframe_t f;
+  f.fw = v3_norm(fw);
+  f.up = v3_norm(v3_sub(up, v3_scale(f.fw, v3_dot(up, f.fw))));
+  f.rt = v3_norm(v3_cross(f.fw, f.up));
+  v3 bc = {{0.5f * (mn.x + mx.x), 0.5f * (mn.y + mx.y), 0.5f * (mn.z + mx.z)}};
+  if (mx.x < mn.x) bc = (v3){{0, 0, 0}};
+  f.o = v3_sub(c, v3_add(v3_scale(f.rt, bc.x),
+                 v3_add(v3_scale(f.up, bc.y), v3_scale(f.fw, bc.z))));
+  return f;
+}
+static v3 gframe_centre(int w, const gframe_t *f) {
+  v3 mn, mx;
+  gun_box(w, &mn, &mx);
+  if (mx.x < mn.x) return f->o;
+  return v3_add(f->o, v3_add(v3_scale(f->rt, 0.5f * (mn.x + mx.x)),
+                v3_add(v3_scale(f->up, 0.5f * (mn.y + mx.y)),
+                       v3_scale(f->fw, 0.5f * (mn.z + mx.z)))));
+}
+// The pistol in the drop-leg holster on the strong-side thigh: muzzle down the
+// leg, slide forward, its thin axis pointing OUT of the leg, and the SLIDE
+// seated in the holster body (the rig the leg already carries — same `out`
+// cant, same stand-off from the thigh's across radius) so only the grip shows
+// above and behind it. Recomputed from the pose alone, so the swap animation
+// can fly the pistol to exactly where the leg builder draws it.
+static gframe_t holster_frame(const pose_t *P, v3 spine) {
+  v3 prt = v3_norm(v3_sub(P->hip[1], P->hip[0]));
+  v3 td = v3_sub(P->knee[1], P->hip[1]);
+  td = v3_dot(td, td) > 1e-6f ? v3_norm(td) : v3_scale(spine, -1.0f);
+  v3 pfw = v3_norm(v3_cross(spine, prt));
+  v3 out = v3_add(v3_scale(prt, 0.97f), v3_scale(pfw, 0.24f));
+  out = v3_sub(out, v3_scale(td, v3_dot(out, td)));
+  out = v3_dot(out, out) > 1e-6f ? v3_norm(out) : prt;
+  float r = 0.5f * (fig_rmax(8, 0.0900f, 0.0900f) + fig_rmax(8, 0.0855f, 0.0855f));
+  v3 fwd = v3_cross(out, td);                 // along the leg's front, either way
+  if (v3_dot(fwd, pfw) < 0.0f) fwd = v3_scale(fwd, -1.0f);
+  v3 mn, mx;
+  gun_box(WPN_PT, &mn, &mx);
+  float cu = mx.x > mn.x ? 0.5f * (mn.y + mx.y) - (mx.y - 0.022f) : -0.04f;
+  v3 c = v3_add(P->hip[1], v3_add(v3_scale(out, r + 0.004f),
+                v3_add(v3_scale(td, 0.112f), v3_scale(fwd, cu))));
+  return gframe_at(WPN_PT, c, td, fwd);
+}
+// How far behind the chest node the back's outer surface is, for what he wears.
+static float fig_back_depth(void) {
+  return FIG_PACK == PACK_ASSAULT ? 0.236f : FIG_VEST == VEST_CARRIER ? 0.172f : 0.150f;
+}
+// WHERE EACH WEAPON LIVES WHEN IT IS NOT IN THE HANDS — the carry the
+// reference loadout shows: the carbine down the middle of the back, MUZZLE
+// DOWN with the stock standing up behind the neck; the sniper down the left
+// side of the pack, muzzle down, scope facing back; the pistol in the drop-leg
+// holster (built with the leg, see the drop-leg rig). Returns 0 for a weapon
+// with no carry slot (knife, grenade).
+static int stow_frame(const pose_t *P, v3 Rc, v3 spine, int w, gframe_t *f) {
+  v3 cfw = v3_norm(v3_cross(spine, Rc));
+  v3 mn, mx;
+  gun_box(w, &mn, &mx);
+  float half_rt = mx.x > mn.x ? 0.5f * (mx.x - mn.x) : 0.03f;
+  if (w == WPN_AR) {
+    float back = fig_back_depth();
+    v3 fw = v3_norm(v3_add(v3_scale(spine, -1.0f), v3_scale(Rc, 0.07f)));
+    v3 c = v3_add(P->chest, v3_add(v3_scale(spine, -0.120f),
+                  v3_scale(cfw, -(back + half_rt + 0.004f))));
+    // The BORE down the spine, not the box centre: the magazine hangs off
+    // one side of the bore, so a centred box sits the rifle 45 mm off-line.
+    if (mx.x > mn.x) c = v3_add(c, v3_scale(Rc, 0.5f * (mn.y + mx.y)));
+    // ...then off the spine to his RIGHT, over the right shoulder blade: dead
+    // centre the stock stood straight up behind the head and hid it.
+    c = v3_add(c, v3_scale(Rc, 0.085f));
+    *f = gframe_at(w, c, fw, Rc);          // sights to his right, magazine left
+    return 1;
+  }
+  if (w == WPN_SR) {
+    // Down the LEFT flank, behind the arm's swing and outboard of the pack's
+    // side pouches, splayed a few degrees so the muzzle clears the thigh.
+    // Tucked against the pack's left rear corner (or the back's), not hung
+    // out past the arm: 0.19 m out with a 10% splay left a hand's width of
+    // air between the rifle and the body from behind.
+    v3 fw = v3_norm(v3_add(v3_scale(spine, -1.0f), v3_scale(Rc, -0.03f)));
+    float side = FIG_PACK == PACK_ASSAULT ? 0.128f : 0.118f;
+    float dep = FIG_PACK == PACK_ASSAULT ? 0.165f : 0.125f;
+    v3 c = v3_add(P->chest, v3_add(v3_scale(spine, -0.210f),
+                  v3_add(v3_scale(Rc, -(side + half_rt)), v3_scale(cfw, -dep))));
+    *f = gframe_at(w, c, fw, v3_scale(cfw, -1.0f));   // scope faces back
+    return 1;
+  }
+  return 0;
+}
+// The two long guns not in the hands, in their slots, and the carbine's strap:
+// from the stock swivel behind the neck over the left shoulder, across the
+// chest, and round the right hip to the lower swivel.
+static void fig_stowed(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine, int hold) {
+  int ent = g_fig_ent;
+  v3 cfw = v3_norm(v3_cross(spine, Rc));
+  for (int w = WPN_AR; w <= WPN_SR; w++) {
+    if (w == hold) continue;
+    if (ent >= 0 && !mode_allowed(ent, w)) continue;
+    gframe_t f;
+    if (!stow_frame(P, Rc, spine, w, &f)) continue;
+    probe("stow_gun");
+    float gg = g_gun_girth;
+    g_gun_girth = GUN_GIRTH_3P;
+    gun_build(w, f.o, f.rt, f.up, f.fw, 0.0f, 0.0f, 0.0f);
+    g_gun_girth = gg;
+    v3 mn, mx;
+    gun_box(w, &mn, &mx);
+    if (mx.x < mn.x) continue;
+    float half_rt = 0.5f * (mx.x - mn.x);
+    v3 cen = gframe_centre(w, &f);
+    float len = mx.z - mn.z;
+    mat_set(MAT_GEAR_R, 0.0f);
+    v3 sc = v3_scale(kt->web, 1.05f);
+    #define SP(X, Y, Z) v3_add(P->chest, v3_add(v3_scale(Rc, (X)), \
+                        v3_add(v3_scale(spine, (Y)), v3_scale(cfw, (Z)))))
+    float front = FIG_VEST == VEST_CARRIER ? 0.205f : FIG_VEST == VEST_RIG ? 0.180f : 0.160f;
+    float back = fig_back_depth();
+    if (w == WPN_AR) {
+      // fw points DOWN here, so the stock end is -fw.
+      v3 top = v3_add(cen, v3_add(v3_scale(f.fw, -0.36f * len), v3_scale(cfw, half_rt)));
+      v3 bot = v3_add(cen, v3_add(v3_scale(f.fw, 0.20f * len), v3_scale(cfw, half_rt)));
+      float ptop = FIG_PACK == PACK_ASSAULT ? 0.100f : 0.080f;
+      fnode_t st[8] = {
+        {top, sc, sc, 0.0045f, 0.017f, 0, 0.0f},
+        {SP(-0.090f, ptop + 0.012f, -(back - 0.012f)), sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {SP(-0.112f, 0.122f, -0.090f), sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {SP(-0.112f, 0.140f,  0.020f), sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {SP(-0.098f, 0.070f, front),   sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {SP(0.0f, -0.120f, front + 0.004f), sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {SP(0.150f, -0.330f, front - 0.030f), sc, sc, 0.0045f, 0.018f, 0, 0.0f},
+        {bot, sc, sc, 0.0045f, 0.017f, 0, 0.0f}};
+      probe("stow_strap");
+      fig_chain(st, 8, 8, 1, 1, cfw);
+    } else {
+      // The sniper rides on a short loop off the pack's left shoulder strap.
+      v3 top = v3_add(cen, v3_scale(f.fw, -0.30f * len));
+      fnode_t st[3] = {
+        {top, sc, sc, 0.0045f, 0.016f, 0, 0.0f},
+        {SP(-0.150f, 0.050f, -0.110f), sc, sc, 0.0045f, 0.017f, 0, 0.0f},
+        {SP(-0.118f, 0.110f, -0.050f), sc, sc, 0.0045f, 0.017f, 0, 0.0f}};
+      probe("stow_strap");
+      fig_chain(st, 3, 8, 1, 1, Rc);
+    }
+    #undef SP
+  }
+}
+
+// THE THIRD-PERSON WEAPON SWAP. The simulation swaps in 0.3 s and knows
+// nothing of where a gun is kept; this is presentation only, per entity, on
+// its own clock. Phase A puts the old weapon AWAY (hands carry it from the
+// ready to its slot and let go), phase B DRAWS the new one (the hand reaches to
+// the slot, closes, and brings it round over the shoulder to the ready). A
+// weapon with no slot (knife, grenade) skips its phase. Any shot ends it.
+#define SWAP_A 0.32f      // seconds: stow
+#define SWAP_B 0.42f      // seconds: draw
+static int   g_sw_seen[MAX_ENTS];   // last weapon seen + 1, 0 = never
+static int   g_sw_from[MAX_ENTS];
+static float g_sw_t0[MAX_ENTS];
+static float ease3(float x) { x = f_clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); }
+// A weapon frame between two others: the box centre on a quadratic arc that
+// passes THROUGH `via` at the halfway point, axes blended and re-squared.
+static gframe_t gframe_arc(int w, const gframe_t *a, const gframe_t *b, v3 via, float k) {
+  v3 ca = gframe_centre(w, a), cb = gframe_centre(w, b);
+  v3 ctl = v3_sub(v3_scale(via, 2.0f), v3_scale(v3_add(ca, cb), 0.5f));
+  float u = 1.0f - k;
+  v3 c = v3_add(v3_scale(ca, u * u), v3_add(v3_scale(ctl, 2.0f * u * k), v3_scale(cb, k * k)));
+  v3 fw = v3_add(v3_scale(a->fw, u), v3_scale(b->fw, k));
+  v3 up = v3_add(v3_scale(a->up, u), v3_scale(b->up, k));
+  if (v3_dot(fw, fw) < 1e-4f) fw = k < 0.5f ? a->fw : b->fw;
+  v3 upo = v3_sub(up, v3_scale(v3_norm(fw), v3_dot(up, v3_norm(fw))));
+  if (v3_dot(upo, upo) < 1e-4f) up = v3_add(up, v3_scale(a->rt, 0.3f));
+  return gframe_at(w, c, fw, up);
+}
+// The wrist that holds weapon `w` in frame `f` by its grip (hand 1) or its
+// fore-end (hand 0) — the same construction the sidearm branch uses.
+static v3 gframe_wrist(int w, const gframe_t *f, int hand) {
+  v3 gc, ga; float gr;
+  if (hand) {
+    gun_hold(w, GH_GRIP, f->o, f->rt, f->up, f->fw, &gc, &ga, &gr);
+    v3 br = v3_sub(v3_scale(f->fw, -1.0f), v3_scale(ga, -v3_dot(f->fw, ga)));
+    br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : v3_scale(f->up, -1.0f);
+    return v3_add(gc, v3_add(v3_scale(ga, -0.046f * GUN_GIRTH_3P), v3_scale(br, gr + 0.066f)));
+  }
+  gun_hold(w, GH_FORE3, f->o, f->rt, f->up, f->fw, &gc, &ga, &gr);
+  v3 br = v3_norm(v3_add(v3_scale(f->rt, -0.62f), v3_scale(f->up, -0.78f)));
+  return v3_add(gc, v3_add(v3_scale(ga, -0.040f), v3_scale(br, gr + 0.066f)));
+}
+
 static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
                               const death_t *dth, float alpha,
                               float flash01, v3 flash_col, int palette, int wpn,
@@ -34714,6 +35619,34 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   v3 Rc = v3_norm(P.right);
   v3 spine = v3_norm(v3_sub(P.chest, P.pelvis));
   v3 prt = v3_norm(v3_sub(P.hip[1], P.hip[0]));      // pelvis right
+  // THE WEAPON SWAP (see SWAP_A): which weapon is in the hands this frame and
+  // how far through putting one away / drawing one he is.
+  int living = !dth || dth->slack <= 0.0001f;
+  int hold = wpn, sw_phase = 0;
+  float sw_k = 0.0f;
+  // Carried kit is drawn for the local player always and for anyone else only
+  // inside 12 m — it is a rifle and a half of vertices per figure.
+  int carry = living && g_fig_ent >= 0 && g_fig_ent < MAX_ENTS &&
+              (g_fig_ent == g_local_ent || g_fig_k >= 12);
+  if (living && g_fig_ent >= 0 && g_fig_ent < MAX_ENTS) {
+    int e = g_fig_ent;
+    float now = ((float)g_tick + alpha) * TICK_DT;
+    if (g_sw_seen[e] != wpn + 1) {
+      if (g_sw_seen[e]) { g_sw_from[e] = g_sw_seen[e] - 1; g_sw_t0[e] = now; }
+      else g_sw_t0[e] = -1e9f;
+      g_sw_seen[e] = wpn + 1;
+    }
+    if (gs.trig > 0.05f) g_sw_t0[e] = -1e9f;   // a shot ends it at once
+    int from = g_sw_from[e];
+    float t = now - g_sw_t0[e];
+    float da = (from == WPN_AR || from == WPN_SR || from == WPN_PT) ? SWAP_A : 0.0f;
+    float db = (wpn == WPN_AR || wpn == WPN_SR || wpn == WPN_PT) ? SWAP_B : 0.0f;
+    if (carry && from != wpn && t >= 0.0f && t < da + db) {
+      if (t < da) { sw_phase = 1; sw_k = t / da; hold = from; }
+      else        { sw_phase = 2; sw_k = (t - da) / db; }
+    }
+  }
+  int holster_pt = carry && hold != WPN_PT && mode_allowed(g_fig_ent, WPN_PT);
 
   fig_torso(&P, &kt, Rc, spine, prt);
   // Neck + head + helmet, all in the look frame. The neck sinks into both the
@@ -34827,7 +35760,8 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
         fig_chain(er, 2, 8, 1, 1, hu);
       }
     }
-    if (ins) {
+    int head = FIG_HEAD;
+    if (head == HEAD_WRAP) {
       // THE HEAD WRAP. Five rings over the crown, each 9-15 mm clear of the
       // skull station under it and on the skull's own fore/aft centre line, so
       // the two surfaces never run parallel; the bottom cap meets the skull at
@@ -34861,6 +35795,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       fig_chain(tw3, 4, 8, 1, 1, hr);
       g_fig_jit = 1.0f;
     } else {
+      if (head == HEAD_HELMET) {
       mat_set(MAT_HELM_R, 0.0f);           // helmet: a hard shell, not cloth
       // THE BUCKET, diagnosed by reading the radii rather than the screenshot.
       // The old shell held rx between 0.088 and 0.093 from hu -0.024 all the way
@@ -34939,6 +35874,44 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
         probe("helm_ear");
         fig_chain(er, 2, 8, 1, 1, hu);
       }
+      }   // head == HEAD_HELMET
+      if (head == HEAD_CAP) {
+        // THE CAP: a soft crown fitted over the skull and a stiff bill. Each
+        // crown ring stands 9-12 mm clear of the skull station under it, on the
+        // skull's own fore/aft centre line (the helmet's rule: two surfaces that
+        // never run parallel never seam). It sits HIGH, above the eye line, so
+        // the dark slit of the balaclava under it carries the face; no goggles —
+        // a band over the brow would cross the crown's lowest ring.
+        mat_set(MAT_CLOTH_R, 0.0f);
+        g_fig_jit = 0.45f;
+        v3 cdk = v3_scale(kt.helm, 0.86f);
+        fnode_t cp[6] = {
+          {HP(0, 0.008f, -0.012f), cdk, kt.helm, 0.0780f, 0.0960f, 0, 0.55f},  // buried root
+          {HP(0, 0.022f, -0.011f), kt.helm, kt.helm, 0.0900f, 0.1080f, 0, 0.0f},  // the band
+          {HP(0, 0.050f, -0.013f), kt.helm, kt.helm, 0.0880f, 0.1050f, 0, 0.0f},
+          {HP(0, 0.088f, -0.019f), kt.helm, kt.helm, 0.0790f, 0.0950f, 0, 0.0f},
+          {HP(0, 0.118f, -0.025f), kt.helm, kt.helm, 0.0590f, 0.0720f, 0, 0.0f},
+          {HP(0, 0.134f, -0.027f), kt.helm, kt.helm, 0.0280f, 0.0340f, 0, 0.0f}};
+        probe("cap_crown");
+        fig_chain(cp, 6, 8, 1, 1, hr);
+        // The bill: a thin flat plate out of the band's front, rooted 20 mm
+        // inside the crown and pitched a few degrees down, as a worn bill is.
+        v3 bill = v3_scale(kt.helm, 0.78f);
+        fnode_t bl[4] = {
+          {HP(0, 0.026f, 0.070f), bill, bill, 0.060f, 0.0070f, 0, 0.0f},
+          {HP(0, 0.024f, 0.104f), bill, bill, 0.068f, 0.0065f, 0, 0.0f},
+          {HP(0, 0.018f, 0.142f), bill, bill, 0.064f, 0.0060f, 0, 0.0f},
+          {HP(0, 0.012f, 0.166f), bill, bill, 0.046f, 0.0055f, 0, 0.0f}};
+        probe("cap_bill");
+        fig_chain(bl, 4, 8, 1, 1, hr);
+        // ...and the button on top, so the crown has a centre.
+        fnode_t bt[2] = {
+          {HP(0, 0.132f, -0.027f), cdk, cdk, 0.012f, 0.012f, 0, 0.0f},
+          {HP(0, 0.142f, -0.027f), cdk, cdk, 0.009f, 0.009f, 0, 0.0f}};
+        probe("cap_button");
+        fig_chain(bt, 2, 8, 1, 1, hr);
+        g_fig_jit = 1.0f;
+      }
       // Visor: ONE box spanning exactly the skull's flat front facet, which is
       // 2*0.42*rx wide for the chamfered profile. Two earlier attempts failed for
       // opposite reasons and both are worth remembering: a shallow bar sinks into
@@ -34955,7 +35928,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // whatever curve its nodes describe, and its ends bury themselves under the
       // helmet's ear covers.
       mat_set(MAT_GLASS_R, 0.0f);          // ballistic lens: the one wet gleam
-      {
+      if (head != HEAD_CAP) {
         // Re-fitted to the deeper skull. The face front at eye height moved from
         // 0.076 to 0.087, which would have left the whole band 11 mm INSIDE the
         // face — a goggle you cannot see is worse than none, because the geometry
@@ -35003,6 +35976,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // Chin strap: two thin runs from the ear covers down under the jaw. Nothing
       // says "helmet" like the thing that holds it on.
       mat_set(MAT_GEAR_R, 0.0f);
+      if (head == HEAD_HELMET) {
       for (int e = 0; e < 2; e++) {
         float es = e ? 1.0f : -1.0f;
         fnode_t cs[3] = {
@@ -35029,6 +36003,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
         fig_chain(nv, 3, 8, 1, 1, hr);
         g_fig_jit = 1.0f;
       }
+      }   // head == HEAD_HELMET: chin strap and NVG shroud
     }
     #undef HP
   }
@@ -35196,6 +36171,35 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // a plain turn-in-place, which is most of why the seam wandered. `out` is
       // perpendicular to td by construction and can never degenerate.
       fig_chain(dl, 4, 8, 1, 1, out);
+      // LEG STRAPS: two webbing bands round the thigh that the holster hangs
+      // from — on the thigh's own axis and hint, so their profile is the
+      // thigh's profile 4% out, and they can never cross it.
+      {
+        const float su[2] = {0.20f, 0.40f};
+        const float srx[2] = {0.0898f, 0.0864f}, srz[2] = {0.1083f, 0.1035f};
+        v3 stc = v3_scale(kt.web, 1.10f);
+        // Not on the coarsest tier (past 22 m): there the thigh is a 6-gon
+        // whose flats the strap's own 6-gon crosses at a shallow angle, and a
+        // 28 mm band is under a pixel at that range anyway.
+        for (int q = 0; q < (g_fig_k > 6 ? 2 : 0); q++) {
+          v3 c0 = v3_add(P.hip[i], v3_scale(thv, su[q]));
+          fnode_t sb[2] = {
+            {v3_add(c0, v3_scale(td, -0.014f)), stc, stc, srx[q] * 1.045f, srz[q] * 1.045f, 0, 0.0f},
+            {v3_add(c0, v3_scale(td, 0.014f)), stc, stc, srx[q] * 1.045f, srz[q] * 1.045f, 0, 0.0f}};
+          probe("legstrap");
+          fig_chain(sb, 2, 8, 1, 1, prt);
+        }
+      }
+      // ...and the pistol in it, when it is not in his hand.
+      if (holster_pt) {
+        gframe_t hf = holster_frame(&P, spine);
+        probe("holster_gun");
+        float gg = g_gun_girth;
+        g_gun_girth = GUN_GIRTH_3P;
+        gun_build(WPN_PT, hf.o, hf.rt, hf.up, hf.fw, 0.0f, 0.0f, 0.0f);
+        g_gun_girth = gg;
+        mat_set(MAT_GEAR_R, 0.0f);
+      }
     }
     mat_set(MAT_LEATHER_R, 0.0f);   // boot + cuff
     // Boot: swept along the actual foot axis (which carries the toe pitch), so
@@ -35557,16 +36561,85 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, pole0);
     P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, pole1);
   }
+  if (sw_phase) {
+    // Fly the weapon in the hands between the ready and its carry slot, and
+    // the hands with it. gk is the GUN (0 = at the ready, 1 = seated); the
+    // trigger hand holds the grip near the ready and the STOCK near the slot
+    // (the grip of a rifle on a man's back is out of his reach, the butt
+    // standing up behind his neck is not), the support hand only near the
+    // ready. Off the gun, a hand closes on nothing (g_fig_free).
+    int w = hold;
+    gframe_t S, H;
+    int ok = 1;
+    if (w == WPN_PT) S = holster_frame(&P, spine);
+    else ok = stow_frame(&P, Rc, spine, w, &S);
+    pose_gun_frame(&P, w, &H.o, &H.rt, &H.up, &H.fw);
+    if (ok) {
+      v3 cfw = v3_norm(v3_cross(spine, Rc));
+      v3 via = w == WPN_AR
+             ? v3_add(P.sho[1], v3_add(v3_scale(spine, 0.17f), v3_scale(Rc, -0.05f)))
+             : w == WPN_SR
+             ? v3_add(P.chest, v3_add(v3_scale(spine, 0.06f),
+                      v3_add(v3_scale(Rc, -0.12f), v3_scale(cfw, 0.24f))))
+             : v3_add(P.hip[1], v3_add(v3_scale(spine, 0.20f),
+                      v3_add(v3_scale(cfw, 0.16f), v3_scale(Rc, 0.08f))));
+      float gk, att, sup;
+      if (sw_phase == 1) {
+        gk  = ease3(sw_k / 0.78f);
+        att = 1.0f - ease3((sw_k - 0.80f) / 0.20f);
+        sup = 1.0f - ease3(sw_k / 0.30f);
+      } else {
+        gk  = 1.0f - ease3((sw_k - 0.26f) / 0.74f);
+        att = ease3(sw_k / 0.26f);
+        sup = ease3((sw_k - 0.72f) / 0.28f);
+      }
+      gframe_t F = gframe_arc(w, &H, &S, via, gk);
+      g_org = F.o; g_rt = F.rt; g_up = F.up; g_fw = F.fw;
+      v3 fin0 = P.wri[0], fin1 = P.wri[1];
+      v3 rest1 = v3_add(P.chest, v3_add(v3_scale(Rc, 0.17f),
+                  v3_add(v3_scale(spine, -0.20f), v3_scale(cfw, 0.08f))));
+      v3 rest0 = v3_add(P.chest, v3_add(v3_scale(Rc, -0.17f),
+                  v3_add(v3_scale(spine, -0.20f), v3_scale(cfw, 0.08f))));
+      v3 grip = gframe_wrist(w, &F, 1);
+      if (w != WPN_PT) {
+        v3 mn, mx;
+        gun_box(w, &mn, &mx);
+        v3 stock = v3_add(F.o, v3_add(v3_scale(F.fw, mn.z * 0.80f),
+                          v3_scale(F.up, 0.5f * (mn.y + mx.y))));
+        grip = v3_lerp(grip, v3_add(stock, v3_scale(spine, 0.03f)), ease3((gk - 0.25f) / 0.6f));
+      }
+      v3 w1 = v3_lerp(rest1, grip, att);
+      v3 w0 = v3_lerp(rest0, gframe_wrist(w, &F, 0), sup);
+      // The last stretch of the draw lands on the pose's OWN hold, so there is
+      // no pop where the animation hands back to the ordinary carry.
+      if (sw_phase == 2) {
+        float e = ease3((sw_k - 0.82f) / 0.18f);
+        w1 = v3_lerp(w1, fin1, e);
+        w0 = v3_lerp(w0, fin0, e);
+      }
+      P.wri[1] = w1;
+      P.wri[0] = w0;
+      g_fig_free = (att < 0.5f || (w != WPN_PT && gk > 0.55f) ? 2 : 0) | (sup < 0.5f ? 1 : 0);
+      v3 p0 = v3_add(v3_scale(Rc, -0.7f), v3_scale(spine, -0.8f));
+      v3 p1 = v3_add(v3_scale(Rc, 0.7f), v3_scale(spine, -0.8f));
+      P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, p0);
+      P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, p1);
+    } else {
+      sw_phase = 0;
+      hold = wpn;
+    }
+  }
+  if (hold != wpn) { mag01 = 0.0f; trig01 = 0.0f; }
   {
     probe("gun");
     int gv0 = g_scene_floats;
-    gun_build(wpn, g_org, g_rt, g_up, g_fw, mag01, trig01, gs.bolt);
+    gun_build(hold, g_org, g_rt, g_up, g_fw, mag01, trig01, hold == wpn ? gs.bolt : 0.0f);
     // Publish the model's own below-origin depth, once per weapon per session.
     // Gated on the magazine being HOME (a reload has it 60 mm out, which would
     // record the animation instead of the model) and on a figure that is not
     // dissolving (fig_diss_cut drops whole parts, and a missing magazine
     // measures as a shallow rifle).
-    if (g_gun_low[wpn] == 0.0f && mag01 <= 0.001f && g_fig_diss == 0.0f &&
+    if (!sw_phase && g_gun_low[wpn] == 0.0f && mag01 <= 0.001f && g_fig_diss == 0.0f &&
         gs.arc <= 0.001f) {
       // Relative to the POSE ANCHOR `P.gun_o`, not to `g_org`: pose_gun_frame
       // puts GUN_GRIP between the two, and the death pose can only place the
@@ -35586,8 +36659,14 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       if (lo < 0.0f) g_gun_low[wpn] = -lo / g_gun_girth;
     }
   }
-  fig_arms(&P, &kt, Rc, spine, g_org, g_rt, g_up, g_fw, wpn,
+  fig_arms(&P, &kt, Rc, spine, g_org, g_rt, g_up, g_fw, hold,
            A->slide_s, A->slide_dir);
+  g_fig_free = 0;
+  // The long guns he is not holding, on his back. Living figures only (a
+  // corpse's drape would have to carry them too), and for a bot only inside
+  // 12 m: a slung rifle is ~one more rifle of vertices, and a full brawl's
+  // budget is spent on the figures that matter, not on far backs.
+  if (carry) fig_stowed(&P, &kt, Rc, spine, hold);
   g_gun_girth = 1.0f;
   probe(NULL);
   ao_off();
@@ -35620,8 +36699,10 @@ static void scene_draw_bot(const bot_t *b, float alpha) {
   g_fig_var = (int)(b - g_bots) & 3;              // entity id - 1
   g_fig_team = fig_team_of((int)(b - g_bots) + 1);
   g_fig_ins = fig_ins_of((int)(b - g_bots) + 1);
+  g_fig_ent = (int)(b - g_bots) + 1;
   scene_draw_figure(&b->anim, pos, yaw, &dth, alpha, flash01, fc, 0, b->wp.cur,
                     gun_anim(&b->wp, alpha));
+  g_fig_ent = -1;
   g_fig_var = 0;
   g_fig_team = -1;
   g_fig_ins = 0;
@@ -36208,6 +37289,9 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_team = fig_team_of(ent_of_human(h));
     g_fig_ins = fig_ins_of(ent_of_human(h));
     g_fig_var = ent_of_human(h) & 3;
+    g_fig_gear = local ? armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT) : -1;
+    fig_own_pieces(local);
+    g_fig_ent = ent_of_human(h);
     scene_draw_figure(&g_player_anim[h], v3_lerp(hp->prev_pos, hp->pos, alpha),
                       hp->yaw, NULL, alpha, ent_flash01(hp->flash, hp->flash_head),
                       hp->flash_head ? (v3){{1.0f, 0.22f, 0.14f}} : (v3){{1, 1, 1}},
@@ -36215,6 +37299,9 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_team = -1;
     g_fig_ins = 0;
     g_fig_var = 0;
+    g_fig_gear = -1;
+    fig_own_pieces(0);
+    g_fig_ent = -1;
   }
   for (int i = 0; i < g_match.nbots; i++)
     if (g_bots[i].active) scene_draw_bot(&g_bots[i], alpha);
@@ -36242,11 +37329,16 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_var = cp->owner > 0 ? (cp->owner - 1) & 3 : 0;
     g_fig_team = fig_team_of(cp->owner);
     g_fig_ins = fig_ins_of(cp->owner);
+    g_fig_gear = cp->owner == g_local_ent && cp->pal == 1
+               ? armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT) : -1;
+    fig_own_pieces(g_fig_gear >= 0);
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
     g_fig_var = 0;
     g_fig_team = -1;
     g_fig_ins = 0;
+    g_fig_gear = -1;
+    fig_own_pieces(0);
   }
   g_fig_diss = 0.0f;
   g_fig_kcap = 0;
@@ -47137,12 +48229,20 @@ static void run_script(char *script, sim_ctx_t *s) {
       long n = next_n();
       int *dst = !strcmp(what, "knife") ? &g_cfg.knife_model
                : !strcmp(what, "theme") ? &g_cfg.wpn_theme
-               : !strcmp(what, "gear")  ? &g_cfg.gear_theme : NULL;
+               : !strcmp(what, "gear")  ? &g_cfg.gear_theme
+               : !strcmp(what, "head")  ? &g_cfg.head_gear
+               : !strcmp(what, "vest")  ? &g_cfg.vest_gear
+               : !strcmp(what, "pack")  ? &g_cfg.pack_gear : NULL;
       int cnt = dst == &g_cfg.knife_model ? KNIFE_MODEL_COUNT
-              : dst == &g_cfg.wpn_theme   ? WPN_THEME_COUNT : GEAR_THEME_COUNT;
+              : dst == &g_cfg.wpn_theme   ? WPN_THEME_COUNT
+              : dst == &g_cfg.head_gear   ? HEAD_GEAR_COUNT
+              : dst == &g_cfg.vest_gear   ? VEST_GEAR_COUNT
+              : dst == &g_cfg.pack_gear   ? PACK_GEAR_COUNT : GEAR_THEME_COUNT;
       if (!dst || n < 0 || n >= cnt) {
-        fprintf(stderr, "script: armory knife 0-%d | theme 0-%d | gear 0-%d\n",
-                KNIFE_MODEL_COUNT - 1, WPN_THEME_COUNT - 1, GEAR_THEME_COUNT - 1);
+        fprintf(stderr, "script: armory knife 0-%d | theme 0-%d | gear 0-%d"
+                " | head 0-%d | vest 0-%d | pack 0-%d\n",
+                KNIFE_MODEL_COUNT - 1, WPN_THEME_COUNT - 1, GEAR_THEME_COUNT - 1,
+                HEAD_GEAR_COUNT - 1, VEST_GEAR_COUNT - 1, PACK_GEAR_COUNT - 1);
         exit(1);
       }
       *dst = (int)n;

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/hero.jpg" alt="The mosque, its minaret and dome over the courtyard on Citadel at dusk" width="832">
+  <img src="media/hero.jpg" alt="An operator in third person on Citadel at dusk, pistol drawn, both rifles slung on his back, the minaret behind" width="832">
 </p>
 
 <h1 align="center">BlindDrop</h1>
@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="media/sniper.jpg" alt="Looking over Citadel's rooftops from the top of the minaret" width="49%">
-  <img src="media/harbor.jpg" alt="The container yard and lighthouse from Harbor's crane walkway" width="49%">
-  <img src="media/refinery.jpg" alt="Refinery's rooftops and cooling tower from the distillation-column deck" width="49%">
-  <img src="media/citadel.jpg" alt="The souk street on Citadel" width="49%">
+  <img src="media/foundry.jpg" alt="Foundry: furnace stacks, the overhead crane, the railed gantry and the shed roofs under a storm sky" width="49%">
+  <img src="media/bazaar.jpg" alt="Bazaar: a firefight in the fountain square under striped canopies and palms at golden hour" width="49%">
+  <img src="media/outpost.jpg" alt="Outpost: T-wall blast barriers, the sandbagged watchtower and a fight down the middle lane" width="49%">
+  <img src="media/harbor.jpg" alt="Harbor's rooftops and lighthouse from above the warehouses" width="49%">
 </p>
 
 ## The game
@@ -35,18 +35,39 @@
 - **Two forces you can tell apart by shape:** you and your side are operators (helmet, goggles,
   plate carrier, pack); whoever you're fighting are insurgents (head wrap, face scarf, light chest
   rig, no armour), on every map and in every mode. Team games keep their red and blue on top.
-- **Armory:** five knives, eleven weapon themes and glove colourways (first-person looks only), plus
-  the weapon's field of view and a lower hip position.
+- **Third person (`V`):** your operator wears the outfit you pick, carries the rifles he isn't using
+  on his back and the pistol in a thigh holster, and stows one weapon and draws the next when you switch.
+- **Armory:** five knives and eleven weapon themes; five outfit colourways with a choice of headgear,
+  vest and pack for your operator; the weapon's field of view and a lower hip position.
 - **Match summary and career:** your headshots and best run each match, lifetime totals in `config.cfg`.
 - **No engine and no asset files:** maps, models and every sound are generated in code, with
   physically based materials, soft shadows, ambient occlusion, light shafts and lit windows at dusk.
+
+## Your operator
+
+<p align="center">
+  <img src="media/outfits.jpg" alt="Five operators side by side: slate with helmet and plate carrier, coyote with a cap and chest rig, ranger with a head wrap, shadow bare-headed with no vest, arctic with a helmet" width="49%">
+  <img src="media/carry.jpg" alt="An operator from behind with the pistol drawn: the sniper down the left of the pack, the carbine on the right, the pistol holster strapped to the thigh" width="49%">
+  <img src="media/swap.jpg" alt="Five frames of a weapon switch: the sniper swung up and stowed on the left side, then the carbine pulled over the right shoulder to the ready" width="49%">
+  <img src="media/armory.jpg" alt="The Armory page: knife, weapon theme, outfit, headgear, vest and pack" width="49%">
+</p>
+
+Pick your look under **Armory > Gear**: **OUTFIT** (slate, coyote, ranger, shadow, arctic) colours the
+whole kit, from fatigues and plate carrier to helmet, gloves and goggles; **HEADGEAR** is a helmet,
+cap, head wrap or bare; **VEST** a plate carrier, chest rig or none; **PACK** an assault pack or none.
+Press `V` for the shoulder camera. The carbine rides on your back, the sniper down your left side and
+the pistol in a drop-leg holster; switching weapons puts the old one away and draws the new one,
+over the shoulder for a rifle and from the holster for the pistol. It is all looks: nothing here
+changes how a weapon handles, and in team games your side's colours stay on top.
 
 ## Maps and modes
 
 | Map | |
 |---|---|
 | **Arena** | Procedural: a new layout and sky every match. |
-| **Foundry**, **Bazaar**, **Outpost** | Handmade 48 m arenas: a gantry and side halls, a market square with rooftops, long sniper lanes. |
+| **Foundry** | Handmade 48 m steelworks yard: furnace stacks, a railed gantry, an overhead crane, roofed sheds, containers and a conveyor. |
+| **Bazaar** | Handmade 48 m market quarter: houses with rooftops, striped canopies over the streets, stalls, palms and a fountain square. |
+| **Outpost** | Handmade 48 m forward base: T-wall lanes, HESCO and sandbags, a watchtower, container perches, long sniper lines. |
 | **Citadel** | 104 m desert old town: a domed mosque, a climbable minaret, arched gates and rooftop stairs. |
 | **Harbor** | 104 m waterfront: brick warehouses, stacked containers, a crane walkway, a lighthouse and ladders up to the rooftops. |
 | **Refinery** | 104 m industrial site: storage tanks, pipe racks over mid, a flare stack and a column lookout. |
@@ -68,9 +89,9 @@ match. A game you host has its own mode and map under **Multiplayer > Host setti
 ### Hostage Rescue
 
 <p align="center">
-  <img src="media/rescue.jpg" alt="A guard in the scope from outside the wall, growing suspicious" width="49%">
-  <img src="media/hostage.jpg" alt="Leading the freed hostages to the helicopter" width="49%">
-  <img src="media/extraction.jpg" alt="The helicopter on its pad, a tower guard above the wall" width="49%">
+  <img src="media/rescue.jpg" alt="A guard at the pen in the sniper scope, the operator still undetected" width="49%">
+  <img src="media/hostage.jpg" alt="The operator with the three freed hostages at the landing zone" width="49%">
+  <img src="media/extraction.jpg" alt="The helicopter on its pad, a guard tower behind the rotor" width="49%">
   <img src="media/compound.jpg" alt="The compound at blue hour from above the HQ" width="49%">
 </p>
 
@@ -116,8 +137,8 @@ ricochets; it is off by default and applies offline or on a server started with 
 ## Multiplayer
 
 <p align="center">
-  <img src="media/teams.jpg" alt="An ALPHA rifleman in red pushing past two downed BRAVO soldiers in blue on Citadel" width="49%">
-  <img src="media/host.jpg" alt="The Host settings page: Team Deathmatch, 5 v 5, bots fill the teams, friendly fire off" width="49%">
+  <img src="media/teams.jpg" alt="Two ALPHA riflemen in red pushing up a Citadel street past a fallen soldier" width="49%">
+  <img src="media/host.jpg" alt="The Host settings page: Team Deathmatch on Foundry, 5 v 5, bots fill the teams, friendly fire off" width="49%">
 </p>
 
 Up to 8 players per arena, with bots in the empty slots. Open **MULTIPLAYER**:
@@ -160,7 +181,7 @@ make build/game-x86_64
 ./build/game-x86_64
 ```
 
-`make dist-linux RELEASE_VERSION=v0.7` builds the redistributable binary (needs Docker). The
+`make dist-linux RELEASE_VERSION=v0.7.7` builds the redistributable binary (needs Docker). The
 first-person models come from `tools/build_models.py`, regenerated with
 `blender -b --factory-startup -P tools/build_models.py`.
 
