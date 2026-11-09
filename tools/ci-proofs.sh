@@ -343,7 +343,11 @@ WANT_NEAR="36 36 44 37"
 # fig_chain equipment: close tiers drop 2 pairs, and DIST 30 (k=6) now keeps the
 # scaled kit instead of popping it out behind g_fig_k >= 8.
 # Re-baselined with WANT_NEAR above (spawn placement, not geometry).
-WANT_CROSS="103 103 82 60"
+# -1 -1 -5 0 with the LOW-READY ELBOW (2026-11-09): in the carry the firing
+# elbow now hangs down and back instead of being driven out at shoulder height,
+# and the pose aims on a soft-limited pitch. Fewer upper-arm/torso grazes, all
+# hard invariants 0, `near` unchanged.
+WANT_CROSS="102 102 77 60"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

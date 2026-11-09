@@ -1,4 +1,6 @@
-# Tactical FPS prototype — one C23 file, three artifacts from the same source:
+# Tactical FPS prototype — one C23 translation unit (code/game.c, which
+# #includes the parts under code/<area>/ in a fixed order), three artifacts
+# from the same source:
 #   build/game.exe : Windows 11 deliverable (native window via WGL),
 #                    cross-compiled with MinGW-w64, fully static.
 #   build/game-x86_64 : the SHIPPABLE Linux binary — guaranteed x86_64
@@ -96,21 +98,27 @@ endif
 # the only target that never needs a cross compiler.
 all: build/game.exe build/game build/game-x86_64
 
+# Every source the one TU pulls in: a change to any part rebuilds all three.
+# assets/sfx/pack.bin is embedded by the assembler (.incbin, code/audio/samples.c)
+# and resolved relative to the repo root, which is where make runs the compiler.
+# Only code/game.c is ever handed to the compiler.
+SRCS := code/game.c $(wildcard code/*/*.c) code/models.h assets/sfx/pack.bin
+
 # Application icon (Windows only): windres compiles game.rc (which embeds
 # icon.ico) into an object file linked alongside the single C translation unit.
 build/game.res.o: code/game.rc code/icon.ico
 	mkdir -p build
 	$(WIN_RES) $< -o $@
 
-build/game.exe: code/game.c code/models.h build/game.res.o
+build/game.exe: $(SRCS) build/game.res.o
 	mkdir -p build
 	$(WIN_CC) $(WIN_CFLAGS) $(VERFLAG) code/game.c build/game.res.o -o $@ $(WIN_LIBS)
 
-build/game: code/game.c code/models.h
+build/game: $(SRCS)
 	mkdir -p build
 	$(LIN_CC) $(LIN_CFLAGS) $(VERFLAG) $< -o $@ $(LIN_LIBS)
 
-build/game-x86_64: code/game.c code/models.h
+build/game-x86_64: $(SRCS)
 	mkdir -p build
 	$(X86_CC) $(LIN_CFLAGS) $(VERFLAG) $< -o $@ $(LIN_LIBS)
 
@@ -118,7 +126,7 @@ build/game-x86_64: code/game.c code/models.h
 # float-cast-overflow and float-divide-by-zero are NOT in -fsanitize=undefined
 # and are exactly the classes -ffast-math makes most likely (a NaN reaching an
 # (int) cast, a zero-length normalize), so they are named explicitly.
-build/game-asan: code/game.c code/models.h
+build/game-asan: $(SRCS)
 	mkdir -p build
 	$(LIN_CC) -std=c23 -O1 -g -fsanitize=address,undefined,float-cast-overflow,float-divide-by-zero -Wall -Wextra $< -o $@ $(LIN_LIBS)
 

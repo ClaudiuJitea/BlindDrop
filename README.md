@@ -52,6 +52,13 @@
   <img src="media/armory.jpg" alt="The Armory page: knife, weapon theme, outfit, headgear, vest and pack" width="49%">
 </p>
 
+<p align="center">
+  <img src="media/grenade.jpg" alt="First person in the Bazaar market at golden hour, an olive frag grenade held upright in the gloved right hand" width="49%">
+  <img src="media/grenade3p.jpg" alt="The shoulder camera behind an operator holding a grenade up beside his helmet, elbow down and out, ready to throw" width="49%">
+  <img src="media/throw.jpg" alt="Five frames of an overhand grenade throw: the hold, cooking it by the ear, the arm drawn back behind the head, the release out front and the follow-through across the body" width="49%">
+  <img src="media/loadouts.jpg" alt="The new loadouts in first person: the AK-47 and the FAMAS, the Glock-18 and the Desert Eagle" width="49%">
+</p>
+
 Pick your look under **Armory > Gear**: **OUTFIT** (slate, coyote, ranger, shadow, arctic) colours the
 whole kit, from fatigues and plate carrier to helmet, gloves and goggles; **HEADGEAR** is a helmet,
 cap, head wrap or bare; **VEST** a plate carrier, chest rig or none; **PACK** an assault pack or none.

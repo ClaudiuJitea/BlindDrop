@@ -161,6 +161,35 @@ def emit(store, tag, extra=None):
     store[tag] = tris
     print('MODEL', tag, sum(len(v) for v in tris.values())//3, 'tris')
 
+def holo_sight(dy=0.0):
+    '''The EOTech-style holo, at the AR's station. dy lifts the whole sight (a rail
+    on a carry handle); code/figure/weapons.c adds the same lift to VM_HOLO_Y.'''
+    hz = .128
+    before_sight = set(bpy.context.collection.objects)
+    hous = prof_front([(-.0295,.0478),(.0295,.0478),(.0330,.0530),(.0312,.1035),(.0250,.1135),(-.0250,.1135),(-.0312,.1035),(-.0330,.0530)], hz-.038, hz+.048, 'holo')
+    cut(hous, prof_front([(-.0185,.0660),(.0185,.0660),(.0235,.0710),(.0235,.0990),(.0185,.1040),(-.0185,.1040),(-.0235,.0990),(-.0235,.0710)], hz-.1, hz+.1))
+    finish(hous, HOLO, .54, .08, .0032, 3)
+    finish(box((0,.0568,hz-.0406), (.0255,.0074,.0030)), BLACK, .6, 0, .0010)               # rear control plate
+    for xx, yy in ((-.0212,.0614),(.0212,.0614),(-.0212,.0522),(.0212,.0522)):
+        finish(lathe([(hz-.0458,.0024),(hz-.0426,.0024)], xx, yy, 14), STEEL, .4, 0, .0003)  # screws
+    finish(lathe([(hz-.0466,.0054),(hz-.0426,.0054)], 0, .0568, 20), DARK, .45, 0, .0005)   # dial
+    finish(box((-.0115,.0568,hz-.0438), (.0048,.0032,.0012)), DARK, .5, 0, .0003)           # buttons
+    finish(box(( .0115,.0568,hz-.0438), (.0048,.0032,.0012)), DARK, .5, 0, .0003)
+    finish(prof([(hz-.026,.0550),(hz+.052,.0550),(hz+.052,.0820),(hz+.022,.0860),(hz-.018,.0840),(hz-.026,.0760)], -.0365, -.0305, 'bat'), HOLO, .54, .08, .0022, 3)
+    finish(box((-.0370,.0685,hz-.009), (.0006,.0032,.0028)), (.58,.48,.15), .55, 0, .0002, flag=4)  # matte warning decal
+    finish(box((-.0370,.0685,hz-.002), (.0006,.0032,.0028)), (.58,.48,.15), .55, 0, .0002, flag=4)
+    finish(pin(-.0410,-.0320,.0540,hz+.030,.0072,20), DARK, .45, 0, .0007)                  # QD knob
+    finish(pin(-.0428,-.0405,.0540,hz+.030,.0038,16), STEEL, .4, 0, .0004)
+    finish(pin(-.0405,-.0320,.0540,hz-.022,.0056,16), DARK, .45, 0, .0006)
+    finish(prof([(hz-.054,.0460),(hz+.058,.0460),(hz+.058,.0490),(hz-.054,.0490)], -.0170, .0170), BLACK, .55, 0, .0008)   # mount
+    # The whole sight is drawn at full size above, then scaled down about its foot on
+    # the rail and its own centre. code/figure/weapons.c's VM_HOLO_* carry the same SIGHT_K.
+    SIGHT_K = .72
+    for o in set(bpy.context.collection.objects) - before_sight:
+        for v in o.data.vertices:
+            v.co = Vector((v.co.x*SIGHT_K, .046 + (v.co.y-.046)*SIGHT_K, hz + (v.co.z-hz)*SIGHT_K))
+            v.co.y += dy
+
 # ------------------------------------------------------------------ rifle
 def rifle():
     clear()
@@ -253,30 +282,7 @@ def rifle():
     finish(st, TAN, .60, 0, .0036, 3, group=2)
     finish(box((0,-.0030,-.247+OFS), (.0195,.0500,.0065)), BLACK, .9, 0, .0024, 2, group=2)
     # --- holographic sight: tapered EOTech-style arch hood, rear controls, compact side decal
-    hz = .128
-    before_sight = set(bpy.context.collection.objects)
-    hous = prof_front([(-.0295,.0478),(.0295,.0478),(.0330,.0530),(.0312,.1035),(.0250,.1135),(-.0250,.1135),(-.0312,.1035),(-.0330,.0530)], hz-.038, hz+.048, 'holo')
-    cut(hous, prof_front([(-.0185,.0660),(.0185,.0660),(.0235,.0710),(.0235,.0990),(.0185,.1040),(-.0185,.1040),(-.0235,.0990),(-.0235,.0710)], hz-.1, hz+.1))
-    finish(hous, HOLO, .54, .08, .0032, 3)
-    finish(box((0,.0568,hz-.0406), (.0255,.0074,.0030)), BLACK, .6, 0, .0010)               # rear control plate
-    for xx, yy in ((-.0212,.0614),(.0212,.0614),(-.0212,.0522),(.0212,.0522)):
-        finish(lathe([(hz-.0458,.0024),(hz-.0426,.0024)], xx, yy, 14), STEEL, .4, 0, .0003)  # screws
-    finish(lathe([(hz-.0466,.0054),(hz-.0426,.0054)], 0, .0568, 20), DARK, .45, 0, .0005)   # dial
-    finish(box((-.0115,.0568,hz-.0438), (.0048,.0032,.0012)), DARK, .5, 0, .0003)           # buttons
-    finish(box(( .0115,.0568,hz-.0438), (.0048,.0032,.0012)), DARK, .5, 0, .0003)
-    finish(prof([(hz-.026,.0550),(hz+.052,.0550),(hz+.052,.0820),(hz+.022,.0860),(hz-.018,.0840),(hz-.026,.0760)], -.0365, -.0305, 'bat'), HOLO, .54, .08, .0022, 3)
-    finish(box((-.0370,.0685,hz-.009), (.0006,.0032,.0028)), (.58,.48,.15), .55, 0, .0002, flag=4)  # matte warning decal
-    finish(box((-.0370,.0685,hz-.002), (.0006,.0032,.0028)), (.58,.48,.15), .55, 0, .0002, flag=4)
-    finish(pin(-.0410,-.0320,.0540,hz+.030,.0072,20), DARK, .45, 0, .0007)                  # QD knob
-    finish(pin(-.0428,-.0405,.0540,hz+.030,.0038,16), STEEL, .4, 0, .0004)
-    finish(pin(-.0405,-.0320,.0540,hz-.022,.0056,16), DARK, .45, 0, .0006)
-    finish(prof([(hz-.054,.0460),(hz+.058,.0460),(hz+.058,.0490),(hz-.054,.0490)], -.0170, .0170), BLACK, .55, 0, .0008)   # mount
-    # The whole sight is drawn at full size above, then scaled down about its foot on
-    # the rail and its own centre. code/game.c's VM_HOLO_* carry the same SIGHT_K.
-    SIGHT_K = .72
-    for o in set(bpy.context.collection.objects) - before_sight:
-        for v in o.data.vertices:
-            v.co = Vector((v.co.x*SIGHT_K, .046 + (v.co.y-.046)*SIGHT_K, hz + (v.co.z-hz)*SIGHT_K))
+    holo_sight()
     # --- forward-curved polymer PMAG (group 1 so reload moves it)
     mag = prof([(.136,-.024),(.090,-.024),(.096,-.095),(.112,-.164),(.160,-.156),(.144,-.092)], -.0106, .0106, 'mag')
     finish(mag, BLACK, .70, 0, .0020, 2, group=1)
@@ -1568,6 +1574,7 @@ def hand_pin():
     EXTRA_DEFINES.append('#define HAND_GP_OPEN  {{%s}}   /* out of the hook, toward what it holds */' % f3(opening))
 
 # ------------------------------------------------------------------ fragmentation grenade
+NADE_R = .0286    # shell radius: a hair narrower than the .035 half-height, so it reads egg-shaped
 NADE_SPOON_TH = -28.0                            # where the lever lies round the body
 NADE_E = Vector((0,-.386,.921)).normalized()    # from the palm toward the fingers
 NADE_A = Vector((0,.921,.386)).normalized()      # up the fuze
@@ -1576,7 +1583,7 @@ NADE_C = Vector((0,-.0500,-.0078)) + NADE_E*.0370   # the body's centre, clear o
 def nade_r(z):
     '''Outer radius of the grenade at height z along its axis: shell, then fuze neck.'''
     t = min(abs(z)/.0350, 1.0)
-    r = .0300*(1-t**2.6)**.46 + .0004
+    r = NADE_R*(1-t**2.6)**.46 + .0004
     pts = ((.0300,.0172),(.0345,.0142),(.0410,.0126),(.0470,.0118),(.0540,.0090))
     for (z0,r0),(z1,r1) in zip(pts, pts[1:]):
         if z0 <= z <= z1: r = max(r, r0 + (r1-r0)*(z-z0)/(z1-z0))
@@ -1589,18 +1596,17 @@ def grenade():
     clear()
     def shell_r(z):
         t = min(abs(z)/.0350, 1.0)
-        return .0300*(1-t**2.6)**.46 + .0004
+        return NADE_R*(1-t**2.6)**.46 + .0004
     rings = [(.0350*(-1 + 2*i/22), shell_r(.0350*(-1 + 2*i/22))) for i in range(23)]
-    finish(lathe(rings, 0, 0, 44), (.34,.40,.25), .52, 0, 0, flag=4)        # olive painted body
+    finish(lathe(rings, 0, 0, 44), (.24,.26,.175), .62, 0, 0, flag=4)        # muted olive drab: worn service paint, not lime
     # Band and ribs follow the shell's own curve: at a fixed radius they stood off it
     # as floating hoops that read as stripes across the body.
     def hoop(z0, z1, h):
         n_ = 6
         return [(z0, nade_r(z0)-.0003)] + [(z0+(z1-z0)*i/(n_-1), nade_r(z0+(z1-z0)*i/(n_-1))+h) for i in range(n_)] + [(z1, nade_r(z1)-.0003)]
-    finish(lathe(hoop(.0090, .0165, .0004), 0, 0, 44), ORANGE, .52, 0, 0, flag=4)  # blaze band: live
-    for i in range(3):
-        z = -.018 + i*.0095
-        finish(lathe(hoop(z-.0008, z+.0008, .0007), 0, 0, 44), (.22,.26,.16), .58, 0, 0, flag=4)  # seam ribs, proud enough to catch the light
+    finish(lathe(hoop(.0090, .0165, .0004), 0, 0, 44), (.68,.39,.12), .58, 0, 0, flag=4)  # blaze band: live, a weathered ochre
+    for z in (-.0185, -.0090, .0005, .0225):   # three under the band, one over it
+        finish(lathe(hoop(z-.0006, z+.0006, .0004), 0, 0, 44), (.15,.165,.105), .66, 0, 0, flag=4)  # seam ribs, proud enough to catch the light
     finish(lathe([(.0280,.0140),(.0300,.0176),(.0345,.0146),(.0410,.0126),(.0470,.0118),(.0495,.0086)], 0, 0, 44), GRAPH, .32, .75, 0)  # fuze well: bare metal against the matte paint
     finish(lathe([(.0470,.0092),(.0530,.0088),(.0540,.0060)], 0, 0, 24), STEEL, .36, .9, .0003)  # striker cap
     # The spoon: stamped sheet 1.5 mm thick. Its cap sits flush on the striker, then it
@@ -1608,7 +1614,7 @@ def grenade():
     zs = [.0300 - i*.0030 for i in range(21)]
     out = [(.0572,.0070),(.0572,-.0100)] + [(.0520,-.0138),(.0460,-.0142),(.0400,-.0152),(.0340,-.0172)] + [(z,-(nade_r(z)+.0021)) for z in zs]
     inn = [(z,-(nade_r(z)+.0006)) for z in zs][::-1] + [(.0340,-.0157),(.0400,-.0136),(.0460,-.0126),(.0505,-.0122),(.0552,-.0086),(.0552,.0070)]
-    sp = finish(prof(out + inn, -.0088, .0088, 'spoon'), (.47,.47,.43), .40, .70, .0004, 2, group=2)
+    sp = finish(prof(out + inn, -.0092, .0092, 'spoon'), (.38,.38,.37), .46, .62, .0004, 2, group=2)   # dull gunmetal
     psi = radians(-NADE_SPOON_TH)     # about the fuze axis: the side under the thumb
     for v in sp.data.vertices:
         x_, y_ = v.co.x, v.co.y
@@ -1825,6 +1831,373 @@ def hand_g():
     shell_patch(s_th, 0.76, 0.98, -145.0, 145.0, thick=.0010, bury=.0006, nu=6, nv=8, rim_u=.035, rim_d=8.0,
                 col=TIP_CAP, rough=.52, flag=7, sharp=True, name='g_th_tip')
 
+# ------------------------------------------------------------------ rifle & pistol variants
+# Every variant is authored in its slot's own frame and keeps the stations the game's
+# rig is built on: the AR grip, trigger guard and blade (the sculpted firing hand closes
+# on them unchanged), the fore-end round z .264 (the support hand), the holo at the AR's
+# station (ADS), and for the pistols the rear sight at z -.0405 with its top at y .0342.
+# Groups: 1 magazine, 2 stock (hidden when aiming / reloading), 3 the pistol slide.
+WOOD=(.255,.150,.090); WOOD_D=(.190,.115,.072); BLUED=(.155,.158,.168); STAINLESS=(.60,.60,.62)
+POLY=(.115,.118,.125); WHITE_DOT=(.92,.92,.88)
+
+def ar_grip(grip_col=BLACK, guard_col=TAN, grip_rough=.76, guard_rough=.60, guard_metal=0.0):
+    '''The AR's pistol grip, trigger guard and blade, at exactly the AR's stations.'''
+    finish(prof([(.030,-.014),(-.008,-.013),(-.016,-.026),(-.036,-.100),(-.030,-.110),(.000,-.106),(.010,-.066),(.018,-.044)], -.0126, .0126, 'grip'), grip_col, grip_rough, 0, .0052, 5)
+    finish(prof([(.014,-.018),(.019,-.018),(.021,-.0475),(.068,-.0475),(.079,-.018),(.084,-.018),(.071,-.0518),(.014,-.0518)], -.0038, .0038), guard_col, guard_rough, guard_metal, bevel=.0007)
+    finish(prof([(.044,-.016),(.050,-.016),(.044,-.042),(.039,-.042)], -.0030, .0030), DARK, .45, .6, .0005)
+
+def rot_x(o, ang, pivot):
+    '''Rotate an object's mesh about the x axis through pivot (y, z).'''
+    py, pz = pivot; c, s = cos(ang), sin(ang)
+    for v in o.data.vertices:
+        y, z = v.co.y - py, v.co.z - pz
+        v.co.y = py + y*c - z*s; v.co.z = pz + y*s + z*c
+    return o
+
+def reflex_sight(dy=0.0):
+    """Compact open-frame red dot: a low emitter housing on a rail clamp and a square
+    hood. Its window is the holo's own window (centre VM_HOLO_Y + dy, half-height
+    VM_HOLO_R, half-width 1.18 R, front glass at VM_HOLO_Z), so ADS, the eye line and
+    the HUD reticle's clip are unchanged; everything else sits below the window."""
+    cy = .0741 + dy; hh = .0133; hw = .0157; y0 = .0455 + dy
+    zr, zh, zf = .090, .140, .172                     # rear, hood back, hood front
+    finish(box((0, y0 + .0035, (zr + zf) / 2), (.0130, .0035, (zf - zr) / 2 + .002)), BLACK, .55, 0, .0008)   # rail clamp
+    for z in (.102, .160):
+        finish(pin(-.0175, -.0128, y0 + .0035, z, .0030, 12), STEEL, .40, .85, .0003, 1)                    # clamp bolts
+    # emitter housing: a low block that ramps up into the hood, top under the window
+    em = prof([(zr, y0 + .007), (zh + .004, y0 + .007), (zh + .004, cy - hh - .0012), (zr + .020, cy - hh - .0040), (zr, y0 + .013)], -.0150, .0150, 'emitter')
+    finish(em, HOLO, .52, .08, .0020, 2)
+    # the hood: a square frame round the window, its top canted back like the reference
+    o_lo = y0 + .006; o_hi = cy + hh + .0052; ow = hw + .0048
+    hood = prof_front([(-ow, o_lo), (ow, o_lo), (ow, o_hi - .0040), (ow - .0040, o_hi), (-ow + .0040, o_hi), (-ow, o_hi - .0040)], zh, zf, 'hood')
+    cut(hood, prof_front([(-hw, cy - hh), (hw, cy - hh), (hw, cy + hh), (-hw, cy + hh)], zh - .01, zf + .01))
+    finish(hood, HOLO, .50, .10, .0022, 3)
+    finish(box((0, o_hi - .0008, zh + .004), (ow - .002, .0016, .0048)), HOLO, .50, .10, .0010, 2)           # rear lip of the cant
+    finish(pin(.0150, .0205, cy - hh - .006, .128, .0048, 16), DARK, .45, .2, .0005)                      # windage turret
+    finish(pin(-.0150, -.0120, cy - hh - .006, .126, .0060, 18), DARK, .45, .2, .0005)                    # battery cap
+    finish(box((0, cy - hh - .0012, .132), (.0050, .0016, .0040)), BLACK, .55, 0, .0004)                    # brightness button
+    # the coated lens' edge: a thin amber rim inside the window, what makes it read as glass
+    for (x, y, hx, hy) in ((0, cy - hh + .0006, hw, .0006), (0, cy + hh - .0006, hw, .0006),
+                           (hw - .0006, cy, .0006, hh), (-hw + .0006, cy, .0006, hh)):
+        finish(box((x, y, zf - .003), (hx, hy, .0010)), (.85, .38, .10), .25, .9, 0)
+
+def ak_stock():
+    """M4-type collapsible stock on a buffer tube, behind an AK stock adapter (group 2
+    for the stock, the tube stays)."""
+    finish(box((0,.012,-.044), (.0150,.0150,.0110)), BLUED, .46, .5, .0012)                    # adapter
+    finish(lathe([(-.250,.0168),(-.050,.0168)], 0, .0200, 28), GRAPH, .44, .18, .0005)          # tube
+    finish(lathe([(-.064,.0225),(-.052,.0225),(-.049,.0190)], 0, .0200, 28), BLACK, .48, .15, .0005)   # castle nut
+    O = -.020
+    st = prof([(-.098+O,.0435),(-.226+O,.0435),(-.240+O,.034),(-.244+O,-.044),(-.228+O,-.054),(-.196+O,-.040),(-.146+O,-.014),(-.100+O,.001),(-.092+O,.022)], -.0200, .0200, 'stock')
+    cut(st, prof([(-.222+O,.032),(-.212+O,.032),(-.212+O,-.032),(-.222+O,-.038)], -.03, .03))
+    cut(st, prof([(-.112+O,.004),(-.180+O,.030),(-.192+O,.030),(-.192+O,.020),(-.124+O,-.006)], -.03, .03))   # the angled slot
+    finish(st, TAN, .64, 0, .0034, 3, group=2, flag=4)
+    finish(box((0,-.005,-.249+O), (.0190,.0490,.0060)), BLACK, .9, 0, .0022, 2, group=2)       # butt pad
+    finish(box((0,-.016,-.120+O), (.0060,.0060,.0120)), BLACK, .6, 0, .0008, group=2)          # adjustment lever
+
+def glow(c, h):
+    """A lit amber inlay (the shader's flag 3: the gauntlet's LED family)."""
+    finish(box(c, h), AMBER, .40, 0, .0003, flag=3)
+
+def rifle_ak():
+    """Modernised AK in desert digital: camo receiver, dust cover and furniture (the
+    light family the camo paints), a skeletal side mount, railed fore-end and gas
+    cover, collapsible stock, ribbed magazine, compact red dot, and the amber inlays."""
+    clear()
+    # --- stamped receiver (camo), magwell, rivets
+    rc = prof([(-.034,.024),(.205,.024),(.205,-.008),(.150,-.016),(.150,-.020),(.088,-.020),(.088,-.016),(.040,-.016),(.010,-.018),(-.012,-.014),(-.034,-.004)], -.0150, .0150, 'rcv')
+    cut(rc, box((0,-.018,.118), (.0110,.010,.0240)))
+    finish(rc, TAN, .58, 0, bevel=.0012, seg=2, flag=6)
+    for z in (.020,.060,.100,.180,.196):
+        for x0, x1 in ((.0144, .0158), (-.0158, -.0144)):
+            finish(pin(x0, x1, .002, z, .0016, 12), BLUED, .42, .6, .0002, 1)
+    finish(box((0,.006,.208), (.0158,.0180,.0060)), BLUED, .45, .6, .0006)                # trunnion
+    # --- dust cover (camo) with the rail along its top
+    dc = prof_front([(-.0150,.0230),(.0150,.0230),(.0150,.0310),(.0120,.0370),(.0060,.0392),(-.0060,.0392),(-.0120,.0370),(-.0150,.0310)], -.026, .200, 'cover')
+    finish(dc, TAN, .58, 0, .0012, 2, flag=6)
+    finish(box((0,.0405,.090), (.0098,.0024,.110)), BLACK, .55, 0, .0005)
+    for i in range(22):
+        finish(box((0,.0432,-.012+.00985*i), (.0106,.0019,.0028)), BLACK, .5, 0, .0005, 1)
+    finish(box((0,.0360,-.030), (.0060,.0040,.0050)), BLUED, .4, .6, .0004)               # cover latch
+    # rear sight block at the front of the cover
+    finish(prof([(.188,.0240),(.214,.0240),(.214,.0400),(.198,.0420),(.188,.0400)], -.0110, .0110), BLUED, .45, .6, .0008)
+    # --- the skeletal side mount down the left of the receiver (camo)
+    sm = prof([(.028,-.006),(.150,-.006),(.150,.016),(.138,.034),(.042,.034),(.028,.018)], -.0182, -.0148, 'mount')
+    for z0, z1 in ((.040,.068),(.076,.104),(.112,.138)):
+        cut(sm, prof([(z0+.003,.002),(z1-.003,.002),(z1,.006),(z1,.022),(z1-.003,.026),(z0+.003,.026),(z0,.022),(z0,.006)], -.03, 0))
+    finish(sm, TAN, .58, 0, .0010, 2, flag=6)
+    for z, y in ((.034,.028),(.144,.028),(.034,-.001),(.144,-.001)):
+        finish(pin(-.0196, -.0176, y, z, .0024, 12), BLUED, .42, .6, .0002, 1)
+    # amber inlays on the left, ahead of the mount (the reference's two lit cells)
+    glow((-.0154,.0120,.176), (.0010,.0022,.0130))
+    glow((-.0154,.0010,.160), (.0010,.0025,.0025))
+    # --- charging handle and selector on the right
+    finish(box((.0162,.0175,.120), (.0020,.0040,.0760)), BLUED, .42, .6, .0004)
+    finish(box((.0170,.0175,.186), (.0028,.0042,.0070)), BLUED, .40, .7, .0005)
+    finish(pin(.0190,.0300,.0175,.190,.0042,16), BLUED, .38, .6, .0004)
+    finish(box((.0162,.0120,.060), (.0016,.0050,.0560)), BLUED, .40, .7, .0003)
+    finish(box((.0164,.0040,.008), (.0018,.0072,.0060)), BLUED, .40, .7, .0003)
+    # --- railed fore-end (camo): the support hand's round at z .264 keeps its envelope
+    lo = prof_front([(-.0200,-.0030),(.0200,-.0030),(.0240,.0060),(.0245,.0200),(.0230,.0275),(-.0230,.0275),(-.0245,.0200),(-.0240,.0060)], .210, .345, 'hgl')
+    for i in range(3):
+        for s_ in (-1,1):
+            cut(lo, box((s_*.0245,.0130,.226+i*.022), (.0030,.0030,.0070)))
+    finish(lo, TAN, .64, 0, .0026, 3, flag=4)
+    for s_ in (-1,1):                                                                       # side rail sections, ahead of the hand
+        finish(box((s_*.0254,.0130,.316), (.0020,.0060,.0260)), BLACK, .5, 0, .0004)
+        for i in range(5):
+            finish(box((s_*.0276,.0130,.296+i*.0098), (.0016,.0066,.0028)), BLACK, .5, 0, .0004, 1)
+    finish(box((0,-.0040,.316), (.0090,.0018,.0260)), BLACK, .5, 0, .0004)                 # bottom rail
+    for i in range(5):
+        finish(box((0,-.0062,.296+i*.0098), (.0096,.0016,.0028)), BLACK, .5, 0, .0004, 1)
+    finish(box((0,.0150,.212), (.0248,.0140,.0035)), BLUED, .45, .6, .0006)                 # retainer rings
+    finish(box((0,.0150,.346), (.0248,.0140,.0035)), BLUED, .45, .6, .0006)
+    # gas tube cover (camo) with its own rail on top
+    gc = prof_front([(-.0160,.0270),(.0160,.0270),(.0172,.0400),(.0120,.0480),(-.0120,.0480),(-.0172,.0400)], .214, .336, 'gas')
+    finish(gc, TAN, .64, 0, .0022, 3, flag=4)
+    finish(box((0,.0496,.275), (.0090,.0018,.0600)), BLACK, .55, 0, .0005)
+    for i in range(12):
+        finish(box((0,.0518,.221+i*.00985), (.0100,.0016,.0028)), BLACK, .5, 0, .0005, 1)
+    finish(lathe([(.336,.0070),(.362,.0070)], 0, .0400, 20), BLUED, .44, .6, .0004)        # gas tube
+    finish(box((0,.0300,.354), (.0110,.0160,.0110)), BLUED, .44, .6, .0008)                 # gas block
+    # --- barrel, front sight tower with its ears, slant compensator lit at the muzzle
+    finish(lathe([(.340,.0090),(.464,.0082)], 0, .0200, 22), BLUED, .40, .6, .0003)
+    fs = prof([(.418,.0270),(.442,.0270),(.438,.0480),(.426,.0480)], -.0060, .0060, 'fsb')
+    finish(fs, BLUED, .44, .6, .0006)
+    for s_ in (-1,1):
+        finish(prof([(.424,.0440),(.440,.0440),(.437,.0640),(.428,.0640)], *sorted((s_*.0040, s_*.0062))), BLUED, .44, .6, .0004)
+    finish(box((0,.0560,.432), (.0012,.0080,.0012)), BLACK, .5, 0, .0002)                  # post
+    finish(lathe([(.414,.0120),(.446,.0120)], 0, .0200, 22), BLUED, .44, .6, .0006)
+    mz = lathe([(.460,.0102),(.492,.0102),(.492,.0060)], 0, .0200, 22, 'comp')
+    cut(mz, box((0,.0300,.482), (.0060,.0080,.0160)))
+    finish(mz, BLUED, .42, .6, .0004)
+    finish(lathe([(.4870,.0106),(.4905,.0106)], 0, .0200, 22), AMBER, .40, 0, 0, flag=3)     # lit muzzle band
+    # --- grip, guard, magazine
+    ar_grip(grip_col=(.20,.185,.17), guard_col=BLUED, grip_rough=.78, guard_rough=.45, guard_metal=.5)
+    ak_stock()
+    reflex_sight()
+    pts_f = []; pts_b = []
+    for i in range(9):
+        t = i / 8.0; a = .58 * t
+        cy = -.018 - .150 * math.sin(a) / .548 * .97
+        cz = .118 + .080 * (1 - math.cos(a)) / .164
+        hw = .0255 - .002 * t
+        nx, nz = math.cos(a), math.sin(a)
+        pts_f.append((cz + hw * nx, cy + hw * nz * .25))
+        pts_b.append((cz - hw * nx, cy - hw * nz * .25))
+    mag = prof(pts_f + pts_b[::-1], -.0110, .0110, 'mag')
+    finish(mag, (.235,.215,.195), .66, 0, .0018, 2, group=1)
+    for i in range(1, 8):                                    # the reference's long vertical ribs
+        t = i / 8.0; a = .58 * t
+        cy = -.018 - .150 * math.sin(a) / .548 * .97
+        cz = .118 + .080 * (1 - math.cos(a)) / .164
+        for s_ in (-1, 1):
+            r_ = box((s_*.0112, cy, cz - .006), (.0012, .0100, .0030))
+            rot_x(r_, a, (cy, cz))
+            finish(r_, (.20,.185,.17), .66, 0, .0004, 1, group=1)
+    lt = pts_f[-1]; lb = pts_b[-1]
+    finish(box((0, (lt[1]+lb[1])/2 - .004, (lt[0]+lb[0])/2), (.0122, .0040, .0280)), (.20,.185,.17), .66, 0, .0008, 1, group=1)
+
+def rifle_famas():
+    """FAMAS bullpup in desert digital, after the reference: a thick-walled carry handle
+    with rounded corners and a rail along its whole top; the iron sights INSIDE its
+    window (rear aperture at the back, post at the front, the cocking lever between
+    them); a sloped fore-end nose with dark lower panels; a long barrel lit at the
+    muzzle; big hex bolts and the full-hand trigger guard."""
+    clear()
+    DK = (.20,.185,.17)
+    body = prof([(-.205,.038),(.150,.038),(.160,.030),(.160,.004),(.090,-.006),(.090,-.018),(-.020,-.018),(-.060,-.020),(-.190,-.024),(-.205,-.020)], -.0230, .0230, 'body')
+    cut(body, box((0,-.024,-.140), (.0118,.012,.0260)))
+    cut(body, box((.0236,.012,-.040), (.0040,.0080,.0420)))
+    finish(body, TAN, .64, 0, .0045, 3, flag=4)
+    finish(box((.0218,.012,-.040), (.0020,.0070,.0400)), BLUED, .40, .6, .0003, 1)
+    for s_ in (-1,1):                                         # shell seam
+        finish(box((s_*.0230,.0040,-.010), (.0008,.0008,.1600)), DK, .7, 0, .0002, 1)
+    finish(prof([(-.120,.008),(.060,.008),(.072,.020),(.072,.030),(-.110,.030)], -.0246, -.0226), TAN, .64, 0, .0008, 2, flag=4)
+    glow((-.0250,.0190,.040), (.0010,.0026,.0130))
+    # hex bolts: the big one at the handle's front foot, the receiver, the butt pivot
+    for z, y, r in ((.118,.022,.0088),(-.070,.018,.0075),(-.178,-.006,.0068)):
+        finish(pin(-.0264,-.0226,y,z,r,6), BLUED, .44, .5, .0006)
+        finish(pin(-.0270,-.0260,y,z,r*.45,6), BLACK, .6, 0, .0002)
+    # butt (group 2): the raised cheek rest and its pad
+    bt = prof([(-.205,.038),(-.205,-.024),(-.300,-.030),(-.316,-.024),(-.316,.040),(-.300,.046),(-.230,.046)], -.0225, .0225, 'butt')
+    finish(bt, TAN, .64, 0, .0045, 3, group=2, flag=4)
+    finish(prof([(-.316,.040),(-.324,.040),(-.324,-.026),(-.316,-.030)], -.0230, .0230), BLACK, .9, 0, .0018, 2, group=2)
+    finish(prof([(-.300,.020),(-.230,.020),(-.230,.024),(-.300,.024)], -.0236, -.0220), DK, .7, 0, .0003, group=2)   # panel line
+    # --- fore-end: same envelope round the support hand (z .264), a sloped nose,
+    # vents up top and dark grip panels down each side
+    hg = prof([(.150,.036),(.292,.036),(.334,.022),(.342,.008),(.334,-.004),(.304,-.008),(.150,-.008)], -.0240, .0240, 'hg')
+    for i in range(4):
+        for s_ in (-1,1):
+            cut(hg, box((s_*.0250,.0240,.176+i*.034), (.0040,.0045,.0110)))
+    finish(hg, TAN, .64, 0, .0045, 3, flag=4)
+    for s_ in (-1,1):
+        finish(prof([(.168,-.005),(.296,-.005),(.300,.000),(.296,.010),(.168,.010)], *sorted((s_*.0234, s_*.0254))), DK, .80, 0, .0010, 2)
+        for i in range(6):                                    # the panel's grip ribs
+            finish(box((s_*.0256,.0025,.180+i*.020), (.0010,.0060,.0018)), DK, .80, 0, .0003)
+    for s_ in (-1,1):                                         # folded bipod legs
+        finish(lathe([(.170,.0026),(.370,.0026)], s_*.0262, -.0020, 14), BLUED, .45, .5, .0003)
+        finish(lathe([(.364,.0040),(.376,.0040)], s_*.0262, -.0020, 14), BLUED, .50, .3, .0004)
+        finish(box((s_*.0250,-.0020,.165), (.0030,.0050,.0060)), BLUED, .5, .3, .0004)
+    # --- the long barrel and the muzzle, lit through its slots
+    finish(lathe([(.330,.0090),(.462,.0082)], 0, .0200, 22), BLUED, .40, .6, .0003)
+    finish(lathe([(.440,.0118),(.450,.0118)], 0, .0200, 22), BLUED, .44, .6, .0004)
+    mz = lathe([(.455,.0110),(.494,.0110),(.500,.0098),(.500,.0060)], 0, .0200, 22, 'mz')
+    for i in range(4):
+        c_ = box((0,.0200,.478), (.0020,.0140,.0090))
+        c_.rotation_euler = (0,0,i*math.pi/4); bpy.context.view_layer.objects.active = c_; c_.select_set(True)
+        bpy.ops.object.transform_apply(rotation=True); c_.select_set(False)
+        cut(mz, c_)
+    finish(mz, BLUED, .42, .6, .0004)
+    finish(lathe([(.4720,.0082),(.4860,.0082)], 0, .0200, 22), AMBER, .40, 0, 0, flag=3)    # glow behind the slots
+    finish(lathe([(.4950,.0104),(.4985,.0104)], 0, .0200, 22), AMBER, .40, 0, 0, flag=3)
+    # --- the carry handle: thick walls, rounded corners, a vertical front post
+    hd = prof([(-.232,.036),(-.216,.062),(-.198,.081),(-.184,.086),(.106,.086),(.122,.082),(.132,.070),(.136,.036)], -.0110, .0110, 'handle')
+    cut(hd, prof([(-.172,.0470),(-.162,.0410),(.090,.0410),(.098,.0470),(.098,.0680),(.090,.0740),(-.160,.0740),(-.172,.0680)], -.02, .02))
+    cut(hd, box((0,.0600,-.210), (.0078,.0076,.0420)))       # the sight tunnel through the rear wall
+    finish(hd, TAN, .64, 0, .0040, 3, flag=4)
+    finish(box((0,.0884,-.030), (.0098,.0024,.1400)), BLACK, .55, 0, .0005)                   # full-length rail
+    for i in range(28):
+        finish(box((0,.0911,-.164+.00985*i), (.0106,.0019,.0028)), BLACK, .5, 0, .0005, 1)
+    # --- the iron sights INSIDE the window, on VM_FAMAS_IRON_Y (.0600)
+    finish(prof([(-.152,.0400),(-.128,.0400),(-.133,.0540),(-.147,.0540)], -.0060, .0060), BLUED, .44, .5, .0006)    # rear base
+    ap = lathe([(-.1420,.0068),(-.1380,.0068)], 0, .0600, 24, 'aperture')
+    cut(ap, lathe([(-.1500,.0026),(-.1300,.0026)], 0, .0600, 16))
+    finish(ap, BLUED, .44, .5, .0004)
+    for s_ in (-1,1):
+        finish(box((s_*.0082,.0590,-.1400), (.0014,.0080,.0040)), BLUED, .44, .5, .0004)  # aperture wings
+    finish(box((0,.0450,.0800), (.0042,.0050,.0050)), BLUED, .44, .5, .0004)              # front post base
+    finish(box((0,.0547,.0800), (.0011,.0056,.0011)), BLACK, .50, 0, .0002)                # post, tip .0603
+    for s_ in (-1,1):                                                                      # its ears
+        finish(prof([(.072,.0410),(.088,.0410),(.086,.0660),(.076,.0640)], *sorted((s_*.0056, s_*.0090))), BLUED, .44, .5, .0004)
+    # the cocking lever down the window's floor, its hooked handle between the sights
+    finish(box((0,.0438,-.025), (.0040,.0026,.0950)), BLUED, .42, .6, .0004)
+    finish(prof([(.012,.0450),(.034,.0450),(.040,.0530),(.034,.0550),(.026,.0500),(.012,.0500)], -.0035, .0035), DK, .55, 0, .0005)
+    # --- grip and the F1's full-hand guard (camo), thick
+    ar_grip(grip_col=DK, guard_col=TAN, grip_rough=.78, guard_rough=.66)
+    finish(prof([(.086,-.018),(.095,-.018),(.093,-.062),(-.008,-.117),(-.023,-.117),(-.023,-.106),(.080,-.054)], -.0062, .0062), TAN, .66, 0, .0022, 2, flag=4)
+    for s_ in (-1,1):                                                                      # the grip's stipple panel
+        x0, x1 = sorted((s_*.0120, s_*.0134))
+        finish(prof([(-.008,-.040),(-.024,-.042),(-.032,-.090),(-.010,-.090),(.000,-.066)], x0, x1), BLACK, .92, 0, .0005, 1)
+    # --- 25-round magazine behind the grip (group 1)
+    mag = prof([(-.118,-.018),(-.164,-.018),(-.172,-.120),(-.124,-.126)], -.0105, .0105, 'mag')
+    finish(mag, (.235,.215,.195), .62, 0, .0016, 2, group=1)
+    finish(prof([(-.120,-.124),(-.174,-.118),(-.175,-.128),(-.120,-.134)], -.0118, .0118), BLACK, .76, 0, .0010, 2, group=1)
+    for i in range(4):
+        finish(box((0,-.040-i*.022,-.141-i*.0018), (.0110,.0014,.0200)), DK, .62, 0, .0004, 1, group=1)
+
+def pistol_glock():
+    """Glock-18 after the reference: a desert-digital slide with deep front and rear
+    serrations, a dark polymer frame with its rail and stippled grip, lit amber
+    sights, the amber accents on the frame and the slide's rear, and the 33-round
+    stick below the grip."""
+    clear()
+    DK = (.20,.185,.17)
+    fr = prof([(-.050,-.008),(.137,-.008),(.137,-.025),(.128,-.029),(.074,-.029),(.060,-.018),(.010,-.018),(-.012,-.016),(-.048,-.020)], -.0128, .0128, 'frame')
+    finish(fr, DK, .74, 0, .0014, 2)
+    for i in range(3):                                         # the dust-cover rail
+        finish(box((0,-.0312,.090+i*.0115), (.0086,.0026,.0030)), BLACK, .6, 0, .0005, 1)
+    finish(prof([(-.012,-.0110),(.012,-.0110),(.012,-.0140),(-.012,-.0140)], -.0140, -.0122), BLACK, .5, .4, .0004)   # slide stop
+    glow((-.0131,-.0215,.112), (.0006,.0020,.0110))           # lit strip down the rail
+    for z in (.024,.036):                                      # the two lit cells over the trigger
+        glow((-.0131,-.0128,z), (.0006,.0014,.0014))
+    finish(prof([(.030,-.014),(-.008,-.013),(-.016,-.026),(-.036,-.100),(-.030,-.110),(.000,-.106),(.010,-.066),(.018,-.044)], -.0126, .0126, 'grip'), DK, .80, 0, .0040, 4)
+    finish(prof([(-.052,-.0120),(-.012,-.0120),(-.012,-.0190),(-.030,-.0220),(-.050,-.0180)], -.0116, .0116, 'tail'), DK, .74, 0, .0016, 2)
+    for s_ in (-1, 1):                                         # stipple panels with their thumb pad
+        x0, x1 = sorted((s_*.0120, s_*.0134))
+        finish(prof([(-.008,-.040),(-.024,-.042),(-.032,-.090),(-.010,-.090),(.000,-.066)], x0, x1, 'panel'), BLACK, .92, 0, .0005, 1)
+        x0, x1 = sorted((s_*.0132, s_*.0140))
+        finish(prof([(-.012,-.074),(-.024,-.075),(-.026,-.086),(-.014,-.086)], x0, x1), DK, .80, 0, .0003)
+    finish(prof([(.014,-.018),(.019,-.018),(.021,-.0475),(.068,-.0475),(.079,-.018),(.084,-.018),(.071,-.0518),(.014,-.0518)], -.0038, .0038), DK, .74, bevel=.0007)
+    finish(prof([(.044,-.016),(.050,-.016),(.044,-.042),(.039,-.042)], -.0030, .0030), BLACK, .55, 0, .0005)
+    finish(prof([(.0455,-.020),(.0480,-.020),(.0455,-.036),(.0435,-.036)], -.0034, .0034), DARK, .5, 0, .0002)
+    # --- slide (group 3): camo, chamfered top, front and rear serrations, the cut
+    sl = prof_front([(-.0118,-.0100),(.0118,-.0100),(.0118,.0205),(.0090,.0250),(-.0090,.0250),(-.0118,.0205)], -.052, .146, 'slide')
+    cut(sl, box((.0124,.0130,.040), (.0060,.0070,.0220)))
+    cut(sl, lathe([(.138,.0058),(.150,.0058)], 0, .0060, 20))
+    for i in range(2):
+        cut(sl, box((0,.0250,.112+i*.012), (.0024,.0060,.0035)))
+    for i in range(9):
+        for s_ in (-1, 1):
+            cut(sl, box((s_*.0122,.0080,-.047+i*.0046), (.0012,.0100,.0012)))
+    for i in range(6):
+        for s_ in (-1, 1):
+            cut(sl, box((s_*.0122,.0080,.104+i*.0046), (.0012,.0100,.0012)))
+    finish(sl, TAN, .56, 0, .0010, 2, group=3, flag=6)
+    finish(box((.0094,.0130,.040), (.0030,.0062,.0200)), BLUED, .42, .6, .0003, 1, group=3)     # barrel hood
+    finish(lathe([(.134,.0062),(.1475,.0058)], 0, .0060, 20), BLUED, .40, .6, .0002, group=3)
+    finish(box((-.0130,.0100,-.034), (.0012,.0040,.0060)), BLUED, .42, .6, .0003, group=3)     # selector plate
+    finish(box((-.0144,.0090,-.031), (.0018,.0022,.0060)), BLACK, .50, .3, .0003, group=3)
+    finish(box((0,.0060,-.0525), (.0070,.0010,.0005)), AMBER, .40, 0, 0, group=3, flag=3)        # lit slit on the slide's back
+    # lit sights: the front dot, the two rear dots either side of the notch
+    finish(box((0,.0290,.1305), (.0018,.0052,.0045)), BLACK, .55, 0, .0004, group=3)
+    finish(lathe([(.1250,.0018),(.1262,.0018)], 0, .0320, 14), AMBER, .40, 0, 0, group=3, flag=3)
+    rear = box((0,.0290,-.0405), (.0100,.0052,.0040), 'rear')
+    cut(rear, box((0,.0340,-.0405), (.0026,.0048,.0100)))
+    finish(rear, BLACK, .55, 0, .0004, group=3)
+    for s_ in (-1, 1):
+        finish(box((s_*.0058,.0318,-.0446), (.0016,.0016,.0004)), AMBER, .40, 0, 0, group=3, flag=3)
+    # --- the 33-round stick (group 1)
+    finish(prof([(.012,-.024),(-.012,-.024),(-.050,-.172),(-.024,-.176)], -.0096, .0096, 'mag'), DK, .70, 0, .0012, 2, group=1)
+    finish(prof([(-.054,-.170),(-.020,-.174),(-.018,-.184),(-.054,-.180)], -.0114, .0114, 'magplate'), BLACK, .80, 0, .0012, 2, group=1)
+    for i in range(3):
+        finish(box((0,-.124-i*.016,-.031-i*.004), (.0098,.0012,.0120)), BLACK, .7, 0, .0003, 1, group=1)
+
+def pistol_deagle():
+    """Desert Eagle after the reference: a desert-digital barrel and slide over a dark
+    frame, the triangular barrel top with its lit vent slots, the big hammer and its
+    lit cell, lit three-dot sights, a lit strip down the frame, and the rubber grip."""
+    clear()
+    DK = (.20,.185,.17)
+    fr = prof([(-.054,-.008),(.150,-.008),(.150,-.026),(.140,-.031),(.080,-.031),(.062,-.018),(.010,-.018),(-.012,-.016),(-.052,-.022)], -.0140, .0140, 'frame')
+    finish(fr, DK, .55, 0, .0014, 2)
+    finish(pin(-.0152,-.0128,-.0130,.030,.0040,12), BLUED, .40, .6, .0003, 1)
+    finish(prof([(.054,-.0096),(.084,-.0096),(.084,-.0150),(.054,-.0150)], -.0156, -.0132), BLUED, .40, .6, .0004)  # takedown
+    glow((-.0143,-.0225,.112), (.0006,.0022,.0140))
+    finish(prof([(.030,-.014),(-.008,-.013),(-.016,-.026),(-.036,-.100),(-.030,-.110),(.000,-.106),(.010,-.066),(.018,-.044)], -.0126, .0126, 'grip'), (.08,.08,.085), .92, 0, .0050, 5)
+    for s_ in (-1, 1):                                          # grip panel screws
+        finish(pin(*sorted((s_*.0124, s_*.0136)), -.052, -.006, .0026, 12), BLUED, .40, .6, .0002)
+        finish(pin(*sorted((s_*.0124, s_*.0136)), -.090, -.024, .0026, 12), BLUED, .40, .6, .0002)
+    finish(prof([(-.056,-.0120),(-.012,-.0120),(-.012,-.0210),(-.030,-.0250),(-.054,-.0200)], -.0122, .0122, 'tail'), DK, .55, 0, .0018, 2)
+    finish(prof([(.014,-.018),(.019,-.018),(.021,-.0485),(.070,-.0485),(.081,-.018),(.086,-.018),(.073,-.0528),(.014,-.0528)], -.0042, .0042), DK, .55, bevel=.0007)
+    finish(prof([(.044,-.016),(.050,-.016),(.044,-.042),(.039,-.042)], -.0030, .0030), BLUED, .40, .6, .0005)
+    # --- the fixed barrel (camo): triangular top, flutes, lit vent slots ahead of the sight
+    bar = prof_front([(-.0135,-.0060),(.0135,-.0060),(.0135,.0160),(.0050,.0285),(-.0050,.0285),(-.0135,.0160)], .058, .196, 'barrel')
+    cut(bar, lathe([(.190,.0062),(.200,.0062)], 0, .0060, 20))
+    for s_ in (-1,1):
+        cut(bar, box((s_*.0138,.0060,.150), (.0012,.0030,.0300)))
+    for z in (.150,.158,.166):
+        cut(bar, box((0,.0290,z), (.0042,.0016,.0018)))
+    finish(bar, TAN, .54, 0, .0010, 2, flag=6)
+    for z in (.150,.158,.166):
+        glow((0,.0268,z), (.0040,.0006,.0016))
+    finish(box((0,.0300,.0950), (.0020,.0012,.0350)), DK, .55, 0, .0003)                 # top rib, behind the slots
+    finish(box((0,.0300,.1800), (.0020,.0042,.0050)), BLACK, .55, 0, .0004)              # front sight
+    finish(lathe([(.1730,.0018),(.1745,.0018)], 0, .0320, 14), AMBER, .40, 0, 0, flag=3)
+    # --- the slide (group 3, camo): serrations, safeties, the hammer and its cell
+    sl = prof_front([(-.0140,-.0100),(.0140,-.0100),(.0145,.0040),(.0140,.0220),(.0090,.0280),(-.0090,.0280),(-.0140,.0220),(-.0145,.0040)], -.058, .060, 'slide')
+    cut(sl, box((.0148,.0140,.030), (.0060,.0070,.0200)))
+    for i in range(9):
+        for s_ in (-1, 1):
+            cut(sl, box((s_*.0146,.0080,-.052+i*.0050), (.0014,.0090,.0012)))
+    finish(sl, TAN, .56, 0, .0012, 2, group=3, flag=6)
+    for s_ in (-1, 1):
+        finish(pin(*sorted((s_*.0140, s_*.0162)), .0160, -.046, .0040, 14), DK, .5, .3, .0003, group=3)
+        finish(box((s_*.0164,.0210,-.046), (.0016,.0036,.0050)), DK, .5, .3, .0003, group=3)
+    finish(box((-.0164,.0120,-.040), (.0006,.0016,.0016)), AMBER, .40, 0, 0, group=3, flag=3)   # lit cell by the safety
+    hm = prof([(-.056,.0060),(-.064,.0060),(-.072,.0200),(-.070,.0260),(-.062,.0250),(-.058,.0160)], -.0042, .0042, 'hammer')
+    finish(hm, DK, .45, .5, .0006, group=3)
+    finish(pin(-.0045,.0045,.0120,-.060,.0042,14), DK, .45, .5, .0004, group=3)
+    rear = box((0,.0290,-.0405), (.0108,.0052,.0042), 'rear')
+    cut(rear, box((0,.0340,-.0405), (.0026,.0048,.0100)))
+    finish(rear, BLACK, .55, 0, .0005, group=3)
+    for s_ in (-1, 1):
+        finish(box((s_*.0060,.0318,-.0449), (.0016,.0016,.0004)), AMBER, .40, 0, 0, group=3, flag=3)
+    # --- single-stack magazine (group 1)
+    finish(prof([(.010,-.024),(-.012,-.024),(-.032,-.104),(-.010,-.104)], -.0090, .0090, 'mag'), DK, .55, 0, .0010, 2, group=1)
+    finish(prof([(-.036,-.1040),(-.002,-.1040),(.002,-.1140),(-.034,-.1170)], -.0124, .0124, 'magplate'), BLACK, .80, 0, .0012, 2, group=1)
+
+
 def mirror_x():
     '''Left-hand copy of what is in the scene. Winding is flipped so the mesh stays outward.'''
     for o in bpy.context.collection.objects:
@@ -1866,6 +2239,9 @@ for kfn, ktag in ((knife_tanto, 'KNIFE_TANTO'), (knife_dagger, 'KNIFE_DAGGER'),
     kfn(); assign_finishes(); emit(store, ktag)
 hand_open(); emit(store, 'HAND_KO')
 hand_pin(); emit(store, 'HAND_GP')
+for gfn, gtag in ((rifle_ak, 'RIFLE_AK'), (rifle_famas, 'RIFLE_FAMAS'),
+                  (pistol_glock, 'PISTOL_GLOCK'), (pistol_deagle, 'PISTOL_DEAGLE')):
+    gfn(); assign_finishes(); emit(store, gtag)
 
 with open(OUT, 'w') as f:
     f.write('// Generated by tools/build_models.py. Do not edit by hand.\n')
