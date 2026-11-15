@@ -82,6 +82,8 @@ static void rescue_guard_tick(bot_t *b, int bi) {
       // behind his back a guard sees nothing (he hears — bot_hear_update).
       float cone = d < 2.5f ? -0.10f : 0.30f;
       if (align <= cone || !(los_clear(eo, tp) || los_clear(eo, sb.head))) continue;
+      // ...and a guard cannot see through smoke any more than a player can.
+      if (smoke_blocks(eo, tp) && smoke_blocks(eo, sb.head)) continue;
       float prox = 1.0f - d / R;
       float periph = 0.30f + 0.70f * f_clamp((align - cone) / (0.92f - cone), 0.0f, 1.0f);
       float hs = sqrtf(sb.vel.x * sb.vel.x + sb.vel.z * sb.vel.z) / g_sim_mv[MV_RUN];
@@ -306,6 +308,39 @@ static int rescue_squad_intent(bot_t *b, int bi, float *yaw, float *pitch, float
   return 1;
 }
 
+// THE LEADER CALLS IT OUT. A leader (the insurgent with the radio) who can
+// SEE his target passes its position to every teammate within 25 m who has
+// nobody to shoot — as a heard contact, through the hearing memory the bots
+// already investigate, so what they do with it is the ordinary investigate
+// behaviour and nothing new can misfire. Once every 1.5 s per leader, and only
+// where there are teammates (team games, the rescue's guards); in a free-for-
+// all nobody is anyone's teammate and this does nothing. Run as ONE pass before
+// the bots tick, from last tick's state, so it cannot depend on bot order.
+#define BOT_CALLOUT_TICKS 180
+#define BOT_CALLOUT_R     25.0f
+static void bot_callouts(void) {
+  if (g_bots_frozen || g_match.over || home_calm()) return;
+  for (int li = 0; li < g_match.nbots; li++) {
+    const bot_t *L = &g_bots[li];
+    if (!L->active || !L->alive || L->puppet || ent_kind(li + 1) != 3) continue;
+    if (L->tgt < 0 || L->belief != BOT_BELIEF_VISIBLE) continue;
+    if ((g_tick + li * 37) % BOT_CALLOUT_TICKS) continue;
+    v3 tp = L->last_seen;
+    for (int j = 0; j < g_match.nbots; j++) {
+      bot_t *m = &g_bots[j];
+      if (j == li || !m->active || !m->alive || m->puppet || m->tgt >= 0) continue;
+      if (!team_mates(li + 1, j + 1)) continue;
+      if (v3_len(v3_sub(m->pos, L->pos)) > BOT_CALLOUT_R) continue;
+      m->hear_pos = (v3){{tp.x, 0.0f, tp.z}};
+      m->hear_src = L->tgt;
+      m->hear_tick = g_tick;
+      m->hear_until = g_tick + BOT_HEAR_SHOT_TICKS;
+      m->hear_kind = BOT_NOISE_SHOT;
+      m->hear_score = 0.5f;
+    }
+  }
+}
+
 static void bot_tick(int bi) {
   bot_t *b = &g_bots[bi];
   const bot_skill_t *sk = &BOT_SKILL[g_cfg.sp_diff];
@@ -356,7 +391,8 @@ static void bot_tick(int bi) {
   if (g_bots_frozen || g_match.over || home_calm()) return;
 
   gun_cool(&b->wp);
-  gun_reload_tick(&b->wp);
+  if (gun_reload_tick(&b->wp))
+    ev_push((event_t){.type = EV_RELOAD, .a = b->pos, .wpn = b->wp.cur, .src = bi + 1, .k = 2});
   if (b->pause_t > 0) b->pause_t--;
   if (b->react_t > 0) b->react_t--;
   if (b->hurt_t > 0) b->hurt_t--;
@@ -474,6 +510,10 @@ static void bot_tick(int bi) {
       // this tick, and bot_can_see is pure — reuse that verdict.
       if (e == b->tgt) { if (!see) continue; }
       else if (!los_clear(eo, tp)) continue;
+      // ...and a NEW target needs the same smoke test bot_can_see applies to
+      // the current one: without it a bot picked a man up straight through a
+      // cloud, turned onto him and waited at the edge already locked on.
+      else if (smoke_blocks(eo, tp)) continue;
       bot_target_choice_t cand = {
         .ent = e,
         .score = bot_target_score(b, e, d, align),
@@ -524,6 +564,10 @@ static void bot_tick(int bi) {
   mode_nade_refill(bi + 1, &b->wp);
   // A weapon the mode no longer allows (a GUN GAME promotion) goes at once.
   if (!mode_allowed(bi + 1, b->wp.cur) && b->wp.gr_t == 0) emergency_swap = 1;
+  // The policy asks for the grenade only to smoke: put the canister in the slot.
+  if (desired == WPN_GR && b->wp.gr_kind != NADE_SMOKE && nade_smokes(&b->wp) > 0 &&
+      b->wp.gr_t == 0 && b->wp.gr_cook == 0 && game_mode() != GM_BLADES && game_mode() != GM_GUN)
+    nade_swap_to(&b->wp, NADE_SMOKE);
   if (b->wp.switch_t == 0 && (b->swap_cd == 0 || emergency_swap) &&
       bot_request_weapon(b, bi, desired))
     b->swap_cd = BOT_SWAP_COOLDOWN_TICKS;
@@ -533,10 +577,10 @@ static void bot_tick(int bi) {
   // (Grenades never reload: their stock is the spawn's, or the mode's refill.)
   if (b->wp.ammo[b->wp.cur] <= 0 && b->wp.reload_t == 0 && b->wp.switch_t == 0 &&
       b->wp.cur != WPN_GR) {
-    b->wp.reload_tac = 0;    // a bot only ever reloads when the mag is dry
-    b->wp.reload_t = WPN_DEF[b->wp.cur].reload_ticks;
+    // A bot only ever reloads when the mag is dry (a tube: shell by shell).
+    int k = gun_reload_start(&b->wp);
     ev_push((event_t){.type = EV_RELOAD, .a = b->pos, .wpn = b->wp.cur,
-                      .src = bi + 1});
+                      .src = bi + 1, .k = k});
   }
 
   // Decide where to look and where to move.
@@ -911,6 +955,34 @@ static void bot_tick(int bi) {
   float mp = sk->turn * 0.7f * TICK_DT;   // pitch stays on the tracking rate
   b->pitch += f_clamp(pdiff * 8.0f * TICK_DT, -mp, mp);
 
+  // FIRE (sim/inferno.c). A bot standing in a burning pool runs straight out of
+  // it, away from where it broke — the shortest way out of a round pool. One
+  // that is not in it will not walk into it: the part of the wish that heads
+  // into fire a metre ahead is projected away, as the walls below do. Before
+  // the wall handling, so that still keeps the escape off the masonry.
+  {
+    v3 feet = {{b->pos.x, b->pos.y + 0.05f, b->pos.z}};
+    for (int i = 0; i < MAX_INFERNOS; i++) {
+      const inferno_t *f = &g_infernos[i];
+      if (!inferno_alive(f)) continue;
+      float age = inferno_age(f);
+      float ox = feet.x - f->at.x, oz = feet.z - f->at.z, ol = sqrtf(ox * ox + oz * oz);
+      if (ol < 0.05f) { ox = (float)(b->strafe_dir ? b->strafe_dir : 1); oz = 0.0f; ol = 1.0f; }
+      ox /= ol; oz /= ol;
+      int c = inferno_cell_at(f, feet);
+      if (c >= 0 && inferno_cell_heat(f, c, age) > 0.05f) {
+        wx = ox; wz = oz; pace = 1.0f;
+        break;
+      }
+      v3 ahead = {{feet.x + wx * 1.0f, feet.y, feet.z + wz * 1.0f}};
+      int ca = inferno_cell_at(f, ahead);
+      float into = -(wx * ox + wz * oz);          // the wish's part toward the pool
+      if (ca >= 0 && inferno_cell_heat(f, ca, age) > 0.05f && into > 0.0f) {
+        wx += ox * into; wz += oz * into;
+      }
+    }
+  }
+
   // WALL-FOLLOW. There is no pathfinding in this game and there should not be,
   // so every leg above picks a destination and walks the straight line to it —
   // and a straight line into a corner is a bot standing on the spot until
@@ -1196,8 +1268,11 @@ static void bot_tick(int bi) {
         v3 at, vel;
         int fuse;
         v3 tp = b->tgt >= 0 ? ent_pos(b->tgt) : b->last_seen;
+        // A SMOKE goes BETWEEN: 40% of the way to the threat, so the wall it
+        // makes stands across the line the bot is about to fall back along.
+        if (w->gr_kind == NADE_SMOKE) tp = v3_lerp(b->pos, tp, 0.40f);
         if (bot_nade_solve(b, tp, sk->err1 * 2.0f + 1.5f, &at, &vel, &fuse)) {
-          nade_throw(at, vel, fuse, bi + 1);
+          nade_throw(at, vel, nade_flight(w, fuse), bi + 1, w->gr_kind);
           w->ammo[WPN_GR]--;
         }
       }
@@ -1227,6 +1302,11 @@ static void bot_tick(int bi) {
                                  (float)sk->burst_hi + 0.99f);
       b->pause_t = (int)(rng_rangef(&g_rng_bot, sk->pause_lo, sk->pause_hi) *
                          (float)TICK_HZ / 1000.0f);
+      // THE GUNNER SUPPRESSES: the man with the ammunition belt holds the
+      // trigger nearly twice as long per burst. Not a damage buff — the same
+      // gun and the same recoil comp, so a long burst walks off target and the
+      // extra rounds are mostly the pressure, not the kills.
+      if (ent_kind(bi + 1) == 1) b->burst = b->burst * 9 / 5 + 1;
     }
   }
 
@@ -1296,6 +1376,8 @@ static void match_scores_clear(void) {
 static void rescue_reset(void);
 static void match_restart(void) {
   int n = g_match.nbots;
+  smoke_reset();                         // a new round starts with clear air
+  inferno_reset();                          // ...and cold ground
   memset(&g_match, 0, sizeof g_match);   // the human roster lives OUTSIDE
   g_match.nbots = n;                     // g_match and survives this on purpose
   g_match.mode = g_cfg.sp_mode;          // the MATCH tab's choice lands HERE

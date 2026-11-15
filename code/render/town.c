@@ -35,6 +35,35 @@ static void dec_fbox(int ax, float sg, float pl, float u0, float u1, float y0, f
   if (ax == 0) dec_box((v3){{fminf(d0, d1), y0, u0}}, (v3){{fmaxf(d0, d1), y1, u1}}, col);
   else         dec_box((v3){{u0, y0, fminf(d0, d1)}}, (v3){{u1, y1, fmaxf(d0, d1)}}, col);
 }
+// A RELIEF STRIP on a face: the proud front and its two long sides, 18
+// vertices where a dec_fbox spends 36 on a top, bottom and back nobody sees.
+// The face's normal is world axis `ax` (0 x, 2 z) pointing `sg`, at `pl`.
+static void dec_quad_out(v3 a, v3 b, v3 c, v3 d, v3 n, v3 col) {
+  if (v3_dot(v3_cross(v3_sub(b, a), v3_sub(d, a)), n) > 0.0f) scene_quad(a, b, c, d, n, col);
+  else scene_quad(a, d, c, b, n, col);
+}
+static v3 dec_fp(int ax, float sg, float pl, float u, float y, float t) {
+  return ax == 0 ? (v3){{pl + sg * t, y, u}} : (v3){{u, y, pl + sg * t}};
+}
+// ...and its front alone (6 vertices): a baluster 16 mm proud reads by its
+// colour against the panel at street range; its sides were a budget line.
+static void dec_flat(int ax, float sg, float pl, float u0, float u1, float y0, float y1,
+                     float t, v3 col) {
+  v3 n = ax == 0 ? (v3){{sg, 0, 0}} : (v3){{0, 0, sg}};
+  dec_quad_out(dec_fp(ax, sg, pl, u0, y0, t), dec_fp(ax, sg, pl, u1, y0, t),
+               dec_fp(ax, sg, pl, u1, y1, t), dec_fp(ax, sg, pl, u0, y1, t), n, col);
+}
+static void dec_strip(int ax, float sg, float pl, float u0, float u1, float y0, float y1,
+                      float t, v3 col) {
+  v3 n = ax == 0 ? (v3){{sg, 0, 0}} : (v3){{0, 0, sg}};
+  v3 un = ax == 0 ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}};
+  dec_quad_out(dec_fp(ax, sg, pl, u0, y0, t), dec_fp(ax, sg, pl, u1, y0, t),
+               dec_fp(ax, sg, pl, u1, y1, t), dec_fp(ax, sg, pl, u0, y1, t), n, col);
+  dec_quad_out(dec_fp(ax, sg, pl, u0, y0, 0), dec_fp(ax, sg, pl, u0, y0, t),
+               dec_fp(ax, sg, pl, u0, y1, t), dec_fp(ax, sg, pl, u0, y1, 0), v3_scale(un, -1.0f), col);
+  dec_quad_out(dec_fp(ax, sg, pl, u1, y0, 0), dec_fp(ax, sg, pl, u1, y0, t),
+               dec_fp(ax, sg, pl, u1, y1, t), dec_fp(ax, sg, pl, u1, y1, 0), un, col);
+}
 // A thin bar between two points (a cable segment, a handwheel spoke).
 static void dec_bar(v3 a, v3 b, float r, v3 col) {
   v3 d = v3_sub(b, a);
@@ -256,6 +285,84 @@ static void dec_town(int town) {
           anch[na] = ax == 0 ? (v3){{d, Hb - 0.35f, u}} : (v3){{u, Hb - 0.35f, d}};
           anch_s[na++] = i;
         }
+      }
+      continue;
+    }
+    // --- STAIR NOSINGS: a dressed edge on every tread ------------------------
+    // stair_up builds each step as a column from the ground (prefabs.c: run
+    // 0.5 m, width 1.3 m, rise 0.4 m), so from the street a stair was one brick
+    // mass with a sawtooth top and no step edge you could pick out at range
+    // (art_review/r2 24_citadel_alley). A lighter stone nosing 5 cm deep, 2.5 cm
+    // proud, over a shadow line: flush relief on solid faces, never above the
+    // tread by more than 3 mm, so it cannot hide a foot.
+    if (mn.y < 0.01f && sy > 0.3f && fabsf(fmodf(sy + 0.005f, 0.40f)) < 0.012f &&
+        ((sx >= 0.36f && sx <= 0.56f && fabsf(sz - 1.20f) < 0.02f) ||
+         (sz >= 0.36f && sz <= 0.56f && fabsf(sx - 1.20f) < 0.02f)) &&
+        (g_solid_mat[i] == SMAT_STONE || g_solid_mat[i] == SMAT_CONCRETE)) {
+      v3 nc = v3_scale(s->color, 1.20f), sl = v3_scale(s->color, 0.62f);
+      dec_box((v3){{mn.x - 0.025f, mx.y - 0.05f, mn.z - 0.025f}},
+              (v3){{mx.x + 0.025f, mx.y + 0.003f, mx.z + 0.025f}}, nc);
+      dec_box((v3){{mn.x - 0.008f, mx.y - 0.075f, mn.z - 0.008f}},
+              (v3){{mx.x + 0.008f, mx.y - 0.05f, mx.z + 0.008f}}, sl);
+      continue;
+    }
+    // --- BALCONIES: stepped stone corbels under the slab ---------------------
+    // prefabs.c's balcony is a 15 cm slab 1.1 m out from the wall with three
+    // solid timber panels on it, and nothing under it: from the street it read
+    // as a dark crate stuck to the facade (art_review/r2 22_rescue). Two
+    // corbels carry it. Matched by size and colour, then PROBED: wall at one
+    // end, air under it, so a stair tread of the same stone never matches.
+    if (dec_same(s->color, ts->stone) && fabsf(sy - 0.15f) < 0.01f && mn.y > 2.0f &&
+        (fabsf(sx - 1.1f) < 0.01f || fabsf(sz - 1.1f) < 0.01f)) {
+      int ax = fabsf(sx - 1.1f) < 0.01f ? 0 : 2;
+      float cu = ax == 0 ? (mn.z + mx.z) * 0.5f : (mn.x + mx.x) * 0.5f, ym = mn.y - 0.04f;
+      int wn = dec_inside(ax == 0 ? (v3){{mn.x - 0.05f, ym, cu}} : (v3){{cu, ym, mn.z - 0.05f}});
+      int wp = dec_inside(ax == 0 ? (v3){{mx.x + 0.05f, ym, cu}} : (v3){{cu, ym, mx.z + 0.05f}});
+      v3 under = ax == 0 ? (v3){{(mn.x + mx.x) * 0.5f, mn.y - 0.5f, cu}}
+                         : (v3){{cu, mn.y - 0.5f, (mn.z + mx.z) * 0.5f}};
+      if (wn != wp && !dec_inside(under)) {
+        float o = wn ? 1.0f : -1.0f;                       // out of the wall
+        float pl = ax == 0 ? (wn ? mn.x : mx.x) : (wn ? mn.z : mx.z);
+        float u0 = ax == 0 ? mn.z : mn.x, u1 = ax == 0 ? mx.z : mx.x;
+        v3 st = v3_scale(ts->stone, 0.94f);
+        float pr = g_mat_rough, pm = g_mat_metal;
+        mat_set(0.85f, 0.0f);
+        for (int k = 0; k < 2; k++) {               // two: the Citadel is at 89% of decor
+          float u = k == 0 ? u0 + 0.30f : u1 - 0.30f;
+          float y = mn.y;
+          dec_fbox(ax, o, pl, u - 0.09f, u + 0.09f, y - 0.11f, y, 0.0f, 0.95f, st);
+          dec_fbox(ax, o, pl, u - 0.08f, u + 0.08f, y - 0.24f, y - 0.11f, 0.0f, 0.62f, st);
+          dec_fbox(ax, o, pl, u - 0.07f, u + 0.07f, y - 0.40f, y - 0.24f, 0.0f, 0.32f, st);
+        }
+        // and a drip moulding along the slab's free edges
+        dec_fbox(ax, o, pl, u0 - 0.02f, u1 + 0.02f, mn.y - 0.03f, mn.y, 1.08f, 1.12f, st);
+        // THE RAILS on it (prefabs.c: three 6 cm timber panels, 0.95 m) stay
+        // solid — they stop a round and hide a crouch — but read as a capped
+        // balustrade: cap rail, bottom rail and balusters in relief, on the
+        // three OUTER faces only (the inner ones face a wall a metre away).
+        {
+          v3 cap = v3_scale(ts->door, 1.25f), bal = v3_scale(ts->door, 1.55f);
+          float y0 = mx.y, y1 = mx.y + 0.95f, ua = ax == 0 ? 2 : 0;
+          float dw = pl, dfar = pl + o * 1.1f;
+          mat_set(0.62f, 0.0f);
+          // front face: normal along the depth axis
+          dec_strip(ax, o, dfar, u0, u1, y1 - 0.07f, y1, 0.03f, cap);
+          dec_strip(ax, o, dfar, u0, u1, y0, y0 + 0.09f, 0.02f, cap);
+          for (float u = u0 + 0.12f; u < u1 - 0.08f; u += 0.17f)
+            dec_flat(ax, o, dfar, u - 0.024f, u + 0.024f, y0 + 0.09f, y1 - 0.07f, 0.016f, bal);
+          // the two ends: normal along the face axis, running wall to front
+          for (int e = 0; e < 2; e++) {
+            float sg = e ? 1.0f : -1.0f, ep = e ? u1 : u0;
+            float da = fminf(dw, dfar), db = fmaxf(dw, dfar);
+            dec_strip((int)ua, sg, ep, da, db, y1 - 0.07f, y1, 0.03f, cap);
+            dec_strip((int)ua, sg, ep, da, db, y0, y0 + 0.09f, 0.02f, cap);
+            for (float d = 0.20f; d < 1.0f; d += 0.17f) {
+              float dd = pl + o * d;
+              dec_flat((int)ua, sg, ep, dd - 0.024f, dd + 0.024f, y0 + 0.09f, y1 - 0.07f, 0.016f, bal);
+            }
+          }
+        }
+        mat_set(pr, pm);
       }
       continue;
     }

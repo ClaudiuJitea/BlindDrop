@@ -270,10 +270,10 @@ static void ui_home(int click, float cx, float cy) {
   // THE ARMORY: what you carry. Its caption is the current loadout, so the
   // rail says what you will see in your hands before you open the page.
   {
-    char asub[64];
-    snprintf(asub, sizeof asub, "%s / %s / %s KNIFE",
-             RIFLE_VAR_NAMES[armory_idx(g_cfg.rifle_var, WPN_VARS)],
-             PISTOL_VAR_NAMES[armory_idx(g_cfg.pistol_var, WPN_VARS)],
+    char asub[96];
+    snprintf(asub, sizeof asub, "%s / %s / %s / %s KNIFE",
+             wvar_name(WPN_AR, g_cfg.rifle_var), wvar_name(WPN_SR, g_cfg.sniper_var),
+             wvar_name(WPN_PT, g_cfg.pistol_var),
              KNIFE_MODEL_NAMES[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)]);
     if (ui_tile("ARMORY", asub, rx, y, rw, sh2, 1.25f, click, cx, cy, 0))
       ui_route(UI_PAGE_ARMORY);
@@ -569,7 +569,7 @@ static void ui_menu(void) {
   // title when the player changes page.
   #define UI_FOOTER_H 24.0f
   #define UI_PANEL_MAX 348.0f
-  #define UI_BIND_ROW  11.8f   // see the keyboard binding page's loop
+  #define UI_BIND_ROW  9.2f    // see the keyboard binding page's loop (10.0 until PREV WEAPON, 9.6 until FIRE MODE)
   // Self-sizing across FRAMES now, not within one: a rounded panel cannot be
   // bottom-patched the way the old flat quad was (ui_rect_bottom rewrote three
   // vertices; ui_panel is a hundred). The height cache is per page and the
@@ -579,12 +579,62 @@ static void ui_menu(void) {
   ui_page_t drawn_page = g_ui_page;
   float pw = 340, px = g_ui_vw * 0.5f - pw * 0.5f;
   float ph = ph_page[drawn_page];
+  // THE ARMORY SHOWS WHO YOU ARE: the panel steps left and a portrait of the
+  // operator stands beside it, in the gear and with the weapon being picked
+  // (render/frame.c renders it). Only where the screen has the width for both.
+  float prv_w = 0.0f;
+  if (drawn_page == UI_PAGE_ARMORY && g_ui_vw >= pw + 8 + 150 + 24) {
+    prv_w = fminf(230.0f, g_ui_vw - pw - 8 - 24);
+    px = g_ui_vw * 0.5f - (pw + 8 + prv_w) * 0.5f;
+  }
   // THE TOP IS ANCHORED, ONLY THE BOTTOM MOVES. Centring each page's own height
   // would slide the title by up to 118 px. The anchor is the tallest page's
   // centring, so the chrome is nailed down and a short page simply ends sooner.
   float py = (g_ui_vh - UI_PANEL_MAX) * 0.5f;
   if (py < 6) py = 6;
   ui_panel(px, py, pw, ph, 0, 1);
+  if (prv_w > 0.0f) {
+    // The preview's own frame: the picture inside it, a caption under it.
+    float qx = px + pw + 8, qy = py, qh = ph;
+    ui_panel(qx, qy, prv_w, qh, 0, 1);
+    g_prev_x = qx + 6; g_prev_y = qy + 6; g_prev_w = prv_w - 12; g_prev_h = qh - 30;
+    // Keep the picture's own 5:8 portrait: letterbox the rectangle to it.
+    float want_h = g_prev_w * (float)PREV_H / (float)PREV_W;
+    if (want_h < g_prev_h) { g_prev_y += (g_prev_h - want_h) * 0.5f; g_prev_h = want_h; }
+    else { float want_w = g_prev_h * (float)PREV_W / (float)PREV_H;
+           g_prev_x += (g_prev_w - want_w) * 0.5f; g_prev_w = want_w; }
+    // WHAT HE HOLDS follows what you last changed: a primary, a sniper, a
+    // pistol, the knife. The rifle until then.
+    static int last_r = -1, last_p, last_s, last_k;
+    if (last_r < 0) { last_r = g_cfg.rifle_var; last_p = g_cfg.pistol_var;
+                      last_s = g_cfg.sniper_var; last_k = g_cfg.knife_model; g_prev_wpn = WPN_AR; }
+    if (g_cfg.rifle_var != last_r)   { g_prev_wpn = WPN_AR; last_r = g_cfg.rifle_var; }
+    if (g_cfg.pistol_var != last_p)  { g_prev_wpn = WPN_PT; last_p = g_cfg.pistol_var; }
+    if (g_cfg.sniper_var != last_s)  { g_prev_wpn = WPN_SR; last_s = g_cfg.sniper_var; }
+    if (g_cfg.knife_model != last_k) { g_prev_wpn = WPN_KN; last_k = g_cfg.knife_model; }
+    // THE TURNTABLE: it turns on its own; hold the mouse on it and drag to turn
+    // him yourself (it waits two seconds after a drag before turning again).
+    static float last_cx = -1.0f, hold_t = 0.0f;
+    int inside = g_ui_cx >= qx && g_ui_cx <= qx + prv_w && g_ui_cy >= qy && g_ui_cy <= qy + qh;
+    if (g_ui_mdown && inside && last_cx >= 0.0f) {
+      g_prev_yaw += (g_ui_cx - last_cx) * 0.025f;
+      hold_t = 2.0f;
+    } else if (hold_t > 0.0f) {
+      hold_t -= g_ui_dt;
+    } else {
+      g_prev_yaw += g_ui_dt * 0.45f;
+    }
+    last_cx = g_ui_mdown && inside ? g_ui_cx : -1.0f;
+    g_prev_req = 1;
+    const char *hn = g_prev_wpn == WPN_KN ? KNIFE_MODEL_NAMES[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)]
+                   : wvar_name(g_prev_wpn, g_prev_wpn == WPN_AR ? g_cfg.rifle_var
+                                          : g_prev_wpn == WPN_PT ? g_cfg.pistol_var : g_cfg.sniper_var);
+    ui_text_ex(hn, qx + prv_w * 0.5f - ui_text_width_tr(hn, 0.9f, 1.3f) * 0.5f, qy + qh - 21, 0.9f,
+               TXT_REG, 1.3f, C4(C_BONE, 0.95f));
+    const char *dt = "DRAG TO TURN";
+    ui_text_ex(dt, qx + prv_w * 0.5f - ui_text_width_tr(dt, 0.65f, 1.3f) * 0.5f, qy + qh - 10, 0.65f,
+               TXT_REG, 1.3f, C4(C_HAZE, 0.75f));
+  }
   // ROOT is not one of these any more: this panel draws FORMS, and the entry
   // screen is not a form. Its slot stays so the array indexes by page.
   static const char *const PAGE_TITLE[UI_PAGE_COUNT] = {
@@ -652,7 +702,9 @@ static void ui_menu(void) {
   {
     static const char *const SETSUB[2] = {"GENERAL", "HUD"};
     ui_subsel(SETSUB, 2, &g_ui_set_sub, px, pw, y, click, cx, cy);
-    y += 18;
+    // 24, not 18: the first eyebrow sat 2 units under the tab strip and read
+    // as part of it; every other section gets a gap above its header.
+    y += 24;
   }
   if (g_ui_set_sub == 1) {
     // THE HUD TAB. The crosshair is the one HUD element on screen every frame
@@ -845,9 +897,9 @@ static void ui_menu(void) {
       // are legitimately "--" — leading with four unbound rows reads as a
       // broken screen, and the section title says where movement actually is.
       static const int PAD_ROW[IN_COUNT] = {
-        IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R, IN_FIRE, IN_ADS, IN_RELOAD,
-        IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SCORE, IN_VIEW,
-        IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT,
+        IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R, IN_FIRE, IN_ADS, IN_RELOAD, IN_ALTFIRE,
+        IN_SWAP, IN_SWAP_PREV, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SLOT6, IN_SLOT7, IN_SCORE, IN_VIEW,
+        IN_INSPECT, IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT,
       };
       // The pad status belongs on THIS page too — a player arming a PRESS BTN
       // capture that can never complete while Steam holds the pad deserves to
@@ -1276,9 +1328,11 @@ static void ui_menu(void) {
     // it comes first and says when it lands. Everything below it is cosmetic.
     ui_section("LOADOUT", px, pw, y);
     y += 14;
-    ui_cycle("RIFLE", RIFLE_VAR_NAMES, WPN_VARS, &g_cfg.rifle_var, px, pw, y, click, cx, cy);
+    ui_cycle("PRIMARY", RIFLE_VAR_NAMES, RV_N, &g_cfg.rifle_var, px, pw, y, click, cx, cy);
     y += 15;
-    ui_cycle("PISTOL", PISTOL_VAR_NAMES, WPN_VARS, &g_cfg.pistol_var, px, pw, y, click, cx, cy);
+    ui_cycle("SNIPER", SNIPER_VAR_NAMES, SV_N, &g_cfg.sniper_var, px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("PISTOL", PISTOL_VAR_NAMES, PV_N, &g_cfg.pistol_var, px, pw, y, click, cx, cy);
     y += 15;
     ui_text_ex("APPLIES NOW IF UNFIRED, ELSE ON NEXT SPAWN", px + 16, y + 1, 0.8f,
                TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
@@ -1286,14 +1340,14 @@ static void ui_menu(void) {
     y += 4;
     // Cosmetic only, and it says so: nothing below changes how a weapon
     // handles, and every choice is visible the moment the menu closes.
-    ui_section("KNIFE", px, pw, y);
+    // KNIFE and THEME share one header: as two one-row sections the page ran
+    // past the panel's 720p height clamp and the footer hint chips drew over
+    // the BACK row (art_review/r2 18_menu_armory, 2026-11-12).
+    ui_section("WEAPON LOOK", px, pw, y);
     y += 14;
-    ui_cycle("MODEL", KNIFE_MODEL_NAMES, KNIFE_MODEL_COUNT, &g_cfg.knife_model,
+    ui_cycle("KNIFE", KNIFE_MODEL_NAMES, KNIFE_MODEL_COUNT, &g_cfg.knife_model,
              px, pw, y, click, cx, cy);
     y += 15;
-    y += 4;
-    ui_section("WEAPONS", px, pw, y);
-    y += 14;
     ui_cycle("THEME", WPN_THEME_NAMES, WPN_THEME_COUNT, &g_cfg.wpn_theme,
              px, pw, y, click, cx, cy);
     y += 15;
@@ -1304,6 +1358,9 @@ static void ui_menu(void) {
              px, pw, y, click, cx, cy);
     y += 15;
     ui_cycle("HEADGEAR", HEAD_GEAR_NAMES, HEAD_GEAR_COUNT, &g_cfg.head_gear,
+             px, pw, y, click, cx, cy);
+    y += 15;
+    ui_cycle("FACE", FACE_GEAR_NAMES, FACE_GEAR_COUNT, &g_cfg.face_gear,
              px, pw, y, click, cx, cy);
     y += 15;
     ui_cycle("VEST", VEST_GEAR_NAMES, VEST_GEAR_COUNT, &g_cfg.vest_gear,
@@ -1323,7 +1380,7 @@ static void ui_menu(void) {
   ui_cycle("WEAPON POSITION", VM_POS_NAMES, 3, &g_cfg.vm_pos, px, pw, y, click, cx, cy);
   y += 15;
     y += 4;
-    ui_text("KNIFE / THEME / GEAR / VIEW: NO GAMEPLAY EFFECT", px + 16, y + 3, 0.85f, C_DIM, 1);
+    ui_text("WEAPON LOOK / GEAR / VIEW: NO GAMEPLAY EFFECT", px + 16, y + 3, 0.85f, C_DIM, 1);
     y += 14;
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
@@ -1761,6 +1818,7 @@ static void hud_enemy_marks(const player_t *p) {
     float dist = v3_len(d);
     if (dist < 12.0f || dist > GUN_RANGE) continue;
     if (!los_clear(eye, head)) continue;
+    if (smoke_blocks(eye, head)) continue;   // a marker must not see through smoke
     float sx, sy;
     if (!rescue_proj(head, &sx, &sy)) continue;
     float a = f_clamp((dist - 12.0f) / 6.0f, 0.0f, 1.0f) * 0.92f;
@@ -1795,7 +1853,7 @@ static const hint_def_t HINTS[] = {
   {IN_ADS,    -1,        "AIM DOWN SIGHTS"},
   {IN_LEAN_L, IN_LEAN_R, "LEAN AROUND COVER"},
   {IN_CROUCH, -1,        "WHILE RUNNING TO SLIDE"},
-  {IN_SWAP,   -1,        "SWAP WEAPON  /  1-5 PICK ONE"},
+  {IN_SWAP,   -1,        "NEXT WEAPON  /  WHEEL  /  1-7 PICK ONE"},
   {IN_SCORE,  -1,        "SCOREBOARD"},
 };
 #define HINT_COUNT ((int)(sizeof HINTS / sizeof HINTS[0]))
@@ -1825,7 +1883,8 @@ static void hud_hints(const player_t *p, float ccx) {
   if (h->act == IN_CROUCH) done = p->sliding;            // the slide, not a crouch
   if (h->act == IN_SWAP)
     done = done || p->prev_held[IN_SLOT1] || p->prev_held[IN_SLOT2] ||
-           p->prev_held[IN_SLOT3] || p->prev_held[IN_SLOT4] || p->prev_held[IN_SLOT5];
+           p->prev_held[IN_SLOT3] || p->prev_held[IN_SLOT4] || p->prev_held[IN_SLOT5] ||
+           p->prev_held[IN_SLOT6] || p->prev_held[IN_SLOT7] || p->prev_held[IN_SWAP_PREV];
   long shown_t = g_tick - t0;
   if (shown_t > 0 && (done || shown_t > HINT_SHOW_TICKS)) {
     idx++;

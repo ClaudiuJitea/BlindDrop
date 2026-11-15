@@ -449,11 +449,14 @@ static void match_tick(void) {
     match_restart();
   }
 
+  bot_callouts();
   for (int i = 0; i < g_match.nbots; i++) bot_tick(i);
   nade_tick(1);
+  inferno_burn();
   if (g_ballistics) proj_tick();
   lms_tick();
   rescue_tick();
+  supply_tick();
 }
 
 static void match_init(void) {

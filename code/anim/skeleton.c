@@ -471,6 +471,13 @@ static float anim_hz(const anim_t *a) {
 static float anim_runT(const anim_t *a) {
   return f_clamp(a->spd / ANIM_RUN_REF, 0.0f, 1.0f);
 }
+// v5: THE SPRINT BAND. runT saturates at ANIM_RUN_REF, so a 7 m/s sprint was the
+// 5.5 m/s run to the degree (`gait`: lean 5.7 vs 5.6, twist 25.1 vs 27.7). 0 at
+// 5.6 m/s, 1 at 7.0: more trunk over the hips, more shoulder counter-rotation,
+// the weapon tucked deeper in the carry. Presentation only, read by skel_solve.
+static float anim_sprT(const anim_t *a) {
+  return f_clamp((a->spd - 5.6f) / 1.4f, 0.0f, 1.0f);
+}
 static float anim_hmax(const anim_t *a) {
   float runT = anim_runT(a);
   float hipy = ANIM_HIP_Y + (ANIM_HIP_CR - ANIM_HIP_Y) * a->crouch_s -
@@ -546,6 +553,8 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
                 (1.0f - 0.90f * a->air_s);
   // Standing still the knees nearly straighten (the lowered gait hip reads as
   // sitting on an invisible stool when idle); moving takes the athletic flex.
+  // (v5: the operator's SOFT knees are applied at the draw, operator only —
+  // this solver is shared with the insurgent; see scene_draw_figure.)
   hip_h += 0.024f * (1.0f - movT) * ground * (1.0f - a->crouch_s) *
            (1.0f - a->slide_s);
   hip_h -= 0.06f * runT * (1.0f - 0.65f * a->bwd) * (1.0f - a->crouch_s);  // spring-mass
@@ -625,7 +634,7 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // 2-4) is what actually carries the weight shift on screen; the pelvis only
   // has to agree with it.
   float shift = sinf(bph * F_TAU) * 0.024f * (1.0f - 0.55f * runT) *
-                ground * movT;
+                ground * movT * (1.0f - 0.35f * a->ads_s);   // v5: tactical walk, see glist
   shift += sinf(a->idle_t * 0.55f) * 0.016f * still;  // idle weight shift
   // ...and the weight goes over the foot that is actually carrying it. Gated on
   // `still` for the same reason the gait shift is gated the other way: while the
@@ -737,7 +746,12 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // forward on its own, which is 90 mm the neck does not have to crane. Taking
   // all of it in the neck instead (measured: 170 mm of pure head translation)
   // put the eye on the axis and made a turtle out of the figure.
+  // v5: + 0.12 rad more over the hips in the sprint band. (The operator's
+  // athletic idle lean is NOT here: this solver is shared with the insurgent,
+  // who has his own hunch at the draw — see scene_draw_figure.)
+  float sprT = anim_sprT(a) * ground * (1.0f - a->bwd) * (1.0f - a->crouch_s);
   float lean_f = a->lean_f + runT * 0.42f * (1.0f - a->bwd) + 0.46f * a->crouch_s +
+                 0.12f * sprT +
                  0.14f * a->ads_s +
                  0.23f * hs_ * hitf * (0.35f + 0.85f * hlev) +
                  0.50f * a->hdown +      // fold over the knees on a hard landing
@@ -756,8 +770,12 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // Gait list: the trunk tips 2-4 deg toward the stance side in phase with
   // the pelvis shift — 4 cm of pure pelvis slide under a plumb trunk is
   // sub-pixel at 10 m, the list is what actually reads.
+  // v5: x (1 - 0.65 ads_s) — the TACTICAL WALK. Aimed, a shooter rolls the
+  // step through the knees and keeps the trunk plumb under the optic; with the
+  // full list the cheek weld carried the rifle 99 mm side to side per stride
+  // (`gait` ads_walk head_x), a sight picture nobody could hold.
   float glist = sinf(bph * F_TAU) * 0.055f * movT * ground *
-                (1.0f - 0.55f * a->crouch_s) * (1.0f - a->slide_s);
+                (1.0f - 0.55f * a->crouch_s) * (1.0f - a->slide_s) * (1.0f - 0.65f * a->ads_s);
   v3 spine = v3_norm(v3_add(U,
       v3_add(v3_scale(F, lean_f * (1.0f - a->slide_s) - rec_mag * a->slide_s * sfd),
              v3_scale(R, a->lean_r * (1.0f - a->slide_s) + glist
@@ -782,22 +800,33 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // the relative twist +-15.5 deg (31 peak-to-peak), which is the published
   // running range (20-30), and it is what cancels the legs' angular momentum.
   float cyaw = ly + wrap_pi(yaw - ly) * 0.78f -
-               sinf(bph * F_TAU) * 0.16f * runT * ground;
+               sinf(bph * F_TAU) * (0.16f + 0.07f * sprT) * runT * ground;
   v3 Rc = {{cosf(cyaw), 0, sinf(cyaw)}};
   v3 neck = v3_add(chest, v3_scale(spine, 0.10f));
   // The head keeps looking where the eyes are pointed: it follows the spine only
   // partly, and in a deep slide recline it stays almost upright rather than
   // lying back with the torso.
-  v3 head_up = v3_norm(v3_add(v3_scale(spine, 0.45f * (1.0f - 0.7f * a->slide_s)),
-                              v3_scale(U, 0.55f + 0.40f * a->slide_s)));
+  // (0.62 of the spine, not 0.45: a head held near-vertical over a trunk that
+  // lists and leans with every stride read as a CHICKEN's — the body moving
+  // under a head that never did. Aimed, the cheek weld owns it again.)
+  float hsp = 0.45f + 0.17f * (1.0f - a->ads_s);
+  v3 head_up = v3_norm(v3_add(v3_scale(spine, hsp * (1.0f - 0.7f * a->slide_s)),
+                              v3_scale(U, 1.0f - hsp + 0.40f * a->slide_s)));
   // The head only follows the aim so far: at a full 90 degree look-up, 0.65 of
   // the pitch would lay the skull on the spine and slide the helmet off the
   // back of it. Real aiming past ~35 degrees is done with the eyes.
-  float hp = f_clamp(pitch * 0.62f, -0.62f, 0.62f);
+  // ...plus a small NOD with each footfall (twice per stride), off when aimed.
+  float hk = (1.0f - a->ads_s) * (1.0f - a->slide_s) * ground * movT;
+  float hp = f_clamp(pitch * 0.62f + sinf(bph * F_TAU * 2.0f) * (0.030f + 0.025f * runT) * hk,
+                     -0.62f, 0.62f);
   // ...and it LEADS a turn: eyes -> head -> trunk -> pelvis is the human
   // ordering, so the head runs ~0.2 s of yaw rate ahead of the aim (capped
   // ~14 deg). Cheap, and it is what makes a turn read as intent.
-  float hyaw = yaw + f_clamp(a->yaw_vel * 0.20f, -0.25f, 0.25f);
+  // ...and it TURNS WITH THE CHEST A LITTLE: the thorax counter-rotates
+  // +-15 deg with the stride, and a head locked dead on the aim through all of
+  // it is the chicken again. It carries 40% of that twist while moving.
+  float hyaw = yaw + f_clamp(a->yaw_vel * 0.20f, -0.25f, 0.25f) -
+               0.40f * hk * sinf(bph * F_TAU) * (0.16f + 0.07f * sprT) * runT;
   v3 head_f = {{sinf(hyaw) * cosf(hp), sinf(hp), -cosf(hyaw) * cosf(hp)}};
   // THE NECK GETS LONGER IN A SLIDE, and that is geometry rather than taste.
   // The neck sits 0.10 along the spine from the chest and the skull 0.16 above
@@ -919,8 +948,25 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // CoM's own vertical excursion (about 40 mm walking), i.e. the neck damps the
   // bob, it does not delete it — and a head that holds still over a bobbing
   // pelvis is exactly the "gliding" read. 0.40 leaves the head at ~22/36 mm.
-  head.y += bob_drop * 0.40f;
-  neck.y += bob_drop * 0.20f;
+  // 0.20, not 0.40 (2026-11-15): at 0.40 over the body's own sway damping the
+  // head read as held in space while the trunk moved under it.
+  head.y += bob_drop * 0.20f;
+  neck.y += bob_drop * 0.10f;
+  // v5: ...AND SIDEWAYS. The vertical bob was damped and the lateral one never
+  // was: the pelvis sway (+-24 mm) plus the trunk's gait list (0.055 rad on a
+  // 0.7 m lever) arrived at the head whole, and `gait` measured the head
+  // swinging 102 mm side to side at a walk and 91-95 at a run — three times a
+  // walker's. The head gives back 0.55 of that (the neck 0.25), so it travels
+  // ~45 mm. Gait terms only: a LEAN is the player's input and keeps its full
+  // head travel (`lean` is unchanged), and at the ready the cheek weld owns the
+  // head, so the give-back fades out with ads_s.
+  {
+    float gsway = sinf(bph * F_TAU) * 0.024f * (1.0f - 0.55f * runT) * ground * movT +
+                  glist * 0.70f;
+    float gk = (1.0f - a->ads_s) * (1.0f - a->slide_s);
+    head = v3_sub(head, v3_scale(R, gsway * 0.30f * gk));
+    neck = v3_sub(neck, v3_scale(R, gsway * 0.14f * gk));
+  }
 
   // Legs: ankle comes from the foot controller, knee from IK. In a slide the
   // lead leg rides heel-first (toe pitched up, knee soft), the trail leg
@@ -1102,7 +1148,7 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   if (rl > 0.003f) {
     v3 gr0 = v3_cross(aimd, U);
     gr0 = v3_dot(gr0, gr0) > 1e-6f ? v3_norm(gr0) : Rc;
-    float down = (0.60f - 0.22f * runT) * rl;      // ~34 deg still, ~22 sprinting
+    float down = (0.60f - 0.22f * runT + 0.10f * anim_sprT(a)) * rl;   // ~34 deg still, ~22 running, ~28 tucked at a sprint
     // ...but never past ~60 deg below level in all: aiming low already, the
     // carry only has to take the rest of the way to a steep low ready.
     down = fminf(down, fmaxf(1.05f + gp, 0.0f) * rl);
@@ -1999,7 +2045,10 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
       // back — it fades in as the body stops, and the re-step logic walks the
       // feet into it on its own.
       float idle_k = 1.0f - f_clamp(a->spd / 0.7f, 0.0f, 1.0f);
-      float stag = (i ? -0.050f : 0.070f) * idle_k * (1.0f - a->crouch_s * 0.4f);
+      // v5: 9 cm forward / 9 back (was 7 / 5): the bladed shooter's stance,
+      // trigger-side foot back. The SAME numbers seed anim_reset, so a figure
+      // that spawns or is lined up stands in it rather than square.
+      float stag = (i ? -0.090f : 0.090f) * idle_k * (1.0f - a->crouch_s * 0.4f);
       v3 home = {{base.x + rx * s * (half + 0.012f * idle_k) + fx * stag,
                   base.y + ANIM_ANKLE_Y,
                   base.z + rz * s * (half + 0.012f * idle_k) + fz * stag}};
@@ -2247,8 +2296,12 @@ static void anim_reset(anim_t *a, v3 pos, float yaw) {
   a->was_grounded = 1;
   for (int i = 0; i < 2; i++) {
     float s = i ? 1.0f : -1.0f;
-    v3 home = {{pos.x + cosf(yaw) * s * 0.13f, pos.y + ANIM_ANKLE_Y,
-                pos.z + sinf(yaw) * s * 0.13f}};
+    // v5: the idle home (half 0.14 + 0.012, the 9 cm stagger), not 0.13 square:
+    // the re-step never fires for a stagger this small, so a reset figure
+    // otherwise stands on a line until it first walks.
+    float stag = i ? -0.090f : 0.090f;
+    v3 home = {{pos.x + cosf(yaw) * s * 0.152f + sinf(yaw) * stag, pos.y + ANIM_ANKLE_Y,
+                pos.z + sinf(yaw) * s * 0.152f - cosf(yaw) * stag}};
     a->foot[i].pos = a->foot[i].from = a->foot[i].to = home;
     a->foot[i].yaw = yaw;
     a->foot[i].t = 1.0f;

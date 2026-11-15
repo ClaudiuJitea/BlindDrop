@@ -137,8 +137,9 @@ static void app_start(player_t *p, int w, int h, uint32_t seed) {
   match_init();
 }
 
-// THE WHEEL SCROLLS THROUGH THE WEAPONS, and it is wired to IN_SWAP rather
-// than to a pair of NEXT/PREV actions on purpose: the whole
+// THE WHEEL SCROLLS THROUGH THE WEAPONS, down to the next and up to the
+// previous (CS2's invnext/invprev), and it is wired to IN_SWAP / IN_SWAP_PREV
+// rather than to a path of its own on purpose: the whole
 // switch — the raise timeline, the abandoned reload, the direct-slot no-op —
 // lives in weapon_tick behind that ONE press edge, and a second route into it
 // is the one-copy rule broken for a mouse.
@@ -147,8 +148,10 @@ static void app_start(player_t *p, int w, int h, uint32_t seed) {
 // tell the two apart. Its own function because `appframe` is the second reader
 // — the headless path that proves this, since neither backend can be driven
 // from a script.
+// The action a notch presses this frame: IN_SWAP (down), IN_SWAP_PREV (up), -1.
 static int input_wheel_swap(void) {
-  return !g_menu_open && (g_pressed[KEY_MWUP] || g_pressed[KEY_MWDN]);
+  if (g_menu_open) return -1;
+  return g_pressed[KEY_MWDN] ? IN_SWAP : g_pressed[KEY_MWUP] ? IN_SWAP_PREV : -1;
 }
 
 // held/held_first for one frame. The menu gate and the "held OR latched" rule
@@ -169,7 +172,8 @@ static void frame_input_keys(frame_input_t *in, const int binds[IN_COUNT],
     in->held[i] = g_menu_open ? hb : held;
     in->held_first[i] = g_menu_open ? hb : (held || latch);
   }
-  if (input_wheel_swap()) in->held_first[IN_SWAP] = 1;
+  int wa = input_wheel_swap();
+  if (wa >= 0) in->held_first[wa] = 1;
 }
 
 // Config tokens -> key ids; a typo in the config falls back to the action's own

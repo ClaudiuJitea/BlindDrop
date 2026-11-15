@@ -146,7 +146,12 @@ static const float GUN_PATTERN[32] = {
 typedef struct {
   int   cur;             // WPN_AR / WPN_SR — which weapon is in the hands
   int   ammo[WPN_COUNT]; // per-weapon rounds; transient state below is shared
-  int   var[WPN_COUNT];  // LOADOUT variant per slot (WPN_VAR); only AR/PT have any
+  int   var[WPN_COUNT];  // LOADOUT variant per slot (WPN_VAR); only AR/PT/SR have any
+  // CS2's SECONDARY FIRE (IN_ALTFIRE toggles it, per slot): the FAMAS's and
+  // the Glock's burst, the R8's fanned hammer. burst_n is what is left of a
+  // burst in flight; cock_t how long the R8's hammer has been coming back
+  // (it fires at R8_COCK_T); dual_side the Beretta that fires next.
+  int   alt[WPN_COUNT], burst_n, cock_t, dual_side;
   int   fresh;           // nothing fired or reloaded since the spawn: a loadout
                          // change may still be taken without waiting a life
   // PER WEAPON, like ammo: the cooldown is the weapon's mechanism cycling (the
@@ -169,6 +174,12 @@ typedef struct {
   // through the throw, gr_fuse is what the throw leaves on the clock, gr_lob the
   // throw being underhand, and gr_prev the weapon to go back to when none remain.
   int   gr_cook, gr_t, gr_fuse, gr_lob, gr_prev;
+  // ...and WHICH grenade is in that slot. ammo[WPN_GR] always counts the kind in
+  // hand (gr_kind: NADE_FRAG, NADE_SMOKE, NADE_INC) and gr_bag the kinds that
+  // are not (gr_bag[gr_kind] stays 0), so every rule written for "the grenades"
+  // — the throw, the count on the wire, running out — reads the one in hand
+  // without knowing there are three.
+  int   gr_kind, gr_bag[NADE_KINDS];
   int   gr_regen;        // ticks toward the next grenade (mode_nade_refill)
   float block_k, prev_block_k;
   int   switch_t;        // ticks of weapon raise remaining after a swap
@@ -208,21 +219,22 @@ typedef struct {
 // proof that stages one) fills both mags — seventeen copies of this loop is
 // seventeen chances to forget the second weapon when a third arrives.
 static int wvar(const weapon_t *w, int id) {
-  return (id == WPN_AR || id == WPN_PT) ? armory_idx(w->var[id], WPN_VARS) : 0;
+  return wpn_var_row(id) >= 0 ? armory_idx(w->var[id], wpn_var_n(id)) : 0;
 }
 // The structural row for slot `id` as THIS shooter carries it. Variant 0 is
 // WPN_DEF itself, by pointer, so the shipped guns cannot drift.
 static const wpn_def_t *wdef(const weapon_t *w, int id) {
   int v = wvar(w, id);
   if (!v) return &WPN_DEF[id];
-  static const char *const *names[2] = {RIFLE_VAR_NAMES, PISTOL_VAR_NAMES};
-  static wpn_def_t t[2][WPN_VARS];
+  static const char *const *names[3] = {RIFLE_VAR_NAMES, PISTOL_VAR_NAMES, SNIPER_VAR_NAMES};
+  static const int slot[3] = {WPN_AR, WPN_PT, WPN_SR};
+  static wpn_def_t t[3][WPN_VARS];
   static int built;
   if (!built) {
-    for (int k = 0; k < 2; k++)
-      for (int i = 1; i < WPN_VARS; i++) {
+    for (int k = 0; k < 3; k++)
+      for (int i = 1; i < wpn_var_n(slot[k]); i++) {
         const wpn_var_t *a = &WPN_VAR[k][i];
-        wpn_def_t d = WPN_DEF[k ? WPN_PT : WPN_AR];
+        wpn_def_t d = WPN_DEF[slot[k]];
         d.name = names[k][i];
         d.mag = a->mag; d.dmg = a->dmg; d.full_auto = a->full_auto;
         d.hip_spread = a->hip_spread; d.v_round = a->v_round;
@@ -230,27 +242,105 @@ static const wpn_def_t *wdef(const weapon_t *w, int id) {
       }
     built = 1;
   }
-  return &t[id == WPN_PT][v];
+  return &t[wpn_var_row(id)][v];
 }
 // ...and its FEEL: the slot's live tuning row, scaled by the variant. Variant 0
 // hands back the live row itself.
 static const float *gun_feel(const weapon_t *w, int id, float buf[WP_COUNT]) {
   int v = wvar(w, id);
   if (!v) return g_sim_wp[id];
-  const float *m = WPN_VAR[id == WPN_PT][v].feel;
+  const float *m = WPN_VAR[wpn_var_row(id)][v].feel;
   for (int i = 0; i < WP_COUNT; i++) buf[i] = g_sim_wp[id][i] * m[i];
   return buf;
 }
-// The loadout as one nibble: rifle variant in bits 0-1, pistol in bits 2-3.
-static int loadout_pack(int rv, int pv) {
-  return armory_idx(rv, WPN_VARS) | armory_idx(pv, WPN_VARS) << 2;
+// The loadout as eleven bits: primary variant in bits 0-4, pistol in bits 5-8,
+// sniper in bits 9-10 (LOADOUT_BITS; the wire carries exactly these).
+#define LOADOUT_BITS 11
+static_assert(RV_N <= 32 && PV_N <= 16 && SV_N <= 4, "the loadout's fields are 5, 4 and 2 bits");
+static int loadout_pack(int rv, int pv, int sv) {
+  return armory_idx(rv, RV_N) | armory_idx(pv, PV_N) << 5 | armory_idx(sv, SV_N) << 9;
+}
+static int loadout_valid(int lo) {
+  return (lo & 31) < RV_N && (lo >> 5 & 15) < PV_N && (lo >> 9 & 3) < SV_N &&
+         lo >= 0 && lo < (1 << LOADOUT_BITS);
 }
 static void loadout_apply(weapon_t *w, int lo) {
-  w->var[WPN_AR] = armory_idx(lo & 3, WPN_VARS);
-  w->var[WPN_PT] = armory_idx(lo >> 2 & 3, WPN_VARS);
+  w->var[WPN_AR] = armory_idx(lo & 31, RV_N);
+  w->var[WPN_PT] = armory_idx(lo >> 5 & 15, PV_N);
+  w->var[WPN_SR] = armory_idx(lo >> 9 & 3, SV_N);
+}
+// This shooter's variant row for slot `id` (NULL for a slot without variants).
+static const wpn_var_t *wvrow(const weapon_t *w, int id) {
+  int row = wpn_var_row(id);
+  return row < 0 ? NULL : &WPN_VAR[row][wvar(w, id)];
+}
+// The menu's loadout, packed.
+static int loadout_cfg(void) {
+  return loadout_pack(g_cfg.rifle_var, g_cfg.pistol_var, g_cfg.sniper_var);
 }
 static void wpn_fill_mags(weapon_t *w) {
   for (int i = 0; i < WPN_COUNT; i++) w->ammo[i] = wdef(w, i)->mag;
+  w->gr_kind = NADE_FRAG;                 // a fresh life holds the frags first...
+  w->gr_bag[NADE_FRAG] = 0;
+  w->gr_bag[NADE_SMOKE] = SMOKE_CARRY;    // ...with the smoke and the fire behind them
+  w->gr_bag[NADE_INC] = INC_CARRY;
+}
+// THE THREE GRENADES in the one slot (see weapon_t.gr_kind).
+static int nade_count(const weapon_t *w, int k) {
+  return k == w->gr_kind ? w->ammo[WPN_GR] : w->gr_bag[k];
+}
+static int nade_smokes(const weapon_t *w) { return nade_count(w, NADE_SMOKE); }
+static int nade_frags(const weapon_t *w)  { return nade_count(w, NADE_FRAG); }
+static int nade_others(const weapon_t *w) {
+  int n = 0;
+  for (int k = 0; k < NADE_KINDS; k++) if (k != w->gr_kind) n += w->gr_bag[k];
+  return n;
+}
+// Put kind k in the hand (the count in hand goes back into the bag).
+static void nade_swap_to(weapon_t *w, int k) {
+  if (k == w->gr_kind || k < 0 || k >= NADE_KINDS) return;
+  w->gr_bag[w->gr_kind] = w->ammo[WPN_GR];
+  w->ammo[WPN_GR] = w->gr_bag[k];
+  w->gr_bag[k] = 0;
+  w->gr_kind = k;
+}
+// The next kind carried after the one in hand, in slot order; -1 when none.
+static int nade_next(const weapon_t *w) {
+  for (int i = 1; i < NADE_KINDS; i++) {
+    int k = (w->gr_kind + i) % NADE_KINDS;
+    if (w->gr_bag[k] > 0) return k;
+  }
+  return -1;
+}
+static void nade_swap(weapon_t *w) { nade_swap_to(w, nade_next(w)); }
+// What the throw leaves on the clock: a frag its cooked fuse, the others their
+// flight limit (they go off on landing, not on a timer).
+static int nade_flight(const weapon_t *w, int frag_fuse) {
+  return w->gr_kind == NADE_SMOKE ? SMOKE_FLIGHT_MAX
+       : w->gr_kind == NADE_INC   ? INC_FLIGHT_MAX : frag_fuse;
+}
+// THE SLOT ON THE WIRE, one byte: bits 0-1 the kind in hand, bits 2-4 and 5-7
+// how many of the next two kinds (in slot order) are carried.
+static uint8_t nade_pack(const weapon_t *w) {
+  int k = w->gr_kind % NADE_KINDS, b1 = w->gr_bag[(k + 1) % NADE_KINDS],
+      b2 = w->gr_bag[(k + 2) % NADE_KINDS];
+  b1 = b1 < 0 ? 0 : b1 > 7 ? 7 : b1;
+  b2 = b2 < 0 ? 0 : b2 > 7 ? 7 : b2;
+  return (uint8_t)(k | b1 << 2 | b2 << 5);
+}
+static int nade_kind_of(uint8_t b) { return (b & 3) < NADE_KINDS ? (b & 3) : 0; }
+static void nade_unpack(weapon_t *w, uint8_t b) {
+  int k = nade_kind_of(b);
+  w->gr_kind = k;
+  w->gr_bag[k] = 0;
+  w->gr_bag[(k + 1) % NADE_KINDS] = b >> 2 & 7;
+  w->gr_bag[(k + 2) % NADE_KINDS] = b >> 5 & 7;
+}
+// Does the byte describe a different slot from w's (kind or carried counts)?
+static int nade_unpacked_differs(const weapon_t *w, uint8_t b) {
+  int k = nade_kind_of(b);
+  return w->gr_kind != k || w->gr_bag[(k + 1) % NADE_KINDS] != (b >> 2 & 7) ||
+         w->gr_bag[(k + 2) % NADE_KINDS] != (b >> 5 & 7);
 }
 // WHO DECIDES human h's loadout: the server reads what that client's inputs
 // carry, an offline game reads the menu, and a client never does — its own
@@ -258,15 +348,16 @@ static void wpn_fill_mags(weapon_t *w) {
 static int human_loadout_src(int h) {
   if (h < 0 || h >= MAX_HUMANS) return -1;
   if (g_server) return g_human_loadout[h];
-  if (!g_online) return loadout_pack(g_cfg.rifle_var, g_cfg.pistol_var);
+  if (!g_online) return loadout_cfg();
   return -1;
 }
-// Take the loadout now. Only the two slots that have variants are refilled —
+// Take the loadout now. Only the slots that have variants are refilled —
 // a grenade already thrown stays thrown.
 static void loadout_take(weapon_t *w, int lo) {
   loadout_apply(w, lo);
   w->ammo[WPN_AR] = wdef(w, WPN_AR)->mag;
   w->ammo[WPN_PT] = wdef(w, WPN_PT)->mag;
+  w->ammo[WPN_SR] = wdef(w, WPN_SR)->mag;
 }
 
 // Viewmodel animation springs — all ticked at 120 Hz with prev_ twins for
@@ -295,6 +386,15 @@ typedef struct {
   float breath;                       // phase of the idle figure-8
   float cam_roll, cam_roll_v, prev_cam_roll;  // rad: slide bank of the CAMERA
   int   was_grounded;
+  // INSPECT AND IDLE FIDGET (knife, pistol): one short keyframed clip at a time,
+  // layered on the hold by vm_build. `clip` is a VMC_* (0 = none), `clip_w` the
+  // weapon it was started on, `clip_t` ticks into it. `clip_k` is its weight,
+  // 1 while it plays and bled out fast when anything real happens (fire, aim,
+  // reload, swap, a swing) so the hands are never late for the fight. idle_t
+  // counts the ticks the hands have been left alone; insp_req is the latched
+  // INSPECT press. Presentation only, never on the wire.
+  int   clip, clip_w, idle_t, fidget_n, insp_req;
+  float clip_t, prev_clip_t, clip_k, prev_clip_k;
 } vm_t;
 
 typedef struct {

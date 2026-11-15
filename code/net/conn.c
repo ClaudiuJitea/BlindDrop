@@ -798,6 +798,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     p->alive = e->flags & 1; p->grounded = (e->flags >> 1) & 1;
     p->crouched = (e->flags >> 2) & 1; p->sliding = (e->flags >> 3) & 1;
     p->hp = e->hp; p->wp.cur = e->weapon;
+    p->wp.gr_kind = nade_kind_of(e->nade);   // a remote hand: frag, smoke or fire
     loadout_apply(&p->wp, e->loadout);
     net_melee_apply(&p->wp, e);
     if (!g_humans_on[h]) { g_humans_on[h] = 1; anim_reset(&g_player_anim[h], pos, p->yaw); }
@@ -830,6 +831,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     b->alive = e->flags & 1; b->grounded = (e->flags >> 1) & 1;
     b->crouch = (e->flags >> 2) & 1; b->sliding = (e->flags >> 3) & 1;
     b->hp = e->hp; b->wp.cur = e->weapon; b->active = 1;
+    b->wp.gr_kind = nade_kind_of(e->nade);
     loadout_apply(&b->wp, e->loadout);
     net_melee_apply(&b->wp, e);
     if (tele) anim_reset(&b->anim, pos, b->yaw);
@@ -1101,6 +1103,7 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
       }
       p->wp.cur = es[i].weapon;
       p->wp.ammo[p->wp.cur] = es[i].mag;
+      nade_unpack(&p->wp, es[i].nade);   // the grenade slot, server truth
       // REPLAY THE PENDING INPUTS. The adopted fix is the state after
       // input `li`; every input in (li, seq) is already on the wire and the
       // server WILL play it — after a respawn it is already alive and walking
@@ -1136,6 +1139,7 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
       net_cl_restore_pred(p, h, li);         // recorded derived state at li…
       p->wp.cur = es[i].weapon;              // …then the server's weapon truth
       p->wp.ammo[p->wp.cur] = es[i].mag;     // replay re-predicts pending shots
+      nade_unpack(&p->wp, es[i].nade);
       g_cl.predpos[li % NET_HIST] = auth;
       net_cl_replay(p, li);
       g_cl.prev_yaw = p->yaw;
@@ -1159,6 +1163,11 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
       // Comparing the current counter against the RTT-old server value (as
       // this once did) needed a ±1 dead band that let a real one-round
       // desync (a shot the server refused) stand forever.
+      // The grenade slot the same way: if the prediction AT li held a different
+      // kind (or count of the other) than the server says, the server wins.
+      if (net_cl_hist_ok(li) &&
+          nade_unpacked_differs(&g_cl_pred[li % NET_HIST].wp, es[i].nade))
+        nade_unpack(&p->wp, es[i].nade);
       if (net_cl_hist_ok(li) && g_cl_pred[li % NET_HIST].wp.cur == es[i].weapon) {
         int am = g_cl_pred[li % NET_HIST].wp.ammo[es[i].weapon] - (int)es[i].mag;
         if (am) {
@@ -1214,8 +1223,10 @@ static void net_cl_tick(const int held[IN_COUNT], float wx, float wy,
   int h = human_of_ent(g_cl.my_ent);
   if (h < 0) return;
   player_t *p = &g_players[h];
-  uint16_t btn = 0;
-  for (int k = 0; k < IN_COUNT; k++) if (held[k]) btn |= (uint16_t)(1u << k);
+  // 32 bits: IN_COUNT is past 16, and a uint16_t here silently dropped every
+  // button from IN_SLOT5 up (grenade, smoke, scoreboard...) for online clients.
+  uint32_t btn = 0;
+  for (int k = 0; k < IN_COUNT; k++) if (held[k]) btn |= 1u << k;
   // PREDICT ON THE VALUES THE SERVER WILL ACTUALLY SIMULATE. The wire
   // quantizes angles and the wish vector; predicting on the raw floats and
   // sending the rounded ones makes client and server run different inputs
@@ -1249,7 +1260,7 @@ static void net_cl_tick(const int held[IN_COUNT], float wx, float wy,
   // redundancy tail re-sends it for the next NET_IN_REDUN packets.
   g_cl.inlog[g_cl.seq % NET_HIST] =
       (net_input_t){.tick = g_cl.seq, .view = view, .buttons = btn,
-                    .loadout = (uint8_t)loadout_pack(g_cfg.rifle_var, g_cfg.pistol_var),
+                    .loadout = (uint16_t)loadout_cfg(),
                     .yaw = net_q_yaw(yaw), .pitch = net_q_pitch(pitch),
                     .wish_x = net_q_wish(wx), .wish_y = net_q_wish(wy)};
   // Predict only while ALIVE: the move tick's dead branch counts down

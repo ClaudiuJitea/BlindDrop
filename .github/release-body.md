@@ -1,19 +1,22 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.7.8
+## What's new in 0.8
 
-- **Loadouts:** Armory > Loadout picks your rifle (**M4 carbine**, **AK-47** or **FAMAS**) and your pistol (**duty pistol**, **Glock-18** or **Desert Eagle**). Each one has its own model, damage, magazine, fire rate and recoil, plus its own gunshot. Your choice applies right away if you haven't fired yet, otherwise on your next spawn.
-- **Recorded sounds:** gunshots, footsteps, impacts, the knife, grenades and the mission sounds now use recorded audio instead of synthesized tones.
-- **Kills and deaths:** a kill now sounds like a round hitting a man in body armour, with four takes for body kills and three for headshots, and never the same take twice in a row. Your own death has its own sound (a hit to the chest, a gasp, ringing ears). You now always hear the enemy you killed go down.
-- **Reloads:** new recordings for the carbine, sniper and pistol (magazine out, magazine in, bolt or slide, plus gear handling), each landing exactly on the reload animation.
-- **Grenades:**
-  - **First person:** a new olive frag held further into view.
-  - **Overhand throw:** your arm draws back, whips through, releases at full stretch and follows through; it takes 0.83 s, up from 0.47 s.
-  - **Underhand lob:** it swings back past the hip first.
-  - **In third person:** you hold the grenade up beside your head with your other arm reaching forward, and you throw with your whole body: shoulders turning, chest leaning into it, arm finishing across your body.
-- **Third-person rifle carry:** when you look up or down, the rifle and the arms now move together. Before, the rifle pointed at your feet and your elbow stuck out sideways.
+- **The full arsenal:** Armory > Loadout now picks from **20 primaries** (M4A4, AK-47, FAMAS, M4A1-S, Galil AR, SG 553, AUG, MAC-10, MP9, MP7, MP5-SD, UMP-45, P90, PP-Bizon, Nova, XM1014, Sawed-Off, MAG-7, M249, Negev), **10 pistols** (P2000, Glock-18, Desert Eagle, USP-S, P250, Five-SeveN, Tec-9, CZ75-Auto, R8 Revolver, Dual Berettas) and **4 snipers** (AWP, SCAR-20, SSG 08, G3SG1), each with its own model, handling and recorded report. `B` switches fire mode where a gun has one.
+- **Smoke and incendiary grenades:** the smoke (`6`) blooms into a cloud that fills the space it lands in; the incendiary (`7`) lays a spreading pool of fire. You start every life with **3 frags, 3 smokes and 3 incendiaries**, and the incendiary is now the same size as the smoke.
+- **Supply stations** on every handmade map: medical stations give +50 health, ammunition crates restock your grenades. Each empties when used and restocks after 25 seconds; a lamp on its sign shows which.
+- **Wounds you can feel:** blood lands on the side a round came from, the screen edge flashes red, and as your health drops the colour drains and the edges crust with blood in time with your heartbeat.
+- **Maps rebuilt and dressed:**
+  - **Stairs and walkways:** every one now has a proper handrail.
+  - **Narrow streets:** covered rooms and stone arches span them in Citadel; pipe bridges in Harbor and Refinery.
+  - **New props:** a forklift, oil tanks, sack pallets, benches and power cabinets in the yards and streets.
+  - **Outpost:** a climbable HESCO sniper bastion and a barracks tent in each side lane.
+  - **Bazaar:** a ladder to the second house's roof.
+- **Better-looking props:** a new forklift, and black tyres on every vehicle (they had rendered pale grey).
+- **Figures:** no more sagging seat on running or crouching soldiers; hips and thighs now join properly in a stride; heads move with the body instead of hanging still.
+- **Face gear:** six new masks in Armory > Gear.
 
-0.7.8 uses a new network protocol (16): everyone in a game needs 0.7.8.
+0.8 uses a new network protocol (22): everyone in a game needs 0.8.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

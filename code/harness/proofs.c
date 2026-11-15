@@ -58,6 +58,8 @@ static void usage(void) {
        "  hud on|off         show/hide gameplay HUD (menus remain visible)\n"
        "  showfps on|off     show/hide the FPS counter idempotently\n"
        "  armory knife|theme|gear N  cosmetic loadout (ARMORY page) by index\n"
+       "  armory rifle|pistol|sniper N  weapon loadout (ARMORY page) by index\n"
+       "  respawn            respawn the player (takes the ARMORY loadout)\n"
        "  puppet on|off      drive bot 0 by script instead of AI (anim testbed)\n"
        "  puppet move DX DZ | speed S | face DEG | crouch 0|1 | lean -1..1 |\n"
        "                     ads 0|1 | jump | slide | warp X Z\n"
@@ -80,6 +82,7 @@ static void usage(void) {
        "  capture V.rgb A.wav FPS N  RGB24+WAV capture at FPS=60|120 for N frames\n"
        "  cam X Y Z YAW PIT  override camera for later shots (cam off: back to player)\n"
        "  cambot DX DY DZ    camera at bot+offset looking at the bot (cambot off)\n"
+       "  supplies           list the map's supply stations and their state\n"
        "  camorbit R H D L   orbit bot 0: radius, height, deg/s, look height\n"
        "                     (camorbit off returns to the previous player camera)\n"
        "  vmhand             wrist bend / forearm-to-bore / palm length, per hand\n"
@@ -94,6 +97,8 @@ static void usage(void) {
        "                     (DIST = camera distance, to sweep the profile tiers)\n"
        "  figv               toggle printing each figcheck offender's location\n"
        "  figm               every figure part's measured extent in mm + bone lengths\n"
+       "  fighead            every head x face combination's rendered head vs the head hit box\n"
+       "  figgear H F        pin every figure's headgear / face index (-1 follows)\n"
        "  figbury [head]     third-person weapon vs the BODY: deepest vertex\n"
        "                     inside the trunk, %% of the weapon hidden in it,\n"
        "                     and how far the BUTT PAD is buried. `head` asks\n"
@@ -1896,6 +1901,57 @@ static const bot_t *probe_capture_figure(int wpn) {
                     (v3){{1, 1, 1}}, 0, wpn, gun_anim(&b->wp, 1.0f));
   g_probe_on = 0;
   return b;
+}
+
+// THE RENDERED HEAD AGAINST THE HEAD HIT BOX (v5). ent_trace_box's head is a
+// WORLD-aligned box, +-0.14 m round the entity origin in x and z, from the eye
+// minus 0.12 to the eye plus 0.18 in y. Every head part bot 0 draws (skull,
+// helmet, every hero sculpt, masks, NVG, wrap, cap, headset, goggles) is
+// measured against it for EVERY head x face combination in the armory, at the
+// close tier (the sculpts) and the far one (the procedural head). A part
+// outside the box is a visible head the sim cannot shoot. Prints the worst
+// overflow in mm per combination and `fighead worst=` over all of them.
+static int fighead_part(const char *n) {
+  static const char *const P[] = {"skull", "ear", "hero_", "helm", "goggle", "nvg", "wrap",
+                                  "cap_", "headset", "chinstrap", "irstrobe", "counterweight",
+                                  "lensglint", "skullprint", "mask"};
+  for (unsigned i = 0; i < sizeof P / sizeof *P; i++)
+    if (!strncmp(n, P[i], strlen(P[i]))) return 1;
+  return 0;
+}
+static void fighead_proof(void) {
+  const bot_t *b = &g_bots[0];
+  float eye = b->eye, worst = -1e9f;
+  for (int far = 0; far < 2; far++)
+    for (int h = 0; h < HEAD_GEAR_COUNT; h++)
+      for (int f = 0; f < FACE_GEAR_COUNT; f++) {
+        g_fig_head = h; g_fig_face = f;
+        g_nprobe = 0; g_probe_on = 1;
+        scene_reset();
+        g_cam_eye = v3_add(b->pos, (v3){{far ? 15.0f : 0.0f, 0, 0}});
+        scene_draw_figure(&b->anim, b->pos, b->yaw, NULL, 1.0f, 0.0f, (v3){{1, 1, 1}}, 0,
+                          WPN_AR, gun_anim(&b->wp, 1.0f));
+        g_probe_on = 0;
+        float ov = -1e9f, wd[3] = {0, 0, 0}; const char *wn = "-";
+        for (int i = 0; i < g_nprobe; i++) {
+          if (!g_probe[i].name || !fighead_part(g_probe[i].name)) continue;
+          for (int v = g_probe[i].v0; v + VERT_FLOATS <= g_probe[i].v1; v += VERT_FLOATS) {
+            float dx = fabsf(g_scene[v] - b->pos.x) - 0.14f;
+            float dz = fabsf(g_scene[v + 2] - b->pos.z) - 0.14f;
+            float y = g_scene[v + 1] - b->pos.y;
+            float dy = fmaxf((eye - 0.12f) - y, y - (eye + 0.18f));
+            float o = fmaxf(dx, fmaxf(dz, dy));
+            if (o > ov) { ov = o; wn = g_probe[i].name; wd[0] = dx; wd[1] = dy; wd[2] = dz; }
+          }
+        }
+        printf("fighead %s head=%d face=%d overflow=%+.1f mm (%s: x %+.0f y %+.0f z %+.0f)\n",
+               far ? "far " : "near", h, f, (double)(ov * 1000.0f), wn,
+               (double)(wd[0] * 1e3f), (double)(wd[1] * 1e3f), (double)(wd[2] * 1e3f));
+        if (ov > worst) worst = ov;
+      }
+  g_fig_head = g_fig_face = -1;
+  printf("fighead worst=%+.1f mm (<= 0: every rendered head inside the head box)\n",
+         (double)(worst * 1000.0f));
 }
 
 // Every figure part's measured extent in mm, the bone lengths, the elbow angles

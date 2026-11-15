@@ -16,11 +16,14 @@
   "nade_pin", "nade_bounce", "blast", "blast_far", "nade_spoon", "nade_equip",
   "fire_ar2", "fire_ar3", "fire_ar4", "fire_ar5", "fire_sr2", "fire_sr3",
   "fire_pt2", "fire_pt3", "fire_pt4", "far_pt", "slap", "brass", "clink",
-  "alarm", "snip", "chime",
+  "alarm", "snip", "chime", "smoke_pop", "smoke_hiss", "flame_pop", "flame_burn",
   "fire_ak1", "fire_ak2", "fire_ak3", "fire_famas1", "fire_famas2", "fire_famas3",
   "fire_glock1", "fire_glock2", "fire_glock3", "fire_deagle1", "fire_deagle2", "fire_deagle3",
   "death1", "death2", "death3", "death4", "death5", "bodyfall1", "bodyfall2", "bodyfall3",
   "kill2", "kill3", "kill4", "kill_head2", "kill_head3", "die1", "die2",
+  #define GUN_TAKE_NAME(id, name) "fire_" name "1", "fire_" name "2", "fire_" name "3",
+  GUN_TAKE_LIST(GUN_TAKE_NAME)
+  #undef GUN_TAKE_NAME
 };
 
 #define SFX_HZ 48000

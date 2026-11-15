@@ -109,7 +109,8 @@ def snapshot():
         e.to_mesh_clear()
     return vs, ps
 
-def emit(store, tag, extra=None):
+KSCALE = {}   # tag -> position scale: a world prop is metres across, not a gun
+def emit(store, tag, extra=None, k=1.0, aolen=.045):
     dg = bpy.context.evaluated_depsgraph_get()
     tris = {}
     allv = []; allp = []
@@ -137,10 +138,10 @@ def emit(store, tag, extra=None):
         key = (round(p.x, 5), round(p.y, 5), round(p.z, 5), round(n.x, 1), round(n.y, 1), round(n.z, 1))
         if key in cache: return cache[key]
         tx = n.orthogonal().normalized(); ty = n.cross(tx)
-        org = p + n * .00035; hit = 0
+        org = p + n * .00035 * k; hit = 0
         for dx, dy, dz in dirs:
             d = tx*dx + ty*dy + n*dz
-            if bvh.ray_cast(org, d, .045)[0] is not None: hit += 1
+            if bvh.ray_cast(org, d, aolen)[0] is not None: hit += 1
         v = 1.0 - hit / len(dirs)
         cache[key] = int(255 * (.34 + .66 * v))
         return cache[key]
@@ -159,7 +160,25 @@ def emit(store, tag, extra=None):
     for o, e, me in meshes:
         e.to_mesh_clear()
     store[tag] = tris
+    if k != 1.0: KSCALE[tag] = k
     print('MODEL', tag, sum(len(v) for v in tris.values())//3, 'tris')
+
+def emit_lod(store, tag, ratio=.30, tiny=.0050):
+    """THE THIRD-PERSON COPY of the gun now in the scene: no bevels, no parts
+    smaller than `tiny` (rail teeth, screws, decals: invisible at 10 m), the rest
+    decimated to `ratio`. Twenty figures carry one each, so it has to be ~1-2k
+    triangles where the first-person mesh is 10-30k."""
+    for o in list(bpy.context.collection.objects):
+        if 'col' not in o: continue
+        bb = [Vector(c) for c in o.bound_box]
+        ext = max(max(v[i] for v in bb) - min(v[i] for v in bb) for i in range(3))
+        if ext < tiny or o['flag'] == 3:
+            bpy.data.objects.remove(o); continue
+        for m in list(o.modifiers):
+            if m.type == 'BEVEL': o.modifiers.remove(m)
+        if len(o.data.polygons) > 24:
+            d = o.modifiers.new('lod', 'DECIMATE'); d.ratio = ratio
+    emit(store, tag, aolen=.03)
 
 def holo_sight(dy=0.0):
     '''The EOTech-style holo, at the AR's station. dy lifts the whole sight (a rail
@@ -584,7 +603,7 @@ def hand_l():
 def slim(ctrl, w, t):
     return [(p, n, a*w, b*t) for p, n, a, b in ctrl]
 
-def hand_r(fist=False):
+def hand_r(fist=False, open_k=0.0):
     """Broad, muscular firing hand matching zoom_trg.png:
     - Tapered wrist flaring into a full, plump dorsal hand tucked into the receiver tang.
     - Separate broad thumb metacarpal cushion carrying a WIDE, CHUNKY ~1.55:1 bevelled
@@ -664,6 +683,12 @@ def hand_r(fist=False):
         (V3(-.0192,-.0352, .016), V3(-.90, .36,  .22), .0140, .0124),   # plump distal phalanx
         (V3(-.0155,-.0362, .023), V3(-.86, .36,  .34), .0118, .0106),   # meaty rounded thumb tip!
     ]
+    if open_k > 0.0:
+        # OPENING (the knife toss): the thumb swings out of the wrap, away from the
+        # palm and forward, more toward its tip, so the hand reads as letting go.
+        n_th = len(th_ctrl)
+        th_ctrl = [(p + V3(-.012, .004, .010) * (open_k * (i / (n_th - 1)) ** 1.2), u, a, b)
+                   for i, (p, u, a, b) in enumerate(th_ctrl)]
     _, s_th = loft_tube(th_ctrl, seg_u=18, seg_v=20, palmar_flat=0.82, col=SLATE, rough=.58, flag=2, name='r_thumb')
 
     # Dark charcoal diamond-leather palmar thumb pad + lower seam line visible in zoom_trg!
@@ -700,6 +725,22 @@ def hand_r(fist=False):
             (V3(-.0168,yf,      zfs+.005), V3(-.82, .05,  .56), rf*1.00, rf*0.90),
             (V3(-.0198,yf+.002, zfs-.010), V3(-.95, .12, -.28), rf*0.90, rf*0.82),
         ]
+        if open_k > 0.0:
+            # OPENING: each finger uncurls from its wrap round the handle into a
+            # straight, slightly cupped finger running forward off its knuckle,
+            # the back of the finger still on the dorsal side. Same five stations,
+            # so the half-open hand is a true in-between, not a different sculpt.
+            K = f_ctrl[0][0]
+            o_ctrl = [
+                (K,                              V3(.96, .16, -.20), rf*1.08, rf*0.96),
+                (K + V3(-.002, -.003, .026),     V3(.97, .12,  .02), rf*1.04, rf*0.94),
+                (K + V3(-.006, -.006, .047),     V3(.95, .10,  .20), rf*1.02, rf*0.92),
+                (K + V3(-.012, -.008, .064),     V3(.90, .08,  .40), rf*1.00, rf*0.90),
+                (K + V3(-.018, -.009, .076),     V3(.84, .08,  .52), rf*0.90, rf*0.82),
+            ]
+            f_ctrl = [(a[0].lerp(b[0], open_k), a[1].lerp(b[1], open_k).normalized(),
+                       a[2] + (b[2] - a[2]) * open_k, a[3] + (b[3] - a[3]) * open_k)
+                      for a, b in zip(f_ctrl, o_ctrl)]
         _, s_f = loft_tube(f_ctrl, seg_u=16, seg_v=16, palmar_flat=0.76, power=2.35, col=SLATE, rough=.58, flag=2, name=f'r_f{i}')
         # Broad squared dark-charcoal leather fingertip/front pad + seam visible on left of grip!
         shell_patch(s_f, 0.34, 0.99, -155.0, 68.0, thick=.0015, nu=6, nv=8, rim_u=.04, rim_d=7.0,
@@ -1096,6 +1137,275 @@ def sniper():
     finish(prof([(.076, -.092), (.082, -.092), (.085, -.110), (.077, -.110)], -.0102, .0102, 'maghook'), BLACK, .76, 0, .0010, 2, group=1)
     finish(rod_y(-.1132, -.1105, 0, .050, .0026, 12), STEEL, .35, .90, .0002, 1, group=1)
 
+# ------------------------------------------------------------------ SCAR-20 (sniper slot, variant 1)
+def _rz(rings, x=0.0, y=0.0, seg=20, name='rodz', loop=False):
+    """Round part along z with no minimum segment count (lathe() forces 44).
+    loop=True closes the profile on itself (a tyre) instead of capping it."""
+    bm = bmesh.new(); rv = []
+    for z, r in rings:
+        rv.append([bm.verts.new((x + r*cos(2*math.pi*i/seg), y + r*sin(2*math.pi*i/seg), z)) for i in range(seg)])
+    for k in range(len(rv) - (0 if loop else 1)):
+        k1 = (k + 1) % len(rv)
+        for i in range(seg):
+            j = (i+1) % seg
+            bm.faces.new((rv[k][i], rv[k][j], rv[k1][j], rv[k1][i]))
+    if not loop:
+        bm.faces.new(rv[0][::-1]); bm.faces.new(rv[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return from_bm(bm, name)
+
+def _rx(x0, x1, y, z, r, seg=18, name='rodx'):
+    return prof([(z + r*cos(2*math.pi*i/seg), y + r*sin(2*math.pi*i/seg)) for i in range(seg)], x0, x1, name)
+
+def _ry(y0, y1, x, z, r, seg=18, name='rody'):
+    bm = bmesh.new()
+    pts = [(x + r*cos(2*math.pi*i/seg), z + r*sin(2*math.pi*i/seg)) for i in range(seg)]
+    a = [bm.verts.new((px, y0, pz)) for px, pz in pts]
+    b = [bm.verts.new((px, y1, pz)) for px, pz in pts]
+    bm.faces.new(a[::-1]); bm.faces.new(b)
+    for i in range(seg):
+        j = (i+1) % seg
+        bm.faces.new((a[i], a[j], b[j], b[i]))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return from_bm(bm, name)
+
+def scar20():
+    """FN SCAR-20S precision rifle after the reference renders: a flat-dark-earth
+    upper with its railed handguard and side windows, a darker lower, the precision
+    stock (skeletal hinge, rear block, twin rods, cheek riser and buttpad), a 20-round
+    7.62 magazine and a long brown scope in a one-piece mount, with the hard orange
+    furniture (grip, cheek, buttpad, endplate, folded sights, side plates, controls).
+
+    It is authored ON THE BOLT SNIPER'S STATIONS so every contract the game keeps for
+    the sniper slot holds unchanged: the grip and trigger group, the magazine's well and
+    envelope (group 1), the support hand's fore-end round at z .208, the scope axis at
+    y .085 with the ocular glass at SCOPE_OCU_Z -.052 / SCOPE_OCU_R .0205, and the
+    muzzle at z .506, y .016. Group 2 is the stock, group 3 the charging handle."""
+    clear()
+    LENS = (.24, .34, .41)
+    FDE = (.80, .645, .455)        # upper receiver / handguard
+    FDE_L = (.70, .56, .40)        # lower receiver, a shade deeper
+    FURN = (.56, .44, .32)         # stock frame and mount: brown polymer / alloy
+    ORNG = (.95, .56, .14)         # the hard orange furniture (NOT flag 3: it is paint, not a lamp)
+    SCOPE = (.50, .40, .30)        # the scope's brown cerakote
+    EYE = (.84, .73, .54)          # the ocular's light rubber
+    MAGC = (.60, .48, .35)
+    DK = (.25, .23, .21)
+
+    def place(o, c, rx=0.0, ry=0.0, rz=0.0):
+        o.rotation_euler = (rx, ry, rz); o.location = c
+        bpy.context.view_layer.objects.active = o; o.select_set(True)
+        bpy.ops.object.transform_apply(location=True, rotation=True); o.select_set(False)
+        return o
+
+    # --- 1. Upper receiver + handguard, one extrusion (z -.068 .. .360)
+    up = prof([(-.068, .0020), (-.068, .0400), (-.064, .0436), (.356, .0436), (.360, .0405),
+               (.360, -.0010), (.356, -.0050), (.128, -.0050), (.122, .0020)], -.0168, .0168, 'upper')
+    for s_ in (-1, 1):
+        cut(up, box((s_*.0168, .0322, .294), (.0040, .0062, .0320)))     # the side windows
+        cut(up, box((s_*.0168, .0335, .094), (.0012, .0016, .0520)))     # upper slot
+    cut(up, box((-.0168, .0150, .061), (.0020, .0042, .0490)))           # charging-handle channel (left)
+    cut(up, box((0, .0160, .360), (.0080, .0080, .0060)))                # barrel exit
+    finish(up, FDE, .58, 0, .0012, 2)
+    # dark floors in the windows and slots, so they read as openings into the receiver
+    for s_ in (-1, 1):
+        finish(box((s_*.0129, .0322, .294), (.0002, .0061, .0319)), BLACK, .60, 0, 0)
+    finish(box((-.0149, .0150, .061), (.0002, .0041, .0489)), BLACK, .60, 0, 0)
+    # the gas piston, seen through the windows
+    finish(_rz([(.250, .0052), (.352, .0052)], 0, .0322, 18), DK, .45, 0, .0004, 1)
+    finish(box((0, .0322, .262), (.0100, .0050, .0040)), BLACK, .50, 0, .0004, 1)
+    # top rail, full length, with its cross slots
+    finish(box((0, .0450, .147), (.0090, .0016, .2090)), FURN, .55, 0, .0004, 1)
+    for i in range(42):
+        finish(box((0, .0478, -.058 + .00995*i), (.0098, .0014, .0029)), FDE, .58, 0, .0004, 1)
+    # side rails on the handguard, both flanks, with their bolts
+    for s_ in (-1, 1):
+        rl = box((s_*.0186, .0150, .283), (.0020, .0060, .0730), 'srail')
+        for i in range(14):
+            cut(rl, box((s_*.0206, .0150, .218 + .0100*i), (.0012, .0070, .0018)))
+        finish(rl, FDE, .58, 0, .0005, 1)
+        for zb in (.236, .282, .328):
+            finish(_rx(*sorted((s_*.0196, s_*.0212)), .0150, zb, .0019, 12), BLACK, .50, 0, 0)
+    # bottom rail under the handguard
+    br = box((0, -.0062, .243), (.0085, .0014, .1110), 'brail')
+    for i in range(22):
+        cut(br, box((0, -.0078, .138 + .0100*i), (.0100, .0010, .0018)))
+    finish(br, FDE, .58, 0, .0004, 1)
+    # Torx screws and pins down the flanks
+    for s_ in (-1, 1):
+        for z, y in ((.236, .0360), (.246, .0360), (.170, .0330), (.180, .0330), (-.050, .0300),
+                     (.110, .0060), (.345, .0050), (.345, .0380)):
+            finish(_rx(*sorted((s_*.0164, s_*.0176)), y, z, .0018, 12), DK, .50, 0, 0)
+    # orange side plate with its five holes (both flanks), ahead of the charging channel
+    for s_ in (-1, 1):
+        pl = prof([(.112, .0105), (.170, .0105), (.176, .0150), (.170, .0195), (.112, .0195), (.106, .0150)],
+                  *sorted((s_*.0164, s_*.0182)), 'oplate')
+        for k in range(5):
+            cut(pl, _rx(-.03, .03, .0150, .126 + k*.0098, .0016, 10))
+        finish(pl, ORNG, .55, 0, .0006, 1)
+    # front sling plate, left, at the nose of the handguard
+    sp = box((-.0184, .0330, .340), (.0018, .0080, .0150), 'sling')
+    for zz in (.332, .348):
+        cut(sp, _rx(-.03, .03, .0330, zz, .0028, 12))
+    finish(sp, DK, .50, 0, .0006, 1)
+    # folded flip-up sights on the rail, orange
+    finish(box((0, .0506, .252), (.0068, .0024, .0120)), ORNG, .55, 0, .0006, 1)
+    finish(box((0, .0498, .240), (.0074, .0018, .0040)), DK, .50, 0, .0004, 1)
+    finish(box((0, .0506, -.047), (.0068, .0024, .0110)), ORNG, .55, 0, .0006, 1)
+    finish(box((0, .0498, -.058), (.0074, .0018, .0040)), DK, .50, 0, .0004, 1)
+    # the orange endplate where the stock hinges on
+    finish(box((0, .0150, -.0670), (.0150, .0270, .0040)), ORNG, .55, 0, .0008, 2)
+
+    # --- 2. Lower receiver, magwell, controls (z -.064 .. .124)
+    lo = prof([(-.064, .0030), (.124, .0030), (.124, -.0060), (.108, -.0200), (.094, -.0300),
+               (.020, -.0300), (.014, -.0160), (-.040, -.0160), (-.060, -.0120), (-.064, -.0040)],
+              -.0160, .0160, 'lower')
+    cut(lo, box((0, -.0200, .052), (.0122, .0120, .0270)))
+    finish(lo, FDE_L, .60, 0, .0012, 2)
+    for s_ in (-1, 1):
+        for z, y in ((-.052, -.006), (.002, -.008), (.104, -.012)):
+            finish(_rx(*sorted((s_*.0156, s_*.0170)), y, z, .0020, 12), DK, .50, 0, 0)
+        # ambi selector: orange lever on a dark hub
+        finish(_rx(*sorted((s_*.0158, s_*.0178)), -.0060, -.006, .0040, 16), DK, .48, 0, .0003)
+        finish(place(box((0, 0, 0), (.0012, .0026, .0085)), (s_*.0184, -.0045, -.0045), rx=-.6), ORNG, .55, 0, .0005, 1)
+    # bolt catch (left) and mag release paddle, orange
+    finish(box((-.0168, -.0010, .012), (.0012, .0040, .0028)), ORNG, .55, 0, .0004, 1)
+    finish(prof([(.019, -.024), (.022, -.024), (.020, -.038), (.0165, -.038)], -.0048, .0048), ORNG, .55, 0, .0005, 1)
+
+    # --- 3. Pistol grip (the sniper's own profile: the firing hand is fitted to it) and trigger group
+    gr = prof([(-.0113, -.014), (-.044, -.014), (-.086, -.100), (-.080, -.110), (-.052, -.106), (-.040, -.066)],
+              -.0126, .0126, 'grip')
+    # finger grooves along the front strap
+    for (z0, y0), (z1, y1), ts in (((-.0113, -.014), (-.040, -.066), (.45, .80)), ((-.040, -.066), (-.052, -.106), (.45,))):
+        dz, dy = z1 - z0, y1 - y0; L = math.hypot(dz, dy); nz, ny = dy / L, -dz / L
+        if nz < 0: nz, ny = -nz, -ny
+        for t in ts:
+            cut(gr, _rx(-.03, .03, y0 + dy*t + ny*.0100, z0 + dz*t + nz*.0100, .0094, 20))
+    finish(gr, ORNG, .80, 0, .0040, 4)
+    finish(prof([(-.083, -.104), (-.049, -.101), (-.047, -.111), (-.082, -.114)], -.0140, .0140), ORNG, .72, 0, .0012, 2)
+    finish(prof([(-.020, -.0135), (-.015, -.0135), (-.015, -.0465), (.023, -.0465), (.029, -.024), (.034, -.024),
+                 (.026, -.0512), (-.020, -.0512)], -.0042, .0042), FDE_L, .60, 0, .0007, 2)
+    finish(box((0, -.0180, .0075), (.0034, .0048, .0052)), DK, .48, 0, .0005, 1)
+    finish(prof([(.0052, -.018), (.0096, -.018), (.0088, -.0405), (.0046, -.0405)], -.0028, .0028), BLACK, .40, .5, .0004, 1)
+
+    # --- 4. Barrel and the 3-prong flash hider (muzzle at z .506, bore at y .016)
+    finish(lathe([(.356, .0102), (.372, .0102), (.376, .0088), (.448, .0084), (.452, .0092)], 0, .0160, 28), GRAPH, .42, 0, .0004, 1)
+    fh = lathe([(.450, .0106), (.478, .0106), (.481, .0098), (.506, .0098)], 0, .0160, 28, 'hider')
+    for k in range(3):
+        a_ = math.pi/2 + k*2*math.pi/3
+        cut(fh, place(box((0, 0, 0), (.0150, .0014, .0130)), (0, .0160, .497), rz=a_))
+    cut(fh, _rz([(.470, .0062), (.510, .0062)], 0, .0160, 20))
+    for zr in (.455, .460, .465, .470):
+        cut(fh, _rz([(zr - .0012, .0120), (zr + .0012, .0120)], 0, .0160, 24))
+    finish(fh, BLACK, .44, 0, .0005, 1)
+
+    # --- 5. 20-round 7.62 magazine (group 1), in the sniper's envelope
+    mag = prof([(.078, -.018), (.026, -.018), (.024, -.103), (.076, -.103)], -.0118, .0118, 'mag')
+    for s_ in (-1, 1):
+        for zr in (.034, .068):
+            cut(mag, box((s_*.0118, -.062, zr), (.0010, .036, .0022)))
+    finish(mag, MAGC, .62, 0, .0016, 2, group=1)
+    finish(prof([(.022, -.101), (.080, -.101), (.082, -.110), (.021, -.111)], -.0128, .0128, 'magplate'), FURN, .66, 0, .0012, 2, group=1)
+    finish(box((-.0120, -.078, .052), (.0005, .0060, .0080)), (.78, .16, .12), .60, 0, .0002, 1, group=1)   # the red witness label
+    finish(box((-.0120, -.090, .052), (.0005, .0024, .0080)), (.78, .16, .12), .60, 0, .0002, 1, group=1)
+
+    # --- 6. Precision stock (group 2): hinge, skeletal strut, rear block, rods, plate, pad, cheek riser
+    finish(box((0, .0110, -.0745), (.0130, .0230, .0035)), FURN, .55, 0, .0008, 2, group=2)
+    fr = prof([(-.078, .0320), (-.142, .0350), (-.142, -.0470), (-.122, -.0470), (-.078, -.0120)], -.0105, .0105, 'strut')
+    cut(fr, prof([(-.086, .0220), (-.132, .0250), (-.132, .0040)], -.03, .03))
+    cut(fr, prof([(-.092, -.0040), (-.132, -.0050), (-.132, -.0380), (-.124, -.0380)], -.03, .03))
+    finish(fr, FURN, .60, 0, .0012, 2, group=2)
+    rb = box((0, -.0190, -.175), (.0140, .0290, .0340), 'rblock')
+    for s_ in (-1, 1):
+        cut(rb, box((s_*.0140, -.0160, -.182), (.0032, .0170, .0220)))
+    finish(rb, FURN, .60, 0, .0014, 2, group=2)
+    for s_ in (-1, 1):
+        finish(_rx(*sorted((s_*.0110, s_*.0152)), -.0200, -.194, .0058, 18), DK, .50, 0, .0004, 1, group=2)
+        finish(_rx(*sorted((s_*.0150, s_*.0156)), -.0200, -.194, .0020, 10), STEEL, .35, .9, 0, group=2)
+    sr_ = box((0, -.0505, -.178), (.0080, .0022, .0360), 'srail')
+    for i in range(7):
+        cut(sr_, box((0, -.0525, -.208 + .0098*i), (.0100, .0012, .0018)))
+    finish(sr_, FURN, .58, 0, .0005, 1, group=2)
+    for yr in (-.0060, -.0340):
+        finish(_rz([(-.230, .0028), (-.150, .0028)], 0, yr, 14), STEEL, .34, .9, .0002, group=2)
+        for zc in (-.222, -.216, -.212):
+            finish(_rz([(zc - .0012, .0036), (zc + .0012, .0036)], 0, yr, 14), DK, .50, 0, 0, group=2)
+    finish(box((0, -.0310, -.2270), (.0128, .0480, .0030)), FURN, .58, 0, .0008, 2, group=2)
+    pad = prof([(-.2300, .0200), (-.2380, .0250), (-.2500, .0240), (-.2580, .0100), (-.2590, -.0690),
+                (-.2550, -.0800), (-.2320, -.0800), (-.2300, -.0740)], -.0145, .0145, 'pad')
+    cut(pad, box((0, -.0280, -.2300), (.0105, .0440, .0040)))
+    finish(pad, ORNG, .78, 0, .0026, 3, group=2)
+    finish(box((0, -.0280, -.2306), (.0095, .0420, .0016)), FURN, .66, 0, .0006, 1, group=2)
+    # cheek riser: dark frame and posts under an orange saddle with a sloped nose
+    rf = box((0, .0235, -.163), (.0105, .0105, .0400), 'riser')
+    for zc in (-.188, -.140):
+        cut(rf, box((0, .0235, zc), (.0200, .0060, .0150)))
+    finish(rf, FURN, .58, 0, .0010, 2, group=2)
+    ch = prof([(-.212, .0480), (-.098, .0480), (-.088, .0464), (-.096, .0360), (-.212, .0360)], -.0135, .0135, 'cheek')
+    finish(ch, ORNG, .72, 0, .0024, 3, group=2)
+    finish(box((0, .0350, -.154), (.0128, .0012, .0570)), DK, .58, 0, .0004, 1, group=2)
+    finish(box((-.0118, .0300, -.210), (.0030, .0042, .0050)), ORNG, .60, 0, .0006, 1, group=2)   # riser lock knob
+
+    # --- 7. Scope: light rubber ocular, brown tube, 3 turrets and a long objective; one-piece mount
+    sy = .085
+    ocu = lathe([(-.056, .0198), (-.054, .0210), (-.005, .0210), (-.002, .0192), (.002, .0172)], 0, sy, 44, 'ocular')
+    cut(ocu, _rz([(-.060, .0183), (-.050, .0183)], 0, sy, 36))
+    finish(ocu, EYE, .74, 0, .0006, 2)
+    for i in range(18):
+        a_ = i * 2*math.pi/18
+        finish(_rz([(-.047, .0010), (-.010, .0010)], .0208*cos(a_), sy + .0208*sin(a_), 8), (.62, .52, .38), .76, 0, 0)
+    finish(_rz([(-.0565, .0214), (-.0535, .0214)], 0, sy, 40), BLACK, .50, 0, 0)
+    finish(_rz([(-.0552, .0188), (-.0520, .0188)], 0, sy, 32), STEEL, .32, .90, 0)
+    finish(_rz([(-.0541, .0003), (-.0536, .0105), (-.0522, .0182)], 0, sy, 32), LENS, .15, 0, 0)
+    finish(_rz([(.0010, .0176), (.0060, .0176)], 0, sy, 32), ORNG, .55, 0, .0002)
+    tb = lathe([(.004, .0156), (.140, .0152), (.176, .0226), (.222, .0226), (.225, .0214)], 0, sy, 44, 'tube')
+    cut(tb, _rz([(.208, .0196), (.230, .0196)], 0, sy, 36))
+    finish(tb, SCOPE, .56, 0, .0006, 2)
+    finish(_rz([(.2205, .0232), (.2250, .0232)], 0, sy, 40), BLACK, .50, 0, .0003)
+    finish(_rz([(.2085, .0198), (.2110, .0198)], 0, sy, 32), STEEL, .32, .90, 0)
+    finish(_rz([(.2088, .0192), (.2098, .0110), (.2104, .0003)], 0, sy, 32), LENS, .14, 0, 0)
+    tz = .063
+    finish(_rz([(tz - .016, .0176), (tz + .016, .0176)], 0, sy, 30), SCOPE, .52, 0, .0010, 2)
+    finish(_ry(sy + .015, sy + .021, 0, tz, .0110, 24), SCOPE, .50, 0, .0005, 1)                # elevation
+    finish(_ry(sy + .021, sy + .033, 0, tz, .0106, 24), BLACK, .46, 0, .0008, 2)
+    for i in range(14):
+        a_ = i * 2*math.pi/14
+        finish(_ry(sy + .0225, sy + .0322, .0106*cos(a_), tz + .0106*sin(a_), .0009, 8), DK, .5, 0, 0)
+    finish(_ry(sy + .0328, sy + .0345, 0, tz, .0046, 14), STEEL, .32, .92, .0002, 1)
+    for s_ in (-1, 1):                                                                         # windage / parallax
+        finish(_rx(*sorted((s_*.015, s_*.021)), sy, tz, .0118, 24), SCOPE, .50, 0, .0005, 1)
+        finish(_rx(*sorted((s_*.0205, s_*.0225)), sy, tz, .0124, 24), ORNG, .55, 0, .0003)
+        finish(_rx(*sorted((s_*.0222, s_*.0300)), sy, tz, .0108, 24), BLACK, .46, 0, .0008, 2)
+        finish(_rx(*sorted((s_*.0298, s_*.0310)), sy, tz, .0050, 14), DK, .48, 0, 0)
+    # mount: base on the rail, two stanchions, two split rings with their screws
+    finish(box((0, .0540, .061), (.0118, .0040, .0520)), FURN, .52, 0, .0008, 2)
+    for zr in (.021, .101):
+        finish(box((0, .0625, zr), (.0090, .0060, .0046)), FURN, .52, 0, .0006, 2)
+        rg = _rz([(zr - .0050, .0186), (zr + .0050, .0186)], 0, sy, 32, 'ring')
+        cut(rg, _rz([(zr - .0060, .0154), (zr + .0060, .0154)], 0, sy, 32))
+        finish(rg, FURN, .52, 0, .0006, 1)
+        for s_ in (-1, 1):
+            finish(box((s_*.0168, sy, zr), (.0030, .0040, .0052)), FURN, .52, 0, .0005, 1)
+            finish(_rx(*sorted((s_*.0196, s_*.0206)), sy, zr, .0020, 12), STEEL, .34, .9, 0)
+    for s_ in (-1, 1):
+        for zb in (.040, .082):
+            finish(_rx(*sorted((s_*.0116, s_*.0126)), .0545, zb, .0018, 12), DK, .50, 0, 0)
+
+    # --- 8. The reciprocating parts (group 3): they run back SCAR_CH_TRAVEL (62 mm)
+    # on every shot. The charging handle rests at the FRONT of its channel (z .012-
+    # .110) so the whole throw happens inside the slot, and it is a light grey alloy
+    # with a steel cap so it reads against the black channel. The bolt carrier shows
+    # through the upper slots on both flanks (z .042-.146): a steel strip with dark
+    # lightening cuts, long enough to fill the slot at rest; on the throw its front
+    # end runs back into view and the cuts slide past.
+    finish(box((-.0186, .0150, .100), (.0032, .0038, .0065)), (.42, .40, .37), .42, 0, .0006, 2, group=3)
+    finish(_rx(-.0300, -.0200, .0150, .100, .0052, 18), (.36, .34, .32), .45, 0, .0008, 2, group=3)
+    finish(_rx(-.0312, -.0296, .0150, .100, .0034, 14), STEEL, .30, .92, .0002, group=3)
+    for s_ in (-1, 1):
+        finish(box((s_*.0154, .0335, .121), (.0004, .0016, .0850)), STEEL, .32, .90, .0002, group=3)
+        for k in range(10):
+            finish(box((s_*.0158, .0335, .050 + k*.016), (.0002, .0016, .0035)), BLACK, .60, 0, 0, group=3)
+
 # ------------------------------------------------------------------ pistol
 def pistol():
     '''Two-tone duty pistol in the rifle's own frame: the grip, trigger and guard sit on
@@ -1141,6 +1451,9 @@ def pistol():
     # --- double-stack magazine (group 1), raked with the grip
     finish(prof([(.012,-.024),(-.012,-.024),(-.032,-.104),(-.008,-.104)], -.0098, .0098, 'mag'), GRAPH, .64, 0, .0012, 2, group=1)
     finish(prof([(-.036,-.1040),(-.002,-.1040),(.002,-.1150),(-.034,-.1180)], -.0124, .0124, 'magplate'), BLACK, .76, 0, .0012, 2, group=1)
+    # --- the P2000's exposed spur hammer behind the slide (CS2's CT sidearm)
+    finish(prof([(-.050,.0060),(-.058,.0060),(-.064,.0180),(-.062,.0230),(-.055,.0220),(-.052,.0150)], -.0036, .0036, 'hammer'), DARK, .45, .5, .0006)
+    finish(pin(-.0040,.0040,.0100,-.054,.0030,14), DARK, .45, .5, .0004)
 
 # ------------------------------------------------------------------ pistol support hand (HAND_P)
 def hand_p():
@@ -1580,40 +1893,86 @@ NADE_E = Vector((0,-.386,.921)).normalized()    # from the palm toward the finge
 NADE_A = Vector((0,.921,.386)).normalized()      # up the fuze
 NADE_C = Vector((0,-.0500,-.0078)) + NADE_E*.0370   # the body's centre, clear of the palm
 
-def nade_r(z):
-    '''Outer radius of the grenade at height z along its axis: shell, then fuze neck.'''
-    t = min(abs(z)/.0350, 1.0)
-    r = NADE_R*(1-t**2.6)**.46 + .0004
+# THE CANISTERS (smoke, incendiary): straight cans on the same grip station and the
+# same fuze, so the hand, the pin and the throw are the frag's. (z0, z1, r) of the body.
+CAN_SMOKE = (-.0440, .0280, .0235)   # M18-style: tall and slim
+CAN_INC   = (-.0440, .0280, .0235)   # the smoke can's size (they share a pouch); domed lid, red bands
+
+def can_r(z, can):
+    z0, z1, r = can
+    if z < z0 or z > z1 + .0045: return 0.0
+    if can is CAN_INC and z > z1: return r - (r - .0165)*min((z - z1)/.0045, 1.0)**.6
+    return r if z <= z1 else 0.0
+
+def nade_r(z, can=None):
+    '''Outer radius of the grenade at height z along its axis: shell (or can), then fuze neck.'''
+    if can is None:
+        t = min(abs(z)/.0350, 1.0)
+        r = NADE_R*(1-t**2.6)**.46 + .0004
+    else:
+        r = can_r(z, can) + .0004
     pts = ((.0300,.0172),(.0345,.0142),(.0410,.0126),(.0470,.0118),(.0540,.0090))
     for (z0,r0),(z1,r1) in zip(pts, pts[1:]):
         if z0 <= z <= z1: r = max(r, r0 + (r1-r0)*(z-z0)/(z1-z0))
     return r
 
-def grenade():
+def grenade(kind='frag'):
     '''Round-bodied frag grenade on the same grip cylinder as the knife, seated forward of it
     by the body's radius. Group 0 is what flies; group 2 the spoon, which is left behind at
-    the throw, and group 3 the pin and ring, which the off hand pulls.'''
+    the throw, and group 3 the pin and ring, which the off hand pulls.
+    kind 'smoke' / 'inc' swaps the egg for a canister (CAN_SMOKE / CAN_INC) under the
+    same fuze, spoon, pin and ring, so every hand pose and throw still fits.'''
     clear()
-    def shell_r(z):
-        t = min(abs(z)/.0350, 1.0)
-        return NADE_R*(1-t**2.6)**.46 + .0004
-    rings = [(.0350*(-1 + 2*i/22), shell_r(.0350*(-1 + 2*i/22))) for i in range(23)]
-    finish(lathe(rings, 0, 0, 44), (.24,.26,.175), .62, 0, 0, flag=4)        # muted olive drab: worn service paint, not lime
-    # Band and ribs follow the shell's own curve: at a fixed radius they stood off it
-    # as floating hoops that read as stripes across the body.
+    can = {'smoke': CAN_SMOKE, 'inc': CAN_INC}.get(kind)
+    R = lambda z: nade_r(z, can)
     def hoop(z0, z1, h):
         n_ = 6
-        return [(z0, nade_r(z0)-.0003)] + [(z0+(z1-z0)*i/(n_-1), nade_r(z0+(z1-z0)*i/(n_-1))+h) for i in range(n_)] + [(z1, nade_r(z1)-.0003)]
-    finish(lathe(hoop(.0090, .0165, .0004), 0, 0, 44), (.68,.39,.12), .58, 0, 0, flag=4)  # blaze band: live, a weathered ochre
-    for z in (-.0185, -.0090, .0005, .0225):   # three under the band, one over it
-        finish(lathe(hoop(z-.0006, z+.0006, .0004), 0, 0, 44), (.15,.165,.105), .66, 0, 0, flag=4)  # seam ribs, proud enough to catch the light
+        return [(z0, R(z0)-.0003)] + [(z0+(z1-z0)*i/(n_-1), R(z0+(z1-z0)*i/(n_-1))+h) for i in range(n_)] + [(z1, R(z1)-.0003)]
+    if can is None:
+        def shell_r(z):
+            t = min(abs(z)/.0350, 1.0)
+            return NADE_R*(1-t**2.6)**.46 + .0004
+        rings = [(.0350*(-1 + 2*i/22), shell_r(.0350*(-1 + 2*i/22))) for i in range(23)]
+        finish(lathe(rings, 0, 0, 44), (.24,.26,.175), .62, 0, 0, flag=4)        # muted olive drab: worn service paint, not lime
+        # Band and ribs follow the shell's own curve: at a fixed radius they stood off it
+        # as floating hoops that read as stripes across the body.
+        finish(lathe(hoop(.0090, .0165, .0004), 0, 0, 44), (.68,.39,.12), .58, 0, 0, flag=4)  # blaze band: live, a weathered ochre
+        for z in (-.0185, -.0090, .0005, .0225):   # three under the band, one over it
+            finish(lathe(hoop(z-.0006, z+.0006, .0004), 0, 0, 44), (.15,.165,.105), .66, 0, 0, flag=4)  # seam ribs, proud enough to catch the light
+    elif kind == 'smoke':
+        z0, z1, r = CAN_SMOKE
+        # A plain drawn can: rolled bottom edge, flat lid, the fuze rising from its middle.
+        finish(lathe([(z0, r - .0030), (z0 + .0008, r - .0004), (z0 + .0022, r + .0002), (z0 + .0040, r),
+                      (z1 - .0020, r), (z1 - .0004, r - .0006), (z1, r - .0040), (z1, .0140)], 0, 0, 44),
+               (.400,.430,.460), .64, 0, .0006, flag=4)                     # grey-blue body
+        finish(lathe(hoop(.0010, .0150, .0003), 0, 0, 44), (.880,.880,.860), .60, 0, 0, flag=4)  # the white band (the label)
+        finish(lathe(hoop(z1 - .0060, z1 - .0030, .0003), 0, 0, 44), (.880,.880,.860), .60, 0, 0, flag=4)  # a thin one under the lid
+        # Four emission ports round the lid: where the smoke comes out.
+        for i in range(4):
+            a_ = math.pi/4 + i*math.pi/2
+            finish(lathe([(z1 - .0004, .0036), (z1 + .0006, .0036)], .0185*cos(a_), .0185*sin(a_), 20),
+                   (.070,.072,.078), .80, 0, 0, flag=4)
+        finish(lathe([(z0 - .0002, r - .0020), (z0 + .0010, r - .0020)], 0, 0, 44), (.240,.260,.290), .70, 0, 0, flag=4)  # base cap
+    else:
+        z0, z1, r = CAN_INC
+        dome = [(z1 + .0045*i/6, can_r(z1 + .0045*i/6, CAN_INC)) for i in range(1, 7)]
+        finish(lathe([(z0, r - .0030), (z0 + .0010, r - .0004), (z0 + .0030, r), (z1, r)] + dome + [(z1 + .0045, .0140)], 0, 0, 44),
+               (.300,.305,.285), .66, 0, .0006, flag=4)                     # dark grey body
+        # Rolled seams, proud of the body top and bottom: the can's silhouette.
+        for zc in (z0 + .0032, z1 - .0008):
+            finish(lathe([(zc - .0016, r - .0002), (zc - .0010, r + .0016), (zc + .0010, r + .0016), (zc + .0016, r - .0002)], 0, 0, 44),
+                   (.220,.225,.215), .52, .3, .0004, flag=4)
+        finish(lathe(hoop(.0005, .0115, .0003), 0, 0, 44), (.660,.110,.070), .58, 0, 0, flag=4)   # the red band: fire
+        finish(lathe(hoop(-.0150, -.0120, .0003), 0, 0, 44), (.660,.110,.070), .58, 0, 0, flag=4)
     finish(lathe([(.0280,.0140),(.0300,.0176),(.0345,.0146),(.0410,.0126),(.0470,.0118),(.0495,.0086)], 0, 0, 44), GRAPH, .32, .75, 0)  # fuze well: bare metal against the matte paint
     finish(lathe([(.0470,.0092),(.0530,.0088),(.0540,.0060)], 0, 0, 24), STEEL, .36, .9, .0003)  # striker cap
     # The spoon: stamped sheet 1.5 mm thick. Its cap sits flush on the striker, then it
     # drops tight down the neck and shell, with only a hair of air. -y is the palm side.
     zs = [.0300 - i*.0030 for i in range(21)]
-    out = [(.0572,.0070),(.0572,-.0100)] + [(.0520,-.0138),(.0460,-.0142),(.0400,-.0152),(.0340,-.0172)] + [(z,-(nade_r(z)+.0021)) for z in zs]
-    inn = [(z,-(nade_r(z)+.0006)) for z in zs][::-1] + [(.0340,-.0157),(.0400,-.0136),(.0460,-.0126),(.0505,-.0122),(.0552,-.0086),(.0552,.0070)]
+    if can is not None:   # down the can's flat side: the lever lies straight
+        zs = [z for z in zs if z >= can[0] + .0040]
+    out = [(.0572,.0070),(.0572,-.0100)] + [(.0520,-.0138),(.0460,-.0142),(.0400,-.0152),(.0340,-.0172)] + [(z,-(R(z)+.0021)) for z in zs]
+    inn = [(z,-(R(z)+.0006)) for z in zs][::-1] + [(.0340,-.0157),(.0400,-.0136),(.0460,-.0126),(.0505,-.0122),(.0552,-.0086),(.0552,.0070)]
     sp = finish(prof(out + inn, -.0092, .0092, 'spoon'), (.38,.38,.37), .46, .62, .0004, 2, group=2)   # dull gunmetal
     psi = radians(-NADE_SPOON_TH)     # about the fuze axis: the side under the thumb
     for v in sp.data.vertices:
@@ -1854,32 +2213,49 @@ def rot_x(o, ang, pivot):
         v.co.y = py + y*c - z*s; v.co.z = pz + y*s + z*c
     return o
 
-def reflex_sight(dy=0.0):
-    """Compact open-frame red dot: a low emitter housing on a rail clamp and a square
-    hood. Its window is the holo's own window (centre VM_HOLO_Y + dy, half-height
-    VM_HOLO_R, half-width 1.18 R, front glass at VM_HOLO_Z), so ADS, the eye line and
-    the HUD reticle's clip are unchanged; everything else sits below the window."""
-    cy = .0741 + dy; hh = .0133; hw = .0157; y0 = .0455 + dy
-    zr, zh, zf = .090, .140, .172                     # rear, hood back, hood front
-    finish(box((0, y0 + .0035, (zr + zf) / 2), (.0130, .0035, (zf - zr) / 2 + .002)), BLACK, .55, 0, .0008)   # rail clamp
-    for z in (.102, .160):
-        finish(pin(-.0175, -.0128, y0 + .0035, z, .0030, 12), STEEL, .40, .85, .0003, 1)                    # clamp bolts
-    # emitter housing: a low block that ramps up into the hood, top under the window
-    em = prof([(zr, y0 + .007), (zh + .004, y0 + .007), (zh + .004, cy - hh - .0012), (zr + .020, cy - hh - .0040), (zr, y0 + .013)], -.0150, .0150, 'emitter')
-    finish(em, HOLO, .52, .08, .0020, 2)
-    # the hood: a square frame round the window, its top canted back like the reference
-    o_lo = y0 + .006; o_hi = cy + hh + .0052; ow = hw + .0048
-    hood = prof_front([(-ow, o_lo), (ow, o_lo), (ow, o_hi - .0040), (ow - .0040, o_hi), (-ow + .0040, o_hi), (-ow, o_hi - .0040)], zh, zf, 'hood')
-    cut(hood, prof_front([(-hw, cy - hh), (hw, cy - hh), (hw, cy + hh), (-hw, cy + hh)], zh - .01, zf + .01))
-    finish(hood, HOLO, .50, .10, .0022, 3)
-    finish(box((0, o_hi - .0008, zh + .004), (ow - .002, .0016, .0048)), HOLO, .50, .10, .0010, 2)           # rear lip of the cant
-    finish(pin(.0150, .0205, cy - hh - .006, .128, .0048, 16), DARK, .45, .2, .0005)                      # windage turret
-    finish(pin(-.0150, -.0120, cy - hh - .006, .126, .0060, 18), DARK, .45, .2, .0005)                    # battery cap
-    finish(box((0, cy - hh - .0012, .132), (.0050, .0016, .0040)), BLACK, .55, 0, .0004)                    # brightness button
-    # the coated lens' edge: a thin amber rim inside the window, what makes it read as glass
+def kobra_sight():
+    """The AK's own red dot: the Russian Kobra EKP-1S-03 collimator (Axion, 144 x 66 x
+    144 mm with its mount). It does not sit on a top rail: it clamps to the AK's LEFT
+    side dovetail — the skeletal side mount on this receiver — with a long throw lever,
+    and a bracket bridges over the dust cover to a long, low housing above the receiver.
+    The reticle selector is a ribbed knob on the right of the housing, the battery cap
+    on its left, and the front carries Kobra's signature tall open window in a thick
+    frame whose front leans back from the lens' foot to its top. The window keeps the holo's centre and size
+    (VM_HOLO_Y, VM_HOLO_R, 1.18 R wide, front at .172), so ADS, the eye line and the
+    HUD dot's clip are unchanged; the housing stays below the sight line."""
+    cy = .0741; hh = .0133; hw = .0157
+    zf = .172                                          # front of the frame
+    # --- the side clamp on the dovetail: plate, jaw and the long throw lever
+    finish(box((-.0222, .0170, .090), (.0036, .0210, .0420)), BLACK, .58, .05, .0010, 2)          # clamp plate
+    finish(box((-.0196, -.0010, .090), (.0012, .0040, .0400)), BLUED, .45, .55, .0004)           # dovetail jaw
+    lv = prof([(.058, .0060), (.124, .0090), (.128, .0130), (.124, .0170), (.058, .0150)], -.0282, -.0258, 'lever')
+    finish(lv, BLUED, .42, .6, .0008, 2)                                                       # throw lever
+    finish(pin(-.0300, -.0256, .0110, .126, .0052, 16), BLACK, .55, .1, .0006)                 # lever knob
+    finish(pin(-.0262, -.0250, .0300, .072, .0034, 12), STEEL, .40, .85, .0002, 1)             # clamp screw
+    # --- the bracket: up the plate and over the dust cover to the housing
+    finish(box((-.0222, .0430, .094), (.0036, .0060, .0300)), BLACK, .58, .05, .0010, 2)
+    finish(box((-.0090, .0470, .094), (.0170, .0030, .0300)), BLACK, .58, .05, .0008, 2)
+    # --- the housing: long and low over the receiver, chamfered at the back
+    hb = prof([(.052, .0450), (.150, .0450), (.150, .0592), (.066, .0592), (.052, .0540)], -.0135, .0135, 'kobra_body')
+    finish(hb, GRAPH, .60, .06, .0024, 3)
+    finish(box((0, .0596, .100), (.0090, .0010, .0300)), BLACK, .62, 0, .0004)                 # top seam plate
+    # reticle selector on the right (ribbed), battery cap on the left
+    finish(pin(.0135, .0215, .0520, .078, .0085, 22), BLACK, .55, .1, .0006)
+    for i in range(12):
+        a = 2 * math.pi * i / 12
+        finish(box((.0178, .0520 + .0086 * cos(a), .078 + .0086 * sin(a)), (.0036, .0011, .0011)), BLACK, .55, .1, 0, 1)
+    finish(pin(.0215, .0228, .0520, .078, .0030, 12), (.85, .38, .10), .30, .2, 0, flag=3)     # the selector's index
+    finish(pin(-.0200, -.0135, .0520, .118, .0068, 18), DARK, .48, .2, .0006)                  # battery cap
+    finish(box((.0137, .0505, .118), (.0010, .0030, .0060)), BLACK, .55, 0, .0003)             # brightness button
+    # --- the window frame: tall, open, its front leaning back
+    ow = hw + .0052; o_lo = .0450; o_hi = cy + hh + .0060
+    fr = prof([(.136, o_lo), (zf, o_lo), (zf, cy - hh), (zf - .0150, o_hi), (.142, o_hi), (.136, o_hi - .0060)], -ow, ow, 'kobra_frame')
+    cut(fr, prof_front([(-hw, cy - hh), (hw, cy - hh), (hw, cy + hh), (-hw, cy + hh)], .10, .20))
+    finish(fr, HOLO, .52, .08, .0020, 3)
+    # the coated lens' edge inside the window, what makes it read as glass
     for (x, y, hx, hy) in ((0, cy - hh + .0006, hw, .0006), (0, cy + hh - .0006, hw, .0006),
                            (hw - .0006, cy, .0006, hh), (-hw + .0006, cy, .0006, hh)):
-        finish(box((x, y, zf - .003), (hx, hy, .0010)), (.85, .38, .10), .25, .9, 0)
+        finish(box((x, y, .150), (hx, hy, .0010)), (.85, .38, .10), .25, .9, 0)
 
 def ak_stock():
     """M4-type collapsible stock on a buffer tube, behind an AK stock adapter (group 2
@@ -1902,7 +2278,8 @@ def glow(c, h):
 def rifle_ak():
     """Modernised AK in desert digital: camo receiver, dust cover and furniture (the
     light family the camo paints), a skeletal side mount, railed fore-end and gas
-    cover, collapsible stock, ribbed magazine, compact red dot, and the amber inlays."""
+    cover, collapsible stock, ribbed magazine, a Kobra red dot on the side mount, and the
+    amber inlays."""
     clear()
     # --- stamped receiver (camo), magwell, rivets
     rc = prof([(-.034,.024),(.205,.024),(.205,-.008),(.150,-.016),(.150,-.020),(.088,-.020),(.088,-.016),(.040,-.016),(.010,-.018),(-.012,-.014),(-.034,-.004)], -.0150, .0150, 'rcv')
@@ -1975,7 +2352,7 @@ def rifle_ak():
     # --- grip, guard, magazine
     ar_grip(grip_col=(.20,.185,.17), guard_col=BLUED, grip_rough=.78, guard_rough=.45, guard_metal=.5)
     ak_stock()
-    reflex_sight()
+    kobra_sight()
     pts_f = []; pts_b = []
     for i in range(9):
         t = i / 8.0; a = .58 * t
@@ -2137,11 +2514,9 @@ def pistol_glock():
     finish(rear, BLACK, .55, 0, .0004, group=3)
     for s_ in (-1, 1):
         finish(box((s_*.0058,.0318,-.0446), (.0016,.0016,.0004)), AMBER, .40, 0, 0, group=3, flag=3)
-    # --- the 33-round stick (group 1)
-    finish(prof([(.012,-.024),(-.012,-.024),(-.050,-.172),(-.024,-.176)], -.0096, .0096, 'mag'), DK, .70, 0, .0012, 2, group=1)
-    finish(prof([(-.054,-.170),(-.020,-.174),(-.018,-.184),(-.054,-.180)], -.0114, .0114, 'magplate'), BLACK, .80, 0, .0012, 2, group=1)
-    for i in range(3):
-        finish(box((0,-.124-i*.016,-.031-i*.004), (.0098,.0012,.0120)), BLACK, .7, 0, .0003, 1, group=1)
+    # --- CS2's flush 20-round magazine (group 1)
+    finish(prof([(.012,-.024),(-.012,-.024),(-.032,-.104),(-.008,-.104)], -.0096, .0096, 'mag'), DK, .70, 0, .0012, 2, group=1)
+    finish(prof([(-.036,-.1040),(-.002,-.1040),(.002,-.1150),(-.034,-.1180)], -.0124, .0124, 'magplate'), BLACK, .80, 0, .0012, 2, group=1)
 
 def pistol_deagle():
     """Desert Eagle after the reference: a desert-digital barrel and slide over a dark
@@ -2216,12 +2591,21 @@ def assign_finishes():
         elif tan: o['flag'] = 6
         else: o['flag'] = 5
 
+# World props (vehicles, street furniture): tools/props_models.py, same helpers.
+exec(compile(open(os.path.join(os.path.dirname(OUT), '..', 'tools', 'props_models.py')).read(),
+             'props_models.py', 'exec'))
+
 rifle(); assign_finishes()
 emit(store, 'RIFLE')
 hand_r(); emit(store, 'HAND_R')
 hand_l(); emit(store, 'HAND_L')
 bracer(); emit(store, 'BRACER')
+# THE AWP: the bolt gun's chassis in Arctic Warfare green (TAN and SAND repainted
+# for this one build; every other model keeps the desert palette).
+_tan, _sand = TAN, SAND
+TAN, SAND = (.31, .37, .25), (.24, .29, .20)
 sniper(); assign_finishes()
+TAN, SAND = _tan, _sand
 emit(store, 'SNIPER')
 pistol(); assign_finishes()
 emit(store, 'PISTOL')
@@ -2230,18 +2614,40 @@ knife(); assign_finishes()
 emit(store, 'KNIFE')
 hand_r(fist=True); emit(store, 'HAND_K')
 hand_r(fist=True); mirror_x(); emit(store, 'HAND_KL')
+hand_r(fist=True, open_k=.5); emit(store, 'HAND_KH')    # the knife toss: letting go...
+hand_r(fist=True, open_k=1.0); emit(store, 'HAND_KX')   # ...and open for the catch
 hand_g(); occ_hand = snapshot()
 grenade(); assign_finishes(); occ_nade = snapshot()
 emit(store, 'GRENADE', extra=occ_hand)
 hand_g(); emit(store, 'HAND_G', extra=occ_nade)
+grenade('smoke'); assign_finishes(); emit(store, 'GRENADE_SMK', extra=occ_hand)
+grenade('inc'); assign_finishes(); emit(store, 'GRENADE_INC', extra=occ_hand)
 for kfn, ktag in ((knife_tanto, 'KNIFE_TANTO'), (knife_dagger, 'KNIFE_DAGGER'),
                   (knife_kukri, 'KNIFE_KUKRI'), (knife_talon, 'KNIFE_TALON')):
     kfn(); assign_finishes(); emit(store, ktag)
 hand_open(); emit(store, 'HAND_KO')
 hand_pin(); emit(store, 'HAND_GP')
 for gfn, gtag in ((rifle_ak, 'RIFLE_AK'), (rifle_famas, 'RIFLE_FAMAS'),
-                  (pistol_glock, 'PISTOL_GLOCK'), (pistol_deagle, 'PISTOL_DEAGLE')):
-    gfn(); assign_finishes(); emit(store, gtag)
+                  (pistol_glock, 'PISTOL_GLOCK'), (pistol_deagle, 'PISTOL_DEAGLE'),
+                  (scar20, 'SNIPER_SCAR')):
+    gfn(); assign_finishes(); emit(store, gtag); emit_lod(store, 'TP_' + gtag)
+# The rest of the CS2 arsenal (tools/guns_cs2.py): same helpers, same stations.
+exec(compile(open(os.path.join(os.path.dirname(OUT), '..', 'tools', 'guns_cs2.py')).read(),
+             'guns_cs2.py', 'exec'))
+exec(compile(open(os.path.join(os.path.dirname(OUT), '..', 'tools', 'guns_cs2_heavy.py')).read(),
+             'guns_cs2_heavy.py', 'exec'))
+for gfn, gtag in CS2_GUNS:
+    gfn(); assign_finishes(); emit(store, gtag); emit_lod(store, 'TP_' + gtag)
+# THE OPERATOR'S HERO HEAD (tools/hero_models.py): helmet, visor, skull mask.
+exec(compile(open(os.path.join(os.path.dirname(OUT), '..', 'tools', 'hero_models.py')).read(),
+             'hero_models.py', 'exec'))
+for hfn, htag in HERO_PARTS:
+    hfn(); assign_finishes(); emit(store, htag)
+# THE LEFT BERETTA AND THE LEFT HAND THAT HOLDS IT: mirror images of the right.
+pistol_elites(); assign_finishes(); mirror_x(); emit(store, 'PISTOL_ELITES_L')
+hand_r(); mirror_x(); emit(store, 'HAND_RL')
+for pfn, ptag, pk, pao in PROP_MODELS:     # world props: flags are authored, not assigned
+    pfn(); emit(store, ptag, k=pk, aolen=pao)
 
 with open(OUT, 'w') as f:
     f.write('// Generated by tools/build_models.py. Do not edit by hand.\n')
@@ -2254,8 +2660,9 @@ with open(OUT, 'w') as f:
             rows.extend(vs)
         f.write('static const int16_t %s_V[][7] = {\n' % tag)
         line = []
+        ks = KSCALE.get(tag, 1.0)
         for x, y, z, a, b, c, ao in rows:
-            q = lambda v: max(-32767, min(32767, int(round(v*32000))))
+            q = lambda v: max(-32767, min(32767, int(round(v*32000/ks))))
             n = lambda v: max(-32767, min(32767, int(round(v*32767))))
             line.append('{%d,%d,%d,%d,%d,%d,%d}' % (q(x), q(y), q(z), n(a), n(b), n(c), ao))
             if len(line) == 8:
@@ -2265,5 +2672,6 @@ with open(OUT, 'w') as f:
         for p in parts:
             f.write('  {%d,%d,%.3ff,%.3ff,%.3ff,%.3ff,%.3ff,%d,%d},\n' % p)
         f.write('};\n#define %s_NP %d\n' % (tag, len(parts)))
+        if tag in KSCALE: f.write('#define %s_K %.1ff\n' % (tag, KSCALE[tag]))
     for d in EXTRA_DEFINES: f.write(d + '\n')
 print('WROTE', OUT)

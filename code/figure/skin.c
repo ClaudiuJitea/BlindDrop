@@ -54,7 +54,19 @@ static const float FIG_FACET[3][8][2] = {
    {-1, -0.42f}, {-0.42f, -1}, {0.42f, -1}, {1, -0.42f}},
 };
 static const int FIG_KS[6] = {4, 6, 8, 12, 16, 20};
-static float g_prof[6][FIG_KMAX][2];
+// ...plus a third family at index 6: the SOFT BOX. Molded gear (the carrier,
+// pouches, the pack, the boot upper) wants the octagon's flat faces but not its
+// razor arrises — a plate carrier is sewn cordura over foam, every edge of it is
+// rolled. One Chaikin pass over the chamfered octagon gives 16 vertices that keep
+// the middle half of every original face ON that face and replace each corner
+// with a short rounding edge, and it is smooth-shaded like a circle. Chaikin
+// never leaves the convex hull, and its radius in every direction is >= the
+// unit circle's (min 1.004 at the old chamfer midpoints), so a soft-box chain is
+// never smaller than a round one of the same rx/rz and never larger than the
+// octagon it replaces: anything that was strictly outside an octagon body is
+// still strictly outside the round body that replaces it.
+#define FIG_PROF_SOFT 6
+static float g_prof[7][FIG_KMAX][2];
 static int   g_prof_ready;
 
 // Half-step offset (i+0.5): it puts EDGE MIDPOINTS on the cross-section axes
@@ -74,6 +86,18 @@ static void fig_prof_init(void) {
       g_prof[s][i][1] = sinf(a);
     }
   }
+  // The soft box: per octagon edge a->b, the points at 1/4 and 3/4 along it.
+  // Rotated by one so a FACE midpoint (not a rounding edge) sits on each axis,
+  // as the circle's half-step offset does.
+  for (int i = 0; i < 8; i++) {
+    const float *a = FIG_FACET[2][i], *b = FIG_FACET[2][(i + 1) % 8];
+    for (int h = 0; h < 2; h++) {
+      float t = h ? 0.75f : 0.25f;
+      int o = (2 * i + h + 15) % 16;
+      g_prof[FIG_PROF_SOFT][o][0] = a[0] + (b[0] - a[0]) * t;
+      g_prof[FIG_PROF_SOFT][o][1] = a[1] + (b[1] - a[1]) * t;
+    }
+  }
   g_prof_ready = 1;
 }
 
@@ -88,8 +112,19 @@ static int g_fig_k = FIG_KMAX;
 // as mat_set/ao_set/g_fig_diss. 0 = whatever the distance says. Only the corpse
 // pool sets it.
 static int g_fig_kcap;
+// How many figures the current scene pass still has to draw, this one
+// included (scene_build counts them up front; 0 = a lone figure from a proof).
+// The vertex-pressure tier in scene_draw_figure keeps a floor's worth of
+// buffer back for each of them, so the LAST body in a crowd is coarse rather
+// than missing.
+static int g_fig_todo;
 
+// Batch state, like g_fig_jit: the part being built is molded gear, so a
+// 16-vertex profile means the soft box rather than the circle. Below 16 (the
+// distance tiers) it falls back to whatever the tier gives a round part.
+static int g_fig_soft;
 static int fig_pi(int k) {
+  if (g_fig_soft && k == 16) return FIG_PROF_SOFT;
   return k <= 4 ? 0 : k <= 6 ? 1 : k <= 8 ? 2 : k <= 12 ? 3 : k <= 16 ? 4 : 5;
 }
 // Round profiles shade smooth; authored facets shade flat. One rule, so a part
@@ -681,7 +716,7 @@ static v3 hand_pt(v3 gc, v3 ga, v3 e1, v3 e2, float ax, float ph, float rad) {
 // measured 20-bot peak to 289919 of 294912 verts (98.3%), and a dropped triangle
 // looks exactly like geometry that was never authored. `vm_build` forces
 // FIG_KMAX, so the test is exact rather than a guess about distance.
-#define FIG_DIGIT_K (g_fig_k >= FIG_KMAX ? 12 : 8)
+#define FIG_DIGIT_K (g_fig_k >= 16 ? 12 : 8)   // 16: the close 3P tier too
 // THE TRIGGER FINGER IS AIMED, NOT AUTHORED. It used to be three numbers — a
 // third of the other fingers' wrap plus a radial reach — chosen so it looked
 // right from behind the gun, on a weapon whose guard had no finger-sized hole in

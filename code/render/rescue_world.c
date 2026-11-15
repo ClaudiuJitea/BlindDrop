@@ -21,8 +21,13 @@ static v3 hfp(const hframe_t *f, float x, float y, float z) {
   return v3_add(f->o, v3_add(v3_scale(f->R, x), v3_add(v3_scale(f->Y, y), v3_scale(f->F, z))));
 }
 static void hostage_draw(const hostage_t *h, int i, float alpha) {
-  static const v3 SHIRT[RESC_HOSTAGES] = {{{0.80f, 0.78f, 0.72f}}, {{0.36f, 0.48f, 0.64f}},
-                                          {{0.60f, 0.52f, 0.36f}}};
+  // CIVILIAN, AND THE LIGHTEST THING IN THE COMPOUND. A third read beside the
+  // two forces: white, sky blue and pale yellow shirts that neither the dark
+  // insurgent tunics nor any operator kit come near, so the figure on its knees
+  // in a guarded room is never mistaken for one to shoot. (The tan shirt this
+  // replaces was the insurgents' own old khaki.)
+  static const v3 SHIRT[RESC_HOSTAGES] = {{{0.86f, 0.85f, 0.80f}}, {{0.50f, 0.68f, 0.86f}},
+                                          {{0.86f, 0.78f, 0.46f}}};
   static const v3 PANTS[RESC_HOSTAGES] = {{{0.20f, 0.22f, 0.28f}}, {{0.32f, 0.28f, 0.22f}},
                                           {{0.16f, 0.17f, 0.18f}}};
   v3 skin = rgb(0.60f, 0.43f, 0.32f), hood = rgb(0.47f, 0.39f, 0.27f),
@@ -146,9 +151,36 @@ static void rescue_scene(float alpha) {
   }
 }
 
+// THE SUPPLY STATIONS, drawn live: the furniture always, what it holds only
+// while it is stocked, and the status lamp on the sign — lit (green for
+// health, amber for grenades, breathing) when stocked, a dim red while it
+// restocks.
+static void supply_draw(void) {
+  static const v3 FQ[4] = {{{1, 0, 0}}, {{0, 0, 1}}, {{-1, 0, 0}}, {{0, 0, -1}}};
+  for (int i = 0; i < g_nsupply; i++) {
+    const supply_t *s = &g_supply[i];
+    v3 F = FQ[s->qt & 3], L = FQ[(s->qt + 1) & 3], o = {{s->x, 0.0f, s->z}};
+    int ready = g_tick >= g_supply_ready[i], med = s->kind == SUP_HEALTH;
+    v3 w = {{1, 1, 1}};
+    pmesh_draw(med ? PM_SUP_MED : PM_SUP_AMMO, o, F, L, w, w);
+    if (ready) pmesh_draw(med ? PM_SUP_MED_I : PM_SUP_AMMO_I, o, F, L, w, w);
+    // the lamp, on its housing atop the sign
+    float la = med ? -0.215f : -0.20f, lb = med ? 0.0f : -0.68f, ly = med ? 2.245f : 2.165f;
+    v3 lp = v3_add(o, v3_add(v3_scale(F, la), v3_add(v3_scale(L, lb), (v3){{0, ly, 0}})));
+    float br = ready ? 0.80f + 0.20f * sinf(g_ui_time * 3.0f + (float)i) : 0.30f;
+    v3 c = ready ? (med ? (v3){{0.25f * br, 1.6f * br, 0.55f * br}} : (v3){{1.6f * br, 1.05f * br, 0.15f * br}})
+                 : (v3){{0.9f * br, 0.06f, 0.04f}};
+    int ssm = g_scene_smat;
+    g_scene_smat = SMAT_LED;
+    scene_box(lp, (v3){{0.035f, 0, 0}}, (v3){{0, 0.025f, 0}}, (v3){{0, 0, 0.035f}}, c);
+    g_scene_smat = ssm;
+  }
+}
+
 static void scene_build(const player_t *p, float alpha, int show_player) {
   (void)p;   // the roster below covers human 0; parameter kept for callers
   scene_reset();
+  supply_draw();
   // Live grenades, tumbling. What flies is the body alone: spoon and pin are gone.
   for (int i = 0; i < MAX_NADES; i++)
     if (g_nades[i].fuse > 0) {
@@ -160,7 +192,8 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
       // The model sits on the grip station; bring its body's centre onto `at`.
       v3 ofs = v3_add(v3_scale(gy, -0.0643f), v3_scale(gz, 0.0263f));
       mat_set(MAT_PARK_R, MAT_PARK_M);
-      model_draw(GRENADE_V, GRENADE_P, GRENADE_NP, 0, v3_sub(at, ofs), gx, gy, gz);
+      mdl_ref_t nm = nade_mdl(n->kind);
+      model_draw(nm.v, nm.p, nm.np, 0, v3_sub(at, ofs), gx, gy, gz);
     }
   for (int i = 0; i < MAX_SPOONS; i++)
     if (g_spoons[i].life > 0) {
@@ -202,14 +235,21 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
       gz = v3_cross(gx, gy);
       v3 L = vm_mag_centre_v(q->wpn, q->var);
       v3 o = v3_sub(at, v3_add(v3_scale(gy, L.y), v3_scale(gz, L.z)));
-      const mdl_ref_t *mg = gun_var_model(WPN_AR, q->var);
-      if (q->wpn == WPN_SR) model_draw(SNIPER_V, SNIPER_P, SNIPER_NP, 1, o, gx, gy, gz);
-      else                  model_draw(mg->v, mg->p, mg->np, 1, o, gx, gy, gz);
+      const mdl_ref_t *mg = gun_var_model(q->wpn == WPN_SR ? WPN_SR : WPN_AR, q->var);
+      model_draw(mg->v, mg->p, mg->np, 1, o, gx, gy, gz);
     }
   // Every human body (P1-58): the LOCAL one only when the camera is not
   // first-person; the other seven ALWAYS — unseen here they also cast no
   // shadow, because the depth pass draws this same list. Deliberately not
   // routed through scene_draw_bot (bot palette + its old hardwired AR).
+  // Count the figures this pass will draw (an upper bound: a bot that turns
+  // out not to draw only leaves its share unspent), for the vertex-pressure
+  // tier in scene_draw_figure.
+  g_fig_todo = 0;
+  for (int h = 0; h < MAX_HUMANS; h++)
+    g_fig_todo += g_humans_on[h] && g_players[h].alive;
+  for (int i = 0; i < g_match.nbots; i++) g_fig_todo += g_bots[i].active;
+  for (int c = 0; c < MAX_CORPSES; c++) g_fig_todo += g_corpses[c].used;
   for (int h = 0; h < MAX_HUMANS; h++) {
     if (!g_humans_on[h]) continue;
     const player_t *hp = &g_players[h];
@@ -218,10 +258,12 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     if (!hp->alive) continue;
     g_fig_team = fig_team_of(ent_of_human(h));
     g_fig_ins = fig_ins_of(ent_of_human(h));
-    g_fig_var = ent_of_human(h) & 3;
+    g_fig_var = ent_kind(ent_of_human(h));
     g_fig_gear = local ? armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT) : -1;
+    g_tp_theme = local ? (armory_theme()->pat > 0.0f ? armory_theme() : NULL) : NULL;
     fig_own_pieces(local);
     g_fig_ent = ent_of_human(h);
+    g_fig_nade_kind = hp->wp.gr_kind;
     scene_draw_figure(&g_player_anim[h], v3_lerp(hp->prev_pos, hp->pos, alpha),
                       hp->yaw, NULL, alpha, ent_flash01(hp->flash, hp->flash_head),
                       hp->flash_head ? (v3){{1.0f, 0.22f, 0.14f}} : (v3){{1, 1, 1}},
@@ -229,9 +271,11 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_team = -1;
     g_fig_ins = 0;
     g_fig_var = 0;
+    g_tp_theme = NULL;
     g_fig_gear = -1;
     fig_own_pieces(0);
     g_fig_ent = -1;
+    g_fig_nade_kind = 0;
   }
   for (int i = 0; i < g_match.nbots; i++)
     if (g_bots[i].active) scene_draw_bot(&g_bots[i], alpha);
@@ -256,17 +300,19 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
     g_fig_diss_o = cpos;
     g_fig_diss_seed = cp->seed;
     g_fig_kcap = CORPSE_K;
-    g_fig_var = cp->owner > 0 ? (cp->owner - 1) & 3 : 0;
+    g_fig_var = ent_kind(cp->owner);
     g_fig_team = fig_team_of(cp->owner);
     g_fig_ins = fig_ins_of(cp->owner);
     g_fig_gear = cp->owner == g_local_ent && cp->pal == 1
                ? armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT) : -1;
     fig_own_pieces(g_fig_gear >= 0);
+    g_tp_theme = g_fig_gear >= 0 ? (armory_theme()->pat > 0.0f ? armory_theme() : NULL) : NULL;
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
     g_fig_var = 0;
     g_fig_team = -1;
     g_fig_ins = 0;
+    g_tp_theme = NULL;
     g_fig_gear = -1;
     fig_own_pieces(0);
   }

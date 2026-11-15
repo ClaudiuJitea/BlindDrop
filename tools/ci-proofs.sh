@@ -58,16 +58,42 @@ for d in 0 3 12 30; do
   CROSS="${CROSS:+$CROSS }$c"
   i=$((i + 1))
 done
-# The INSURGENT build (head wrap, chest rig) is a second figure: the same four
-# invariants at the same four tiers. Not in the near/cross baselines, which
-# measure the operator build the default figcheck draws.
-for d in 0 3 12 30; do
-  line="$(run "figins 1; figcheck 60 $d" | grep '^figcheck' | head -1)"
-  for k in open flip zfight degen; do
-    v="$(field "$line" "$k")"
-    [ "${v:-x}" = 0 ] || { say "GATE figcheck insurgent dist=$d $k=$v (want 0)"; fail=1; }
+# The INSURGENT build (head wrap, tunic, chest rig) is a second figure: the same
+# four invariants at the same four tiers, for EACH of its four archetypes
+# (figvar 0-3: rifleman, gunner with the bandolier, scout without a rig, leader
+# with the radio) — they differ in geometry, not only in colour. Not in the
+# near/cross baselines, which measure the operator build the default figcheck
+# draws.
+for a in 0 1 2 3; do
+  for d in 0 3 12 30; do
+    line="$(run "figins 1; figvar $a; figcheck 60 $d" | grep '^figcheck' | head -1)"
+    for k in open flip zfight degen; do
+      v="$(field "$line" "$k")"
+      [ "${v:-x}" = 0 ] || { say "GATE figcheck insurgent kind=$a dist=$d $k=$v (want 0)"; fail=1; }
+    done
   done
 done
+# SMOKE: a cloud blocks a line through it once bloomed, and not before it pops
+# or after it is gone; and the fill is the deterministic function the server
+# and the clients both build it with (same cell count from the same point).
+line="$(run "smokesee 0 1.5 6 0 1.5 -26; smoke 0 0 -10; wait 360; smokesee 0 1.5 6 0 1.5 -26; wait 2400; smokesee 0 1.5 6 0 1.5 -26")"
+b="$(printf '%s\n' "$line" | sed -n 's/^smokesee .*blocks=\([01]\).*/\1/p' | tr '\n' ' ')"
+[ "$b" = "0 1 0 " ] || { say "GATE smoke sight '$b' (want '0 1 0 ')"; fail=1; }
+f1="$(run "smoke 0 0 -10" | grep '^smokefill' | head -1)"
+f2="$(run "smoke 0 0 -10" | grep '^smokefill' | head -1)"
+[ -n "$f1" ] && [ "$f1" = "$f2" ] && [ "$f1" != "smokefill none" ] ||
+  { say "GATE smoke fill '$f1' vs '$f2' (want identical, non-empty)"; fail=1; }
+# THE INCENDIARY: the pool is deterministic and non-empty, it burns at its
+# heart, a smoke over it puts it out, and standing in it hurts.
+g1="$(run "fire 0 0 -10" | grep '^firefill' | head -1)"
+g2="$(run "fire 0 0 -10" | grep '^firefill' | head -1)"
+[ -n "$g1" ] && [ "$g1" = "$g2" ] && [ "$g1" != "firefill none" ] ||
+  { say "GATE fire fill '$g1' vs '$g2' (want identical, non-empty)"; fail=1; }
+line="$(run "bots 0; fire 0 0 -10; wait 120; fireheat 0 0.1 -10; smoke 0 0 -10; wait 360; fireheat 0 0.1 -10")"
+h="$(printf '%s\n' "$line" | sed -n 's/^fireheat k=\([0-9.]*\).*/\1/p' | tr '\n' ' ')"
+[ "$h" = "1.000 0.000 " ] || { say "GATE fire snuff '$h' (want '1.000 0.000 ')"; fail=1; }
+n="$(run "bots 0; warp 0 0 -10; fire 0 0 -10; wait 200" | grep -c '^hit ')"
+[ "${n:-0}" -ge 5 ] || { say "GATE fire burn hits=$n (want >= 5)"; fail=1; }
 # near is config-conditioned; fresh defaults give the WANT_NEAR quadruple
 # below. A change here is a geometry regression OR a config that
 # leaked in — investigate, don't just bump. It lives ONCE, here, the only
@@ -126,7 +152,31 @@ done
 # somewhere else, so figcheck films a different pose. Proved placement-only:
 # the same tree with the previous spawn_spot alone restored reproduces
 # "40 40 46 36" / "92 92 88 58" exactly; open/flip/zfight/degen stay 0.
-WANT_NEAR="36 36 44 37"
+# +2 +2 +3 0 with the ROUND BODY (2026-11-14): torso, limbs, neck, joints and
+# boots went from the faceted k=8 octagon to smooth k=16 profiles (gear to the
+# rolled-edge soft box), the head and helmet one tier finer, the helmet crown
+# closed and the shoulder ball tucked 6 mm in. Close-tier figures are 57% more
+# triangles (8248 -> 12920), so more pairs land in the 1 mm advisory tier by
+# count alone; open/flip/zfight/degen stay 0 at all four tiers, for the operator
+# and all four insurgent archetypes.
+# 0 0 +1 -3 with the v5 BODY pass (2026-11-15, art_review/r7): the pauldrons
+# are gone, the deltoid pad lies 9 mm tighter on the arm, the thigh tapers
+# through two more rings and the knee/elbow pads are new shells. The DIST 30
+# fall is the boot (`figv`: shin/boot 5 -> 0 with the 8% wider sole) and the
+# far-tier deltoid; the +1 at DIST 12 is one sho_ball/deltoid pair. open/flip/
+# zfight/degen 0 at every tier, operator and insurgents 0-3.
+# -2 -2 -3 +1 with the v5 MOTION pass (art_review/r9): figcheck films bot 0
+# standing, and a standing operator now has the athletic set (3 deg over the
+# toes about the pelvis, 16 mm lower on re-solved knees, feet staggered 9 cm
+# from the reset). Fewer near pairs at three tiers: the arms and rifle turned
+# off the carrier's face. open/flip/zfight/degen 0 everywhere (fig_gate,
+# including every headgear x face at the close and procedural tiers).
+# 0 0 0 +1 with the v5 FAR-TIER TRIM (art_review/r10): the knee pads and the
+# knee-strap rings are close-tier only now (under a pixel past 12 m, and the
+# vertex-pressure table was re-measured with them). The far thigh and shin are
+# the plain trouser chains again, and one more thigh/shin pair lands in the
+# 1 mm tier at the 6-gon; every invariant 0 at every tier and gear.
+WANT_NEAR="36 36 45 36"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -347,7 +397,47 @@ WANT_NEAR="36 36 44 37"
 # elbow now hangs down and back instead of being driven out at shoulder height,
 # and the pose aims on a soft-limited pitch. Fewer upper-arm/torso grazes, all
 # hard invariants 0, `near` unchanged.
-WANT_CROSS="102 102 77 60"
+# +44 +44 -8 +5 with the ROUND BODY (2026-11-14, see WANT_NEAR). The close-tier
+# rise is tessellation: two round 16-gons crossing make ~2x the shallow
+# triangle pairs two octagons do (`figv`: uarm/sho_ball, sho_ball/deltoid,
+# shin/boot, thigh/knee — the same joins, more facets on them). At DIST 12,
+# where the body is still clamped to the octagon, it FELL by 8. Removing the
+# 6 mm shoulder tuck was measured and is worse (uarm/sho_ball 772 -> 1173).
+# +21 +21 0 0 with the HERO HEAD (2026-11-14): the operator's sculpted helmet
+# (tools/hero_models.py) at the two close tiers only — its side rails run the
+# chord of the curved shell and root into it at 8-12 degrees, and the NVG mount
+# and counterweight bases are sunk into the shell the same way; every one is a
+# deliberate rooting, measured by `figv` as hero_helmet/hero_helmet, and open,
+# zfight, degen and near are all unchanged. The coarse tiers draw the procedural
+# head and do not move.
+# +18 +18 +5 +1 with the v5 BODY pass (art_review/r7), by `figv` class at
+# DIST 0: hero_helmet/hero_helmet +6 (the three velcro panels are ROOTED in the
+# shell — centred on its surface, so they cross it at the shell's own slope,
+# the same deliberate rooting as the rails above), uarm/sho_ball +2,
+# sho_ball/deltoid +2, thigh/shin +2, torso/uarm +2, uarm/elbow +1 (the arm's
+# new biceps ring and the tighter pad meet the shoulder and elbow masses along
+# a longer stretch), gun/deltoid -1. The rest is the 60-tick maximum landing on
+# a different pose. Nothing is buried: figbury AR 39.5 -> 35.5 mm, SR 15.9 ->
+# 11.9 (the pauldron no longer pushes the stock into the trunk).
+# -13 -13 +4 -9 with the v5 MOTION pass, same cause as WANT_NEAR above. By
+# `figv` class (r8 -> final, sampled tick): the grip's structural pairs
+# (gun/hand 9 -> 14, hand/hand 9 -> 12, gun/trigfinger 3 -> 2) and the knee's
+# (thigh/shin 7 -> 5 at DIST 0, shin/boot 8 -> 6 and torso/thigh 0 -> 2 at
+# DIST 12) — the same joins at a 3-degree different angle, with the 60-tick
+# maximum landing elsewhere. figbury: every weapon LESS buried (AR deepest
+# 38.9 -> 29.4 mm, SR 11.9 -> 2.3), head 0.0%.
+# 0 0 +1 0 with the v5 FAR-TIER TRIM, same cause as WANT_NEAR (the 8-gon knee
+# without its pad shell; the 60-tick maximum picks up one more knee pair).
+# +1 +1 +1 -1 with the SEAT FIX (2026-11-15): the torso's crotch node now hangs
+# along the thighs from the hip joints and the seat rings slim, rise and come
+# forward with hip flexion (the "sack under the belt" seen from behind in a
+# crouch-walk or a run). Geometry, not config: `near` unchanged, every hard
+# invariant 0 at every tier; one torso/thigh pair moves tier at the 60-tick max.
+# +4 +4 0 0 with the HIP SEATS (2026-11-15): a buttock ellipsoid behind each
+# hip joint (close tiers only) so a thigh swung back no longer pokes its tube
+# end out through the seat. Narrower than the thigh across and deeper behind
+# it, so every seat/thigh meeting is a steep crossing; far tiers unchanged.
+WANT_CROSS="177 177 80 56"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

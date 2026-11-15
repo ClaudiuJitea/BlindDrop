@@ -184,7 +184,8 @@ static void run_script(char *script, sim_ctx_t *s) {
         frame_input_t in = {0};
         for (int i = 0; i < IN_COUNT; i++)
           in.held[i] = in.held_first[i] = s->held[i] || home_input(i);
-        if (input_wheel_swap()) in.held_first[IN_SWAP] = 1;
+        int wa = input_wheel_swap();
+        if (wa >= 0) in.held_first[wa] = 1;
         int r = app_frame(&app, s->p, TICK_DT, &in);
         if (r) g_pressed[KEY_MWUP] = g_pressed[KEY_MWDN] = 0;
         ran += r;
@@ -346,7 +347,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       // the rest of the bot, and a solver that diverged would show up here.
       long n = next_n();
       if (n > 4096) n = 4096;
-      struct {
+      static struct {
         player_t players[MAX_HUMANS];
         bot_t bots[MAX_BOTS];
         match_t match;
@@ -355,6 +356,12 @@ static void run_script(char *script, sim_ctx_t *s) {
         uint32_t map_seed;
         int map_id;
         unsigned char on[MAX_HUMANS];
+        // Live grenades and smoke clouds are SIM state too: a bot's smoke
+        // blocks every other bot's sight for 20 s, so the second run has to
+        // start from the same air as the first.
+        nade_t nades[MAX_NADES];
+        smoke_t smokes[MAX_SMOKES];
+        inferno_t infernos[MAX_INFERNOS];
       } sv;
       memcpy(sv.players, g_players, sizeof g_players);
       memcpy(sv.bots, g_bots, sizeof g_bots);
@@ -365,6 +372,9 @@ static void run_script(char *script, sim_ctx_t *s) {
       sv.map_seed = g_map_seed;
       sv.map_id = g_map_id;
       memcpy(sv.on, g_humans_on, sizeof g_humans_on);
+      memcpy(sv.nades, g_nades, sizeof g_nades);
+      memcpy(sv.smokes, g_smokes, sizeof g_smokes);
+      memcpy(sv.infernos, g_infernos, sizeof g_infernos);
       static uint32_t ha[4096], hb[4096];
       #define NL_HASH(dst) do {                                             \
         uint32_t fh = 2166136261u;                                          \
@@ -391,6 +401,9 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_rng = sv.rng; g_rng_bot = sv.rng_bot;
       memcpy(g_rng_gun, sv.rng_gun, sizeof g_rng_gun);
       memcpy(g_humans_on, sv.on, sizeof g_humans_on);
+      memcpy(g_nades, sv.nades, sizeof g_nades);
+      memcpy(g_smokes, sv.smokes, sizeof g_smokes);
+      memcpy(g_infernos, sv.infernos, sizeof g_infernos);
       g_num_events = 0;
       for (long i = 0; i < n; i++) { server_tick_once(s->held); NL_HASH(hb[i]); }
       #undef NL_HASH
@@ -420,7 +433,8 @@ static void run_script(char *script, sim_ctx_t *s) {
         float fv = (rng_next(&rs) / 4294967296.0f - 0.5f) * 640.0f;
         net_input_t in = {.tick = (uint32_t)i, .view = rng_next(&rs),
                           .buttons = (uint32_t)rng_next(&rs),
-                          .loadout = (uint8_t)loadout_pack(i % WPN_VARS, i / WPN_VARS % WPN_VARS),
+                          .loadout = (uint16_t)loadout_pack(i % RV_N, i / RV_N % PV_N,
+                                                            i / 7 % SV_N),
                           .yaw = net_q_yaw(fy), .pitch = net_q_pitch(fp),
                           .wish_x = net_q_wish(fw), .wish_y = net_q_wish(-fw)};
         unsigned char buf[64];
@@ -431,7 +445,7 @@ static void run_script(char *script, sim_ctx_t *s) {
         if (!net_input_decode(&r, &out) || out.tick != in.tick ||
             out.view != in.view ||
             out.buttons != (in.buttons & ((1u << IN_COUNT) - 1u)) ||
-            out.loadout != in.loadout ||   // rides the buttons word's top nibble
+            out.loadout != in.loadout ||   // its own ten-bit field
             out.yaw != in.yaw) roundtrip_fail = 1;
         float dy = fabsf(net_dq_yaw(out.yaw) - wrap_pi(fy));
         float dp = fabsf(net_dq_pitch(out.pitch) - f_clamp(fp, -PITCH_MAX, PITCH_MAX));
@@ -441,7 +455,8 @@ static void run_script(char *script, sim_ctx_t *s) {
         if (dw > e_wish) e_wish = dw;
         net_ent_t ne = {.id = (uint8_t)(rng_next(&rs) % MAX_ENTS), .flags = 0xf,
                         .hp = 100, .weapon = (uint8_t)(i % WPN_COUNT), .spawn_seq = 3,
-                        .loadout = (uint8_t)loadout_pack(i / 3 % WPN_VARS, i / 9 % WPN_VARS),
+                        .loadout = (uint16_t)loadout_pack(i / 3 % RV_N, i / 5 % PV_N,
+                                                          i / 11 % SV_N),
                         .x = net_q_pos(fx), .y = net_q_pos(fx * 0.5f), .z = net_q_pos(-fx),
                         .vx = net_q_vel(fv), .vy = net_q_vel(0), .vz = net_q_vel(-fv),
                         .yaw = net_q_yaw(fy), .pitch = net_q_pitch(fp),
@@ -997,6 +1012,9 @@ static void run_script(char *script, sim_ctx_t *s) {
       const float *mv = g_cfg.mv;
       weapon_t pw = p->wp, bw = b->wp;
       pw.cur = bw.cur = WPN_AR;
+      // The SAME GUN in both hands: bots carry their own loadouts now
+      // (bot_pick_loadout), and this proof is about the code, not the pick.
+      for (int k = 0; k < WPN_COUNT; k++) bw.var[k] = pw.var[k];
       pw.ads_s = bw.ads_s = 0.0f;
       pw.bloom = bw.bloom = 0.0f;
       v3 rest = {{0, 0, 0}}, run = {{mv[MV_RUN], 0, 0}};
@@ -1055,6 +1073,11 @@ static void run_script(char *script, sim_ctx_t *s) {
       }
       printf("parity total rows=%u live=%d mismatches=%d\n",
              (unsigned)(sizeof row / sizeof *row), live, bad);
+    } else if (!strcmp(t, "sel")) {
+      // `sel`: the selection-list entry in the hands (sim/weapon.c sel_of):
+      // 0 ar, 1 sr, 2 pt, 3 kn, 4 frag, 5 smoke, 6 incendiary.
+      static const char *SN[SEL_COUNT] = {"ar", "sr", "pt", "kn", "frag", "smoke", "inc"};
+      printf("sel t=%ld %s\n", (long)g_tick, SN[sel_of(&s->p->wp)]);
     } else if (!strcmp(t, "wpn")) {
       const weapon_t *w = &s->p->wp;
       const vm_t *v = &s->p->vm;
@@ -1632,8 +1655,86 @@ static void run_script(char *script, sim_ctx_t *s) {
       // the seat decides (default) — so figcheck can gate both builds.
       long v = next_n();
       g_fig_ins_force = v < 0 ? -1 : v ? 1 : 0;
+    } else if (!strcmp(t, "smoke")) {
+      // `smoke X Y Z`: pop a smoke cloud there (the EV_SMOKE a canister at rest
+      // pushes), and print its fill: cells taken and how far it ran.
+      v3 at = {{next_f(), next_f(), next_f()}};
+      g_smoke_last = -1;
+      ev_push((event_t){.type = EV_SMOKE, .a = at, .src = -1, .dst = -1});
+      if (g_smoke_last >= 0 && g_smokes[g_smoke_last].on)
+        printf("smokefill cells=%d dmax=%.2f\n", g_smokes[g_smoke_last].ncell,
+               (double)g_smokes[g_smoke_last].dmax);
+      else
+        printf("smokefill none\n");
+    } else if (!strcmp(t, "fire")) {
+      // `fire X Y Z`: an incendiary breaking there (the EV_FLAME it pushes on a
+      // floor), and print the pool: cells taken and how far it ran.
+      v3 at = {{next_f(), next_f(), next_f()}};
+      g_inferno_last = -1;
+      ev_push((event_t){.type = EV_FLAME, .k = 1, .a = at, .src = -1, .dst = -1});
+      if (g_inferno_last >= 0 && g_infernos[g_inferno_last].on)
+        printf("firefill cells=%d dmax=%.2f\n", g_infernos[g_inferno_last].ncell,
+               (double)g_infernos[g_inferno_last].dmax);
+      else
+        printf("firefill none\n");
+    } else if (!strcmp(t, "fireheat")) {
+      // `fireheat X Y Z`: how hard the fire burns at a point now (0..1).
+      v3 at = {{next_f(), next_f(), next_f()}};
+      printf("fireheat k=%.3f\n", (double)inferno_heat_at(at));
+    } else if (!strcmp(t, "smokeblast")) {
+      // `smokeblast X Y Z`: the EV_BLAST a frag pushes (flash, smoke, the
+      // smoke clearing) with no damage — the look of a frag into a cloud.
+      v3 at = {{next_f(), next_f(), next_f()}};
+      ev_push((event_t){.type = EV_BLAST, .a = at, .g = 1.0f, .src = -1, .dst = -1});
+    } else if (!strcmp(t, "smokesee")) {
+      // `smokesee AX AY AZ BX BY BZ`: the optical depth between two points.
+      v3 a = {{next_f(), next_f(), next_f()}}, b = {{next_f(), next_f(), next_f()}};
+      printf("smokesee tau=%.3f blocks=%d\n", (double)smoke_tau(a, b), smoke_blocks(a, b));
+    } else if (!strcmp(t, "lineup")) {
+      // `lineup X Z DX FACE`: every active bot puppeted, standing still in a
+      // row from (X, Z) along +x every DX metres, facing FACE degrees — the
+      // art rig's side-by-side of the two forces and the four archetypes.
+      float lx = next_f(), lz = next_f(), ldx = next_f(), lf = next_f() * DEG2RAD;
+      for (int i = 0; i < g_match.nbots; i++) {
+        bot_t *b = &g_bots[i];
+        if (!b->active) continue;
+        b->puppet = 1;
+        b->pup_speed = 5.0f;
+        b->pup_mx = b->pup_mz = 0;
+        b->pup_crouch = 0;
+        b->pup_ready = 1;
+        b->pup_lean_t = b->pup_lean = 0;
+        b->pup_face = lf;
+        b->yaw = lf;
+        b->pos = (v3){{lx + ldx * (float)i, 0.0f, lz}};
+        while (b->pos.y < 3.0f && !aabb_fits(b->pos, PLAYER_RADIUS, HEIGHT_STAND))
+          b->pos.y += 0.05f;
+        b->prev_pos = b->pos;
+        b->vel = (v3){{0, 0, 0}};
+        anim_reset(&b->anim, b->pos, b->yaw);
+      }
+    } else if (!strcmp(t, "figop")) {
+      // `figop E`: draw entity E as an OPERATOR whatever side it is on (-1 off),
+      // so a lineup can put the friendly kit beside the insurgents.
+      g_fig_op_ent = (int)next_n();
+    } else if (!strcmp(t, "figsil")) {
+      // `figsil on|off`: every figure in flat black — the silhouette test.
+      g_fig_sil = next_on_off("figsil");
+    } else if (!strcmp(t, "figvar")) {
+      // figvar 0..3|-1: pin the insurgent archetype (rifleman, gunner, scout,
+      // leader) for every figure, or -1 to follow the entity id (default).
+      long v = next_n();
+      g_fig_var_force = v < 0 ? -1 : (int)(v & 3);
     } else if (!strcmp(t, "figbury")) {
       figbury_proof();
+    } else if (!strcmp(t, "figgear")) {
+      // figgear H F: pin every figure's HEAD_* and FACE_* index (-1 follows the
+      // side / armory / entity id), so figcheck can gate every combination.
+      long h = next_n(), f = next_n();
+      g_fig_head_force = h < 0 || h >= HEAD_GEAR_COUNT ? -1 : (int)h;
+      g_fig_face_force = f < 0 || f >= FACE_GEAR_COUNT ? -1 : (int)f;
+    } else if (!strcmp(t, "fighead")) {
+      fighead_proof();
     } else if (!strcmp(t, "figm")) {
       figm_proof();
     } else if (!strcmp(t, "kine")) {
@@ -1684,6 +1785,44 @@ static void run_script(char *script, sim_ctx_t *s) {
                  (double)P->wri[i].y, (double)P->wri[i].z);
         printf("\n");
       }
+    } else if (!strcmp(t, "gait")) {
+      // `gait N`: what makes a gait read as ALIVE, as numbers over N ticks of
+      // bot 0, peak-to-peak (deg / mm) unless named: the hip line's and the
+      // shoulder line's yaw about the body's facing and the TWIST between them
+      // (counter-rotation), the pelvis's lateral sway, the head's vertical and
+      // lateral travel (stability), the mean trunk pitch over the hips (+ =
+      // forward), the knee's peak lift above its standing height, and how far
+      // each hand travels fore/aft (arm carriage). Added in v5 to find out why a
+      // solver with every system in it still read as stiff (art_review/r9).
+      long n = next_n();
+      float mn[9], mx[9], lsum = 0;
+      for (int k = 0; k < 9; k++) { mn[k] = 1e9f; mx[k] = -1e9f; }
+      for (long i = 0; i < n; i++) {
+        sim_advance(s);
+        const bot_t *b = &g_bots[0];
+        const pose_t *P = &b->anim.pose;
+        float ly = b->anim.leg_yaw;
+        v3 Rg = {{cosf(b->yaw), 0, sinf(b->yaw)}}, Fg = {{sinf(b->yaw), 0, -cosf(b->yaw)}};
+        (void)ly;
+        v3 hl = v3_sub(P->hip[1], P->hip[0]), sl = v3_sub(P->sho[1], P->sho[0]);
+        float hy = atan2f(v3_dot(hl, Fg), v3_dot(hl, Rg)) * (180.0f / F_PI);
+        float sy = atan2f(v3_dot(sl, Fg), v3_dot(sl, Rg)) * (180.0f / F_PI);
+        v3 pr = v3_sub(P->pelvis, b->pos), hr_ = v3_sub(P->head, b->pos);
+        v3 tr = v3_sub(P->chest, P->pelvis);
+        float lean = atan2f(v3_dot(tr, Fg), tr.y) * (180.0f / F_PI);
+        float kl = fmaxf(P->knee[0].y, P->knee[1].y) - b->pos.y;
+        float v[9] = {hy, sy, sy - hy, v3_dot(pr, Rg) * 1e3f, hr_.y * 1e3f, v3_dot(hr_, Rg) * 1e3f,
+                      kl * 1e3f, v3_dot(v3_sub(P->wri[0], b->pos), Fg) * 1e3f,
+                      v3_dot(v3_sub(P->wri[1], b->pos), Fg) * 1e3f};
+        for (int k = 0; k < 9; k++) { if (v[k] < mn[k]) mn[k] = v[k]; if (v[k] > mx[k]) mx[k] = v[k]; }
+        lsum += lean;
+      }
+      printf("gait n=%ld hipyaw=%.1f shoyaw=%.1f twist=%.1f sway=%.0f head_y=%.0f head_x=%.0f "
+             "lean=%.1f knee_max=%.0f handL=%.0f handR=%.0f\n", n,
+             (double)(mx[0] - mn[0]), (double)(mx[1] - mn[1]), (double)(mx[2] - mn[2]),
+             (double)(mx[3] - mn[3]), (double)(mx[4] - mn[4]), (double)(mx[5] - mn[5]),
+             (double)(lsum / (float)(n > 0 ? n : 1)), (double)mx[6], (double)(mx[7] - mn[7]),
+             (double)(mx[8] - mn[8]));
     } else if (!strcmp(t, "skel")) {
       long n = next_n();
       while (n-- > 0) {
@@ -1720,30 +1859,38 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_cfg.devmode = next_on_off("dev");
     } else if (!strcmp(t, "showfps")) {
       g_cfg.show_fps = next_on_off("showfps");
+    } else if (!strcmp(t, "respawn")) {
+      // The player's respawn, as the menu's START runs it: the ARMORY loadout
+      // is taken here (the harness's first spawn predates any `armory` command).
+      player_respawn(&g_players[0], 0);
     } else if (!strcmp(t, "armory")) {
-      // armory rifle|pistol|knife|theme|gear|head|vest|pack N — the ARMORY
+      // armory rifle|pistol|sniper|knife|theme|gear|head|vest|pack N — the ARMORY
       // page's cycles, by index.
       const char *what = next_tok();
       long n = next_n();
       int *dst = !strcmp(what, "rifle") ? &g_cfg.rifle_var
                : !strcmp(what, "pistol") ? &g_cfg.pistol_var
+               : !strcmp(what, "sniper") ? &g_cfg.sniper_var
                : !strcmp(what, "knife") ? &g_cfg.knife_model
                : !strcmp(what, "theme") ? &g_cfg.wpn_theme
                : !strcmp(what, "gear")  ? &g_cfg.gear_theme
                : !strcmp(what, "head")  ? &g_cfg.head_gear
                : !strcmp(what, "vest")  ? &g_cfg.vest_gear
-               : !strcmp(what, "pack")  ? &g_cfg.pack_gear : NULL;
-      int cnt = dst == &g_cfg.rifle_var || dst == &g_cfg.pistol_var ? WPN_VARS
+               : !strcmp(what, "pack")  ? &g_cfg.pack_gear
+               : !strcmp(what, "face")  ? &g_cfg.face_gear : NULL;
+      int cnt = dst == &g_cfg.rifle_var ? RV_N : dst == &g_cfg.pistol_var ? PV_N
+              : dst == &g_cfg.sniper_var  ? SV_N
               : dst == &g_cfg.knife_model ? KNIFE_MODEL_COUNT
               : dst == &g_cfg.wpn_theme   ? WPN_THEME_COUNT
               : dst == &g_cfg.head_gear   ? HEAD_GEAR_COUNT
               : dst == &g_cfg.vest_gear   ? VEST_GEAR_COUNT
-              : dst == &g_cfg.pack_gear   ? PACK_GEAR_COUNT : GEAR_THEME_COUNT;
+              : dst == &g_cfg.pack_gear   ? PACK_GEAR_COUNT
+              : dst == &g_cfg.face_gear   ? FACE_GEAR_COUNT : GEAR_THEME_COUNT;
       if (!dst || n < 0 || n >= cnt) {
-        fprintf(stderr, "script: armory rifle|pistol 0-%d | knife 0-%d | theme 0-%d | gear 0-%d"
-                " | head 0-%d | vest 0-%d | pack 0-%d\n",
-                WPN_VARS - 1, KNIFE_MODEL_COUNT - 1, WPN_THEME_COUNT - 1, GEAR_THEME_COUNT - 1,
-                HEAD_GEAR_COUNT - 1, VEST_GEAR_COUNT - 1, PACK_GEAR_COUNT - 1);
+        fprintf(stderr, "script: armory rifle 0-%d | pistol 0-%d | sniper 0-%d | knife 0-%d | theme 0-%d"
+                " | gear 0-%d | head 0-%d | vest 0-%d | pack 0-%d | face 0-%d\n",
+                RV_N - 1, PV_N - 1, SV_N - 1, KNIFE_MODEL_COUNT - 1, WPN_THEME_COUNT - 1, GEAR_THEME_COUNT - 1,
+                HEAD_GEAR_COUNT - 1, VEST_GEAR_COUNT - 1, PACK_GEAR_COUNT - 1, FACE_GEAR_COUNT - 1);
         exit(1);
       }
       *dst = (int)n;
@@ -2095,7 +2242,21 @@ static void run_script(char *script, sim_ctx_t *s) {
         glReadPixels(0, 0, 1, 1, GL_RGBA, GL_FLOAT, px);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
       }
-      printf("exposure stops=%.3f mean_lum=%.4f\n", (double)px[0], (double)px[1]);
+      printf("exposure stops=%.3f mean_lum=%.4f atm=%s\n", (double)px[0], (double)px[1],
+             atm_now()->name);
+    } else if (!strcmp(t, "svdbg")) {
+      // `svdbg N`: paint the baked sky visibility (render/skyvis.c) instead of
+      // the lit colour — 1 diffuse (by the normal), 2 specular (by R), 0 off.
+      g_sv_dbg = (int)next_n();
+    } else if (!strcmp(t, "svdump")) {
+      // `svdump PATH`: the baked sky-visibility atlas as a PNG (six height
+      // layers across; bottom row +x -x +z -z in RGBA, top row up-facing in R).
+      const char *pth = next_tok();
+      if (SV.ok && SV.n) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, SV.sv_fbo);
+        write_png(pth, SV.n * SV_LAYERS, SV.n * 2);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, R.present_fbo);
+      }
     } else if (!strcmp(t, "postdbg")) {
       // 0 off, 1 SSAO, 2 contact shadow, 3 edge catch-light, 4 volumetric, 5 bloom
       g_post_dbg = (int)next_n();
@@ -2108,13 +2269,14 @@ static void run_script(char *script, sim_ctx_t *s) {
       // overflowing HUD silently stops drawing scoreboard rows.
       printf("budget scene_verts=%d peak=%d max=%d drops=%ld world_verts=%d "
              "ev_peak=%d ev_max=%d ev_drops=%ld part_peak=%d/%d res=%d/%d "
-             "world_decor=%d/%d world_drops=%ld ui_peak=%d/%d ui_drops=%ld\n",
+             "world_decor=%d/%d world_drops=%ld ui_peak=%d/%d ui_drops=%ld props=%d/%d nprops=%d/%d\n",
              g_scene_floats / VERT_FLOATS, g_scene_peak / VERT_FLOATS,
              SCENE_MAX_VERTS, g_scene_drops, R.world_verts,
              g_ev_peak, MAX_EVENTS, g_ev_drops, g_part_peak, MAX_PARTICLES,
              g_part_res_peak, PARTS_SKID_LO,
              R.world_decor_verts, DECOR_MAX_VERTS, g_mesh_drops,
-             g_ui_peak, UI_MAX_VERTS, g_ui_drops);
+             g_ui_peak, UI_MAX_VERTS, g_ui_drops, g_props_verts, PROPS_MAX_VERTS,
+             g_nprops, MAX_PROPS);
     } else if (!strcmp(t, "map")) {
       // The theme decides the whole surface treatment now (ripples, glitter,
       // standing water) and it was previously unprintable — you could only find
@@ -2226,6 +2388,16 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_vmorb.which = wsel;
     } else if (!strcmp(t, "camaim")) {
       s->cam.blook = next_f();  // cambot look height (default .9)
+    } else if (!strcmp(t, "supplies")) {
+      // Every supply station on this map: where, which way it faces, and
+      // whether it is stocked (ready) or how long until it restocks.
+      for (int i = 0; i < g_nsupply; i++)
+        printf("supply %d kind=%s at=(%.1f %.1f) qt=%d %s %ld\n", i,
+               g_supply[i].kind == SUP_HEALTH ? "health" : "nades", (double)g_supply[i].x,
+               (double)g_supply[i].z, g_supply[i].qt,
+               g_tick >= g_supply_ready[i] ? "ready" : "empty",
+               g_tick >= g_supply_ready[i] ? 0L : g_supply_ready[i] - g_tick);
+      printf("supplies n=%d\n", g_nsupply);
     } else if (!strcmp(t, "cambot")) {
       char *a = next_tok();
       if (!strcmp(a, "off")) { s->cam.bot = 0; continue; }

@@ -11,6 +11,8 @@ post/
 tools/*
 !tools/ci-proofs.sh
 !tools/build_models.py
+!tools/props_models.py
+!tools/build_props.py
 !tools/art_capture.sh
 !tools/art_compare.py
 CLAUDE.md
@@ -26,3 +28,4 @@ opencode.json
 node_modules/.devcontainer/
 .vscode/
 art_review/
+assets/sfx/pool/

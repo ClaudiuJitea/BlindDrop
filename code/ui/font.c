@@ -271,7 +271,18 @@ static float g_scope_r, g_scope_cx, g_scope_cy;  // scope disc, derived per fram
 // centre and the screen images of its two half-axes, in HUD units. hx/hy == 0
 // means "no window this frame".
 static float g_holo_cx, g_holo_cy, g_holo_ex[2], g_holo_ey[2];
-static int g_holo_kind;   // 0 the EOTech (ring + dot), 1 the compact red dot (dot only)
+static int g_holo_kind;
+// THE ARMORY'S CHARACTER PREVIEW (render/frame.c draws it, ui/boot_menu.c lays
+// it out). The page sets the request every frame it is drawn, with the preview's
+// rectangle in UI units, the weapon to show in his hands and the turntable angle;
+// the renderer renders it the next frame and draws it into the rectangle.
+#define PREV_W 400
+#define PREV_H 640
+static int   g_prev_req;                 // the Armory page drew this frame
+static float g_prev_x, g_prev_y, g_prev_w, g_prev_h;
+static int   g_prev_wpn;                 // WPN_*: what he holds
+static float g_prev_yaw;                 // turntable, radians   // 0 the EOTech (ring + dot), 1 a compact red dot (dot only),
+                          // 2 a rifle scope (round ocular, black duplex)
 static int g_hud_visible = 1;  // harness capture switch; menus remain visible
 // One map over the whole 48 m arena: 4096 px gives ~1.3 cm texels, which is fine
 // enough that a figure self-shadows its own arms.
@@ -311,6 +322,7 @@ typedef struct {
   GLuint sm_fbo, sm_tex;             // sun shadow map (depth only)
   mat4   light_vp;
   GLuint scope_fbo, scope_tex, scope_depth;  // picture-in-picture scope target
+  GLuint prev_fbo, prev_tex, prev_depth;     // the ARMORY's character preview (portrait, HDR)
   int    scope_size;
   GLint  u_sky_fwd, u_sky_right, u_sky_up, u_sky_tan;
   GLuint vao_world, vbo_world, vao_hud, vbo_hud, vao_sky, font_tex;
@@ -652,7 +664,9 @@ static float ground_skirt_ao(float x, float z) {
 // when the town dressing (dec_town: cornices, window frames, bars, louvers,
 // flanges, cables) put the citadel at ~420k.
 #define DECOR_MAX_VERTS 524288
-#define PROPS_MAX_VERTS 262144  // detailed vehicles and lanterns (mesh_props)
+// 524288 since adding the Blender-built industrial genset, forklift, and solar heater
+// alongside the vehicles and town props, matching SCENE_MAX_VERTS.
+#define PROPS_MAX_VERTS 524288  // detailed vehicles, street furniture, lanterns
 static float g_mesh[(MAX_SOLIDS * 36 + GROUND_VERTS + DECOR_MAX_VERTS + PROPS_MAX_VERTS) * VERT_FLOATS];
 static int   g_mesh_floats;
 static long  g_mesh_drops;
@@ -776,6 +790,14 @@ static void mesh_build(void) {
     const solid_t *s = &g_solids[i];
     v3 mn = s->min, mx = s->max, c = s->color;
     g_mesh_mat = g_solid_mat[i] < SMAT_COUNT ? g_solid_mat[i] : SMAT_PAINT;
+    // THE ARENA'S MID LANDMARK (the map's one saturated anchor) is drawn as
+    // painted form-cast concrete instead of flat paint: panel joints, tie holes
+    // and pour lines put scale on what read as an untextured primitive. RENDER
+    // ONLY — g_solid_mat stays PAINT, because the sim reads it (a metal class
+    // ricochets) and a concrete look keeps the dust puff its impacts already make.
+    if (g_map_id == 0 && g_mesh_mat == SMAT_PAINT &&
+        c.x == g_theme.mid.x && c.y == g_theme.mid.y && c.z == g_theme.mid.z)
+      g_mesh_mat = SMAT_CONCRETE;
     // +x -x +y -y +z -z faces, wound counter-clockwise from outside.
     mesh_quad((v3){{mx.x,mn.y,mn.z}},(v3){{mx.x,mx.y,mn.z}},(v3){{mx.x,mx.y,mx.z}},(v3){{mx.x,mn.y,mx.z}},(v3){{1,0,0}},c);
     mesh_quad((v3){{mn.x,mn.y,mx.z}},(v3){{mn.x,mx.y,mx.z}},(v3){{mn.x,mx.y,mn.z}},(v3){{mn.x,mn.y,mn.z}},(v3){{-1,0,0}},c);
@@ -990,6 +1012,32 @@ static void renderer_init(int width, int height) {
                             R.scope_depth);
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     R.scope_fbo = 0;  // no scope picture rather than no game
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+  // THE ARMORY'S CHARACTER PREVIEW: the player's own operator, in the gear and
+  // with the weapon being picked, rendered here while that page is open and
+  // shown inside it. Portrait, because a man standing is portrait. HDR like the
+  // scope's picture, and through the same display transform (HUD_FS uImg 3).
+  glGenTextures(1, &R.prev_tex);
+  glBindTexture(GL_TEXTURE_2D, R.prev_tex);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, PREV_W, PREV_H, 0, GL_RGBA, GL_HALF_FLOAT, NULL);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+  glGenRenderbuffers(1, &R.prev_depth);
+  glBindRenderbuffer(GL_RENDERBUFFER, R.prev_depth);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, PREV_W, PREV_H);
+  glGenFramebuffers(1, &R.prev_fbo);
+  glBindFramebuffer(GL_FRAMEBUFFER, R.prev_fbo);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, R.prev_tex, 0);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, R.prev_depth);
+  if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+    R.prev_fbo = 0;   // no preview rather than no game
+  else {
+    glClearColor(0.050f, 0.058f, 0.074f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
   glBindTexture(GL_TEXTURE_2D, R.font_tex);
 

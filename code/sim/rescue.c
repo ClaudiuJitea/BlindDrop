@@ -198,6 +198,19 @@ static int fig_ins_of(int e) {
 static const guard_post_t *rescue_post(int bi) {
   return &GUARD_POSTS[bi >= 0 && bi < RESC_POSTS ? bi : 0];
 }
+// The archetype of entity e (see the forward declaration in sim/events.c): by
+// entity id everywhere, and in the rescue by the guard's POST, so the outline
+// says the job — the sentry is a rifleman, the patrol travels light (scout),
+// the rooftop sniper is the one with the radio (leader: he spots), and the
+// warden over the hostages carries the belt (gunner).
+static int ent_kind(int e) {
+  if (e <= 0 || e >= MAX_ENTS) return 0;
+  if (game_mode() == GM_RESCUE && resc_is_guard(e)) {
+    static const int POST_KIND[4] = {0, 2, 3, 1};   // sentry, patrol, sniper, warden
+    return POST_KIND[rescue_post(e - 1)->kind & 3];
+  }
+  return (e - 1) & 3;
+}
 #define RESC_INTRO_TICKS (9 * TICK_HZ / 2)   // 4.5 s: the briefing, then the job
 static void rescue_msg(int kind, const char *a, const char *b) {
   snprintf(g_resc.msg, sizeof g_resc.msg, "%s", a);
@@ -428,6 +441,30 @@ static int net_join_ok(int humans, int cap_public) {
 // the client's whole respawn-edge machinery dead code.
 static uint8_t g_spawn_seq_all[SRV_LOBBIES][MAX_ENTS];
 #define g_spawn_seq (g_spawn_seq_all[g_lobby])
+// A BOT'S OWN GUNS, CS2-style by side: the insurgent side (the mission's
+// guards, team 0) carries the T arsenal — AK, Galil, MAC-10, Bizon, Sawed-Off,
+// Negev, Glock, Tec-9 — and the operators the CT one — M4s, FAMAS, AUG, MP9,
+// MP7, MAG-7, P2000, USP-S, Five-SeveN — with the guns both sides buy in both
+// lists. A fresh pick every life, from a hash of the bot and its spawn count:
+// no draw on any rng stream, so nothing else in the sim moves. The R8 is left
+// out (a bot does not hold a trigger through a hammer's cock).
+static void bot_pick_loadout(int bi, weapon_t *w) {
+  static const uint8_t T_PRI[] = {1, 1, 1, 4, 4, 5, 7, 13, 11, 16, 19, 9, 15};
+  static const uint8_t CT_PRI[] = {0, 0, 3, 3, 2, 6, 8, 9, 11, 12, 10, 14, 15, 17, 18};
+  static const uint8_t T_PT[] = {1, 1, 6, 2, 4, 9, 7};
+  static const uint8_t CT_PT[] = {0, 3, 3, 5, 2, 4, 7};
+  static const uint8_t T_SR[] = {0, 3, 2};
+  static const uint8_t CT_SR[] = {0, 1, 2};
+  int ent = bi + 1;
+  int t_side = rescue_on() ? resc_is_guard(ent) : teams_on() ? team_of(ent) == 0 : (ent & 1);
+  uint32_t h = (uint32_t)(bi + 1) * 2654435761u ^ (uint32_t)g_spawn_seq[ent] * 40503u ^ 0x5bd1e995u;
+  h ^= h >> 15; h *= 0x2c1b3c6du; h ^= h >> 12;
+  #define PICK(a, sh) (a)[(h >> (sh)) % (sizeof (a) / sizeof (a)[0])]
+  w->var[WPN_AR] = t_side ? PICK(T_PRI, 0) : PICK(CT_PRI, 0);
+  w->var[WPN_PT] = t_side ? PICK(T_PT, 8) : PICK(CT_PT, 8);
+  w->var[WPN_SR] = t_side ? PICK(T_SR, 16) : PICK(CT_SR, 16);
+  #undef PICK
+}
 
 static void net_ent_from_live(net_ent_t *e, int ent) {
   int h = human_of_ent(ent);
@@ -449,13 +486,14 @@ static void net_ent_from_live(net_ent_t *e, int ent) {
   e->weapon = (uint8_t)(wpn & 7);
   {
     const weapon_t *lw = h >= 0 ? &g_players[h].wp : &g_bots[ent - 1].wp;
-    e->loadout = (uint8_t)loadout_pack(lw->var[WPN_AR], lw->var[WPN_PT]);
+    e->loadout = (uint16_t)loadout_pack(lw->var[WPN_AR], lw->var[WPN_PT], lw->var[WPN_SR]);
   }
   e->spawn_seq = g_spawn_seq[ent];
   {
     const weapon_t *wp = h >= 0 ? &g_players[h].wp : &g_bots[ent - 1].wp;
     int mag = wp->ammo[wpn >= 0 && wpn < WPN_COUNT ? wpn : 0];
     e->mag = (uint8_t)(mag < 0 ? 0 : mag > 255 ? 255 : mag);
+    e->nade = nade_pack(wp);
     e->melee = (uint8_t)(wp->melee_v << 6 | ((wp->melee_t + 1) / 2 & 63));
     if (wpn == WPN_GR)
       e->melee = wp->gr_t > 0 ? (uint8_t)(1 << 6 | ((wp->gr_t + 1) / 2 & 63))
@@ -1035,6 +1073,7 @@ static void bot_spawn(int bi) {
   b->threat_t = 0;
   b->threat_score = 0;
   b->wp.cur = WPN_AR;
+  bot_pick_loadout(bi, &b->wp);
   wpn_fill_mags(&b->wp);
   mode_loadout(bi + 1, &b->wp);
   b->burst = 3;
@@ -1082,6 +1121,15 @@ static int bot_desired_weapon(const bot_t *b, int engaging, float target_dist,
   // flick the blade in and out.
   if (engaging && target_dist < (cur == WPN_KN ? BOT_KNIFE_EXIT_DIST : BOT_KNIFE_ENTER_DIST))
     return WPN_KN;
+  // A THROW IN PROGRESS IS FINISHED. Then THE SMOKE: hurt and still under the
+  // gun at grenade range, a bot pops its one smoke between itself and the
+  // threat (bot_tick aims it 40% of the way) and falls back behind it — what
+  // a CS player does with low hp in the open. Not in the frag-only modes.
+  if (cur == WPN_GR && (b->wp.gr_t > 0 || b->wp.gr_cook > 0)) return WPN_GR;
+  if (engaging && b->hurt_t > 0 && b->hp <= 45 && nade_smokes(&b->wp) > 0 &&
+      target_dist >= 8.0f && target_dist <= 26.0f &&
+      game_mode() != GM_GUN && game_mode() != GM_BLADES)
+    return WPN_GR;
   // The sidearm and the blade are situational: back to a long gun as soon as
   // one can fire, and to the AR when nothing is loaded, because a bot reloads
   // only what it holds.
@@ -1469,6 +1517,10 @@ static int bot_can_see(const bot_t *b, int e, float *dist) {
   float len = v3_len(v3_sub(tp, o));
   if (len < 0.01f || len > GUN_RANGE) return 0;
   if (!los_clear(o, tp)) return 0;
+  // SMOKE BLOCKS SIGHT, not the round: a bot loses a man who walks into a
+  // cloud exactly as the player does, and has to find him again by sound,
+  // memory or search — or wait at the edge for him to come out.
+  if (smoke_blocks(o, tp)) return 0;
   *dist = len;
   return 1;
 }
@@ -1543,7 +1595,16 @@ static void match_on_kill(int src, int dst, int hs) {
   if (src != dst) g_match.kills[src]++;
   g_match.deaths[dst]++;
   if (dst == g_local_ent) g_match.last_killer = src;
-  ev_push((event_t){.type = EV_KILL, .src = src, .dst = dst, .k = hs});
+  // The weapon that did it rides the event's generic `wpn` byte (already on
+  // the wire for every event): the killfeed draws its glyph. g_kill_wpn names
+  // a weapon that is no longer in the killer's hands (a cooked frag).
+  int kwpn = g_kill_wpn;
+  if (kwpn < 0 && src >= 0 && src < MAX_ENTS) {
+    const weapon_t *kwp = ent_weapon(src);
+    kwpn = kwp ? kwp->cur : 0;
+  }
+  ev_push((event_t){.type = EV_KILL, .src = src, .dst = dst, .k = hs,
+                    .wpn = kwpn >= 0 && kwpn < WPN_COUNT ? kwpn : 0});
   if (g_match.over) return;
   switch (game_mode()) {
     case GM_GUN: {

@@ -235,6 +235,7 @@ static const char *POST_FS =
   "uniform vec2 uVmVel;\n"      // the weapon's own screen motion this frame
   "uniform vec3 uSunC;\n"
   "uniform mat4 uInvVP, uPrevVP;\n"
+  "uniform vec4 uHurt;\n"      // hit shock, severity, heartbeat, -
   "out vec4 oCol;\n"
   GLSL_DISPLAY
   "void main(){\n"
@@ -340,6 +341,20 @@ static const char *POST_FS =
   "  c *= exp2(texture(uAdapt, vec2(0.5)).r);\n"
   "  c = sqrt(aces(c));\n"
   "  c = grade(c, vUV, uFx);\n"
+  // WOUNDED: the colour drains from the frame with the missing health, the
+  // edge closes in blood-dark red (breathing with the heartbeat when it is
+  // low), and a fresh hit flashes the same edge. Display-referred, after the
+  // grade, so it reads the same under every sky.
+  "  if (uHurt.x + uHurt.y > 0.001) {\n"
+  "    vec2 hq = vUV - 0.5;\n"
+  "    float e = smoothstep(0.02, 0.55, dot(hq, hq) * (2.2 + 1.2 * uHurt.y));\n"
+  "    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+  "    float sev = uHurt.y, hb = uHurt.z, k = uHurt.x;\n"
+  "    c = mix(c, vec3(l), sev * (0.30 + 0.40 * e));\n"
+  "    float w = clamp(e * (0.78 * sev * (0.70 + 0.30 * hb) + 0.90 * k) + 0.10 * k + 0.04 * sev, 0.0, 0.86);\n"
+  "    c = mix(c, vec3(0.32, 0.02, 0.025) * (0.35 + 0.9 * l), w);\n"
+  "    c *= 1.0 - 0.22 * sev * e * hb;\n"
+  "  }\n"
   "  float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
   "  oCol = vec4(c + (dth - 0.5) * 0.0039216, 1.0);\n"
   "}\n";
@@ -373,6 +388,13 @@ static const char *HUD_FS =
   GLSL_DISPLAY
   "void main(){\n"
   "  if (uImg == 1) { oCol = vec4(texture(uTex, vUV).rgb * vCol.rgb, vCol.a); return; }\n"
+  // THE ARMORY PREVIEW: an HDR render like the scope's, through the same
+  // display transform, without the ocular's optics.
+  "  if (uImg == 3) {\n"
+  "    vec3 c = texture(uTex, vUV).rgb * exp2(texture(uAdapt, vec2(0.5)).r);\n"
+  "    c = grade(sqrt(aces(c)), vec2(0.5), uFx);\n"
+  "    oCol = vec4(c * vCol.rgb, vCol.a); return;\n"
+  "  }\n"
   // THE SCOPE PICTURE, which is HDR (it is a second render of the world) and so
   // gets the same display transform as the frame, plus the optics of a real
   // ocular: barrel distortion toward the rim, lateral colour at the field stop,

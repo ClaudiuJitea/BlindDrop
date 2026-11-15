@@ -242,22 +242,6 @@ static lmat_t LM(v3 col, float rough, float metal, int smat) {
 // A section for a loft along F: from floor-height y0 to y1, half-width hw.
 #define BSEC(a, y0, y1, hw, p, tw) ((lsec_t){(a), 0.0f, ((y0) + (y1)) * 0.5f, (hw), ((y1) - (y0)) * 0.5f, (p), (tw)})
 
-// Alloy spokes over a pwheel: five twin spokes from the hub to the rim.
-static void pspokes(v3 c, v3 out, float r, float w) {
-  v3 t1, t2;
-  axis_frame(out, &t1, &t2);
-  mat_set(0.25f, 0.85f);
-  v3 al = rgb(0.62f, 0.63f, 0.65f);
-  for (int k = 0; k < 5; k++)
-    for (int s = -1; s <= 1; s += 2) {
-      float a = (float)k * F_TAU / 5.0f + (float)s * 0.09f;
-      v3 d = v3_add(v3_scale(t1, cosf(a)), v3_scale(t2, sinf(a)));
-      v3 q = v3_cross(out, d);
-      pbox_v(v3_add(c, v3_add(v3_scale(out, w * 0.5f + 0.012f), v3_scale(d, r * 0.38f))),
-             v3_scale(d, r * 0.17f), v3_scale(q, 0.018f), v3_scale(out, 0.008f), al);
-    }
-}
-
 // THE TRUCK: a cab-over carrying a container. The cab is lofted UP (sections
 // are horizontal slices), so its front, sides and the raked windscreen are all
 // one rounded pressing; the glass and grille are coloured onto it. Fenders
@@ -405,259 +389,23 @@ static void prop_truck(const prop_t *pr) {
     ptaper(PF(&f, 4.2f + (float)k * 0.3f, 0.35f, 3.30f), PF(&f, 4.6f + (float)k * 0.3f, 0.35f, 3.30f), 0.025f, 0.05f, 8, chrome, 1);
 }
 
-// ---------------------------------------------------------------------------
-// THE PROFILE EXTRUSION: a side silhouette (a, y) pushed across the width with
-// ROUNDED shoulders. Every profile vertex grows a strip that runs from the
-// left side face, over a quarter-round of radius r, flat across the top of
-// that edge, and down the other quarter-round to the right face; neighbouring
-// strips make the rim (roof, bonnet, nose, sills, and — the point of it — the
-// liners of wheel arches cut INTO the silhouette). The two side faces are the
-// silhouette itself, ear-clipped, so a concave outline (arches) is a real cut.
-// The rim asks its colour function per quad with the profile SEGMENT and
-// whether the quad is on a shoulder (arc) or the flat between them.
-// ---------------------------------------------------------------------------
-typedef lmat_t (*pext_fn)(const void *ctx, int seg, int arc, v3 q, v3 n);
-#define PEXT_MAX 96
-#define PEXT_K 4
-static int poly_ccw(const float (*p)[2], int n) {
-  float a = 0.0f;
-  for (int i = 0; i < n; i++) {
-    int j = (i + 1) % n;
-    a += p[i][0] * p[j][1] - p[j][0] * p[i][1];
-  }
-  return a > 0.0f;
-}
-// Ear clipping of a simple CCW polygon; emits triangles through `emit`.
-static void poly_fill(const pfr_t *f, const float (*p)[2], int n, float b, v3 nrm, v3 col) {
-  int idx[PEXT_MAX], m = n;
-  for (int i = 0; i < n; i++) idx[i] = i;
-  int guard = 0;
-  while (m > 2 && guard++ < 4 * PEXT_MAX * PEXT_MAX) {
-    int found = 0;
-    for (int i = 0; i < m; i++) {
-      int i0 = idx[(i + m - 1) % m], i1 = idx[i], i2 = idx[(i + 1) % m];
-      float ax = p[i0][0], ay = p[i0][1], bx_ = p[i1][0], by = p[i1][1], cx = p[i2][0], cy = p[i2][1];
-      float cr = (bx_ - ax) * (cy - ay) - (by - ay) * (cx - ax);
-      if (cr <= 1e-7f) continue;                       // reflex: not an ear
-      int inside = 0;
-      for (int k = 0; k < m && !inside; k++) {
-        int q = idx[k];
-        if (q == i0 || q == i1 || q == i2) continue;
-        float px = p[q][0], py = p[q][1];
-        float d1 = (bx_ - ax) * (py - ay) - (by - ay) * (px - ax);
-        float d2 = (cx - bx_) * (py - by) - (cy - by) * (px - bx_);
-        float d3 = (ax - cx) * (py - cy) - (ay - cy) * (px - cx);
-        inside = d1 > 0.0f && d2 > 0.0f && d3 > 0.0f;
-      }
-      if (inside) continue;
-      loft_tri(PF(f, ax, b, ay), PF(f, bx_, b, by), PF(f, cx, b, cy), nrm, nrm, nrm, col);
-      for (int k = i; k < m - 1; k++) idx[k] = idx[k + 1];
-      m--;
-      found = 1;
-      break;
-    }
-    if (!found) break;
-  }
-}
-static void pext(const pfr_t *f, const float (*in)[2], int n, float hw, float r, pext_fn fn,
-                 const void *ctx, v3 side_col, float side_rough) {
-  float p[PEXT_MAX][2];
-  int ccw = poly_ccw(in, n);
-  for (int i = 0; i < n; i++) {                        // CCW in (a, y)
-    int s = ccw ? i : n - 1 - i;
-    p[i][0] = in[s][0]; p[i][1] = in[s][1];
-  }
-  // Vertex normals (outward) and the inset the shoulders roll from.
-  float nv[PEXT_MAX][2], inner[PEXT_MAX][2];
-  for (int i = 0; i < n; i++) {
-    int a = (i + n - 1) % n, c = (i + 1) % n;
-    float e0x = p[i][0] - p[a][0], e0y = p[i][1] - p[a][1];
-    float e1x = p[c][0] - p[i][0], e1y = p[c][1] - p[i][1];
-    float l0 = sqrtf(e0x * e0x + e0y * e0y) + 1e-9f, l1 = sqrtf(e1x * e1x + e1y * e1y) + 1e-9f;
-    float n0x = e0y / l0, n0y = -e0x / l0, n1x = e1y / l1, n1y = -e1x / l1;
-    float mx = n0x + n1x, my = n0y + n1y, ml = sqrtf(mx * mx + my * my) + 1e-9f;
-    mx /= ml; my /= ml;
-    float cs = fmaxf(mx * n1x + my * n1y, 0.55f);
-    nv[i][0] = mx; nv[i][1] = my;
-    inner[i][0] = p[i][0] - mx * r / cs;
-    inner[i][1] = p[i][1] - my * r / cs;
-  }
-  enum { COLS = 2 * (PEXT_K + 1) };
-  static v3 P[PEXT_MAX][COLS], N[PEXT_MAX][COLS];
-  for (int i = 0; i < n; i++)
-    for (int j = 0; j < COLS; j++) {
-      int right = j > PEXT_K;
-      int k = right ? j - (PEXT_K + 1) : j;
-      float s = right ? F_PI_2 * (1.0f - (float)k / PEXT_K) : F_PI_2 * (float)k / PEXT_K;
-      float sg = right ? 1.0f : -1.0f;
-      float a2 = inner[i][0] + nv[i][0] * r * sinf(s), y2 = inner[i][1] + nv[i][1] * r * sinf(s);
-      float b = sg * ((hw - r) + r * cosf(s));
-      P[i][j] = PF(f, a2, b, y2);
-      v3 n2 = v3_add(v3_add(v3_scale(f->F, nv[i][0] * sinf(s)), (v3){{0, nv[i][1] * sinf(s), 0}}),
-                     v3_scale(f->L, sg * cosf(s)));
-      N[i][j] = v3_norm(n2);
-    }
-  for (int i = 0; i < n; i++) {
-    int i1 = (i + 1) % n;
-    int seg = ccw ? i : (n - 2 - i + n) % n;           // the caller's segment index
-    for (int j = 0; j + 1 < COLS; j++) {
-      v3 a = P[i][j], b = P[i1][j], c = P[i1][j + 1], d = P[i][j + 1];
-      v3 q = v3_scale(v3_add(v3_add(a, b), v3_add(c, d)), 0.25f);
-      v3 nq = v3_norm(v3_add(v3_add(N[i][j], N[i1][j]), v3_add(N[i1][j + 1], N[i][j + 1])));
-      int arc = j != PEXT_K;                           // PEXT_K..PEXT_K+1 is the flat
-      lmat_t m = fn(ctx, seg, arc, loft_local(f, q), loft_dir(f, nq));
-      mat_set(m.rough, m.metal);
-      g_scene_smat = m.smat;
-      loft_tri(a, b, c, N[i][j], N[i1][j], N[i1][j + 1], m.col);
-      loft_tri(a, c, d, N[i][j], N[i1][j + 1], N[i][j + 1], m.col);
-    }
-  }
-  g_scene_smat = 0;
-  mat_set(side_rough, 0.0f);
-  poly_fill(f, (const float (*)[2])inner, n, hw, f->L, side_col);
-  poly_fill(f, (const float (*)[2])inner, n, -hw, v3_scale(f->L, -1.0f), side_col);
-}
-// A flat convex polygon on a side face (a window, a seal), both sides of the car.
-static void pside(const pfr_t *f, const float (*p)[2], int n, float b, v3 col) {
-  for (int sd = -1; sd <= 1; sd += 2) {
-    v3 nn = v3_scale(f->L, (float)sd);
-    for (int i = 1; i + 1 < n; i++)
-      loft_tri(PF(f, p[0][0], (float)sd * b, p[0][1]), PF(f, p[i][0], (float)sd * b, p[i][1]),
-               PF(f, p[i + 1][0], (float)sd * b, p[i + 1][1]), nn, nn, nn, col);
-  }
-}
-
-// THE CAR: a four-door saloon, built the way a car model is: its side
-// silhouette, wheel arches cut into it, extruded across the width with rounded
-// shoulders; the glasshouse the same way above it, the side glass flush panels
-// in their seals, real A- and C-pillars where the glasshouse turns.
-typedef struct { v3 paint; int arch0, arch1, arch2, arch3; } car_ctx_t;
-#define CAR_ARCH_N 9
-static lmat_t car_rim_col(const void *ctx, int seg, int arc, v3 q, v3 n) {
-  const car_ctx_t *c = ctx;
-  int in_arch = (seg >= c->arch0 && seg < c->arch1) || (seg >= c->arch2 && seg < c->arch3);
-  if (in_arch) return arc ? LM(c->paint, 0.22f, 0.0f, 0) : LM(rgb(0.03f, 0.03f, 0.03f), 0.95f, 0.0f, 0);
-  if (n.y < -0.6f) return LM(rgb(0.05f, 0.05f, 0.05f), 0.9f, 0.0f, 0);           // the floor pan
-  if (q.y < 0.40f && fabsf(q.x) > 1.80f) return LM(rgb(0.07f, 0.07f, 0.075f), 0.7f, 0.0f, 0);   // bumpers
-  if (q.y < 0.27f) return LM(rgb(0.07f, 0.07f, 0.075f), 0.7f, 0.0f, 0);         // sills
-  return LM(c->paint, 0.22f, 0.0f, 0);
-}
-static lmat_t car_cabin_col(const void *ctx, int seg, int arc, v3 q, v3 n) {
-  const car_ctx_t *c = ctx;
-  (void)q; (void)n;
-  // seg 1 = windscreen, seg 5 = rear screen (see CABIN below); their
-  // shoulders are the pillars.
-  if ((seg == 1 || seg == 5) && !arc) return LGLASS(rgb(0.07f, 0.09f, 0.10f));
-  return LM(c->paint, 0.22f, 0.0f, 0);
-}
+// THE CAR: a saloon or a single-cab pickup, modelled in Blender
+// (tools/props_models.py) in the footprint car() / pickup_truck() gave its
+// collision — a lofted, subdivided body with wheelhouses, flush glass on the
+// skin, shut lines, lamps, grille, mirrors and alloy wheels — and placed whole.
 static void prop_car(const prop_t *pr) {
-  pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
-             pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
-  v3 paint = pr->col, dk = rgb(0.05f, 0.05f, 0.055f), chrome = rgb(0.70f, 0.71f, 0.72f);
-  // The silhouette, from the rear bumper's foot forward along the sills (the
-  // two arches cut up into it), round the nose, back along the bonnet, the
-  // belt and the boot.
-  float B[PEXT_MAX][2];
-  int nb = 0;
-  car_ctx_t cc = {paint, 0, 0, 0, 0};
-#define BP(x, y) (B[nb][0] = (x), B[nb][1] = (y), nb++)
-  BP(-2.10f, 0.42f); BP(-2.05f, 0.30f); BP(-1.85f, 0.23f);
-  for (int w = 0; w < 2; w++) {
-    float wa = w ? 1.27f : -1.25f, R0 = 0.385f, cy = 0.33f;
-    float t0 = F_PI + asinf((cy - 0.23f) / R0), t1 = -asinf((cy - 0.23f) / R0);
-    if (w) cc.arch2 = nb; else cc.arch0 = nb;
-    for (int k = 0; k < CAR_ARCH_N; k++) {
-      float t = t0 + (t1 - t0) * (float)k / (CAR_ARCH_N - 1);
-      BP(wa + R0 * cosf(t), cy + R0 * sinf(t));
-    }
-    if (w) cc.arch3 = nb - 1; else cc.arch1 = nb - 1;
-    if (!w) { BP(-0.40f, 0.23f); BP(0.50f, 0.23f); }
-  }
-  BP(1.85f, 0.23f); BP(2.04f, 0.30f); BP(2.11f, 0.42f); BP(2.13f, 0.56f); BP(2.10f, 0.67f);
-  BP(1.90f, 0.75f); BP(1.40f, 0.83f); BP(0.95f, 0.88f); BP(-0.20f, 0.91f); BP(-1.25f, 0.92f);
-  BP(-1.80f, 0.93f); BP(-2.02f, 0.90f); BP(-2.11f, 0.80f); BP(-2.13f, 0.62f);
-#undef BP
-  pext(&f, (const float (*)[2])B, nb, 0.93f, 0.075f, car_rim_col, &cc, paint, 0.22f);
-  // The glasshouse: seg 0 the base, 1 windscreen, 2-4 roof, 5 rear screen.
-  static const float CABIN[][2] = {
-    {1.00f, 0.86f}, {0.93f, 0.90f}, {0.38f, 1.38f}, {0.10f, 1.45f}, {-0.62f, 1.46f},
-    {-0.88f, 1.40f}, {-1.32f, 0.93f}, {-1.36f, 0.86f},
-  };
-  pext(&f, CABIN, (int)(sizeof CABIN / sizeof CABIN[0]), 0.85f, 0.13f, car_cabin_col, &cc, paint, 0.22f);
-  // Side glass in its seals; the black B-pillar between the doors.
-  static const float SEAL_F[][2] = {{0.88f, 0.92f}, {0.38f, 1.335f}, {0.14f, 1.385f}, {-0.10f, 1.385f}, {-0.10f, 0.92f}};
-  static const float GLASS_F[][2] = {{0.83f, 0.95f}, {0.37f, 1.31f}, {0.14f, 1.355f}, {-0.07f, 1.355f}, {-0.07f, 0.95f}};
-  static const float SEAL_R[][2] = {{-0.22f, 0.92f}, {-0.22f, 1.385f}, {-0.60f, 1.39f}, {-0.84f, 1.33f}, {-1.16f, 0.98f}, {-1.20f, 0.92f}};
-  static const float GLASS_R[][2] = {{-0.25f, 0.95f}, {-0.25f, 1.355f}, {-0.60f, 1.36f}, {-0.82f, 1.31f}, {-1.12f, 0.98f}, {-1.14f, 0.95f}};
-  static const float BPIL[][2] = {{-0.10f, 0.92f}, {-0.10f, 1.40f}, {-0.22f, 1.40f}, {-0.22f, 0.92f}};
-  mat_set(0.7f, 0.0f);
-  pside(&f, SEAL_F, 5, 0.853f, rgb(0.02f, 0.02f, 0.025f));
-  pside(&f, SEAL_R, 6, 0.853f, rgb(0.02f, 0.02f, 0.025f));
-  pside(&f, BPIL, 4, 0.854f, rgb(0.02f, 0.02f, 0.025f));
-  g_scene_smat = SMAT_VGLASS;
-  mat_set(0.04f, 0.0f);
-  pside(&f, GLASS_F, 5, 0.856f, rgb(0.07f, 0.09f, 0.10f));
-  pside(&f, GLASS_R, 6, 0.856f, rgb(0.07f, 0.09f, 0.10f));
-  g_scene_smat = 0;
-  // Wheels in the arches.
-  for (int sd = -1; sd <= 1; sd += 2)
-    for (int w = 0; w < 2; w++) {
-      v3 out = v3_scale(f.L, (float)sd), wc = PF(&f, w ? 1.27f : -1.25f, (float)sd * 0.80f, 0.32f);
-      pwheel(wc, out, 0.32f, 0.22f, 0);
-      pspokes(wc, out, 0.32f, 0.22f);
-    }
-  for (int sd = -1; sd <= 1; sd += 2) {
-    float bs = (float)sd;
-    // Shut lines (fine), handles, mirrors, a side repeater.
-    mat_set(0.6f, 0.0f);
-    v3 shut = v3_scale(paint, 0.30f);
-    pbox(&f, 0.865f, 0.872f, bs * 0.930f, bs * 0.933f, 0.30f, 0.86f, shut);
-    pbox(&f, -0.165f, -0.158f, bs * 0.930f, bs * 0.933f, 0.27f, 0.90f, shut);
-    pbox(&f, -1.10f, -1.093f, bs * 0.930f, bs * 0.933f, 0.40f, 0.90f, shut);
-    mat_set(0.25f, 0.9f);
-    pbox(&f, 0.36f, 0.50f, bs * 0.930f, bs * 0.945f, 0.79f, 0.81f, chrome);
-    pbox(&f, -0.66f, -0.52f, bs * 0.930f, bs * 0.945f, 0.79f, 0.81f, chrome);
-    mat_set(0.22f, 0.0f);
-    pbox(&f, 0.72f, 0.80f, bs * 0.85f, bs * 0.92f, 0.95f, 0.99f, dk);
-    pbox(&f, 0.66f, 0.80f, bs * 0.91f, bs * 1.04f, 0.94f, 1.08f, paint);
-    g_scene_smat = SMAT_VGLASS;
-    mat_set(0.04f, 0.0f);
-    pbox(&f, 0.655f, 0.66f, bs * 0.92f, bs * 1.03f, 0.95f, 1.07f, rgb(0.5f, 0.55f, 0.6f));
-    g_scene_smat = 0;
-    mat_set(0.2f, 0.0f);
-    pbox(&f, 1.55f, 1.62f, bs * 0.930f, bs * 0.936f, 0.72f, 0.75f, rgb(0.95f, 0.55f, 0.10f));
-    // Lamps: headlamp clusters in the nose, tail lamps in the tail.
-    mat_set(0.6f, 0.0f);
-    pbox(&f, 2.03f, 2.125f, bs * 0.42f, bs * 0.80f, 0.575f, 0.700f, rgb(0.03f, 0.03f, 0.035f));
-    mat_set(0.10f, 0.75f);
-    pbox(&f, 2.04f, 2.13f, bs * 0.45f, bs * 0.62f, 0.59f, 0.685f, rgb(0.82f, 0.82f, 0.78f));
-    pbox(&f, 2.03f, 2.122f, bs * 0.64f, bs * 0.76f, 0.60f, 0.675f, rgb(0.82f, 0.82f, 0.78f));
-    mat_set(0.2f, 0.0f);
-    pbox(&f, 2.02f, 2.11f, bs * 0.76f, bs * 0.80f, 0.58f, 0.63f, rgb(0.95f, 0.55f, 0.10f));
-    mat_set(0.6f, 0.0f);
-    pbox(&f, -2.150f, -2.05f, bs * 0.44f, bs * 0.86f, 0.645f, 0.815f, rgb(0.02f, 0.02f, 0.02f));
-    mat_set(0.08f, 0.0f);
-    pbox(&f, -2.158f, -2.05f, bs * 0.47f, bs * 0.83f, 0.665f, 0.795f, rgb(0.42f, 0.015f, 0.01f));
-    pbox(&f, -2.162f, -2.05f, bs * 0.58f, bs * 0.68f, 0.69f, 0.73f, rgb(0.90f, 0.88f, 0.84f));
-    pbox(&f, -2.162f, -2.05f, bs * 0.74f, bs * 0.82f, 0.69f, 0.73f, rgb(0.95f, 0.50f, 0.08f));
-  }
-  // Grille and badge, plates, wipers, an exhaust tip, an aerial.
-  mat_set(0.6f, 0.3f);
-  pbox(&f, 2.07f, 2.135f, -0.38f, 0.38f, 0.42f, 0.555f, rgb(0.03f, 0.03f, 0.035f));
-  for (float yy = 0.445f; yy < 0.55f; yy += 0.035f)
-    pbox(&f, 2.135f, 2.142f, -0.36f, 0.36f, yy, yy + 0.012f, rgb(0.35f, 0.36f, 0.38f));
-  mat_set(0.2f, 0.9f);
-  pbox(&f, 2.12f, 2.145f, -0.07f, 0.07f, 0.57f, 0.61f, chrome);
-  mat_set(0.5f, 0.0f);
-  pbox(&f, 2.13f, 2.145f, -0.24f, 0.24f, 0.30f, 0.41f, rgb(0.90f, 0.90f, 0.86f));
-  pbox(&f, -2.15f, -2.13f, -0.24f, 0.24f, 0.46f, 0.57f, rgb(0.90f, 0.90f, 0.86f));
-  mat_set(0.6f, 0.0f);
-  pbox(&f, 0.90f, 0.94f, -0.55f, -0.05f, 0.885f, 0.90f, dk);
-  pbox(&f, 0.90f, 0.94f, 0.10f, 0.60f, 0.885f, 0.90f, dk);
-  mat_set(0.3f, 0.9f);
-  pcyl(PF(&f, -2.04f, 0.55f, 0.29f), f.F, 0.032f, 0.06f, 10, chrome);
-  mat_set(0.5f, 0.3f);
-  ptaper(PF(&f, -0.95f, 0.0f, 1.43f), PF(&f, -1.15f, 0.0f, 1.62f), 0.008f, 0.004f, 5, dk, 0);
+  v3 F = pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}};
+  v3 L = pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}};
+  if (pr->dir & CAR_FLIP) { F = v3_scale(F, -1.0f); L = v3_scale(L, -1.0f); }
+  pmesh_draw(pr->dir & CAR_PICKUP ? PM_PICKUP : PM_SEDAN, (v3){{pr->x, 0.0f, pr->z}}, F, L,
+             pr->col, pr->col2);
+}
+// STREET FURNITURE (street_prop): a mesh turned by quarter turns.
+static void prop_mesh(const prop_t *pr) {
+  static const v3 FQ[4] = {{{1, 0, 0}}, {{0, 0, 1}}, {{-1, 0, 0}}, {{0, 0, -1}}};
+  v3 F = FQ[pr->ax & 3], L = FQ[(pr->ax + 1) & 3];
+  if (pr->dir >= 0 && pr->dir < PM_COUNT)
+    pmesh_draw(pr->dir, (v3){{pr->x, pr->y, pr->z}}, F, L, pr->col, pr->col2);
 }
 
 // THE HELICOPTER: a twin-engine utility type in olive drab. The fuselage is one
@@ -917,6 +665,44 @@ static void prop_lamp(const prop_t *pr) {
   g_scene_smat = 0;
 }
 
+// A SHED'S ROOF STRUCTURE (Foundry). The roof was one flat slab, and from
+// inside the shed a third of the frame was a single unbroken grey with nothing
+// to say how big the space is or what holds it up (art_review/r2 09_int_foundry).
+// Steel I-beam rafters every 2.2 m wall to shell, a tie along the middle, and a
+// pendant lamp hung off every second rafter. All of it is above 3.3 m: nobody
+// stands, aims or hides there, so render-only cannot lie about cover.
+static void prop_roof(const prop_t *pr) {
+  float s = pr->dir < 0 ? -1.0f : 1.0f;
+  float x0 = s * 13.0f, x1 = s * 24.0f;
+  float xa = fminf(x0, x1), xb = fmaxf(x0, x1);
+  v3 st = pr->col, dk = pr->col2;
+  mat_set(0.58f, 0.35f);
+  for (int k = 0; k <= 12; k++) {
+    float z = s * (-13.2f + 2.2f * (float)k);
+    dec_box((v3){{xa, 3.575f, z - 0.08f}}, (v3){{xb, 3.598f, z + 0.08f}}, st);   // top flange
+    dec_box((v3){{xa, 3.380f, z - 0.018f}}, (v3){{xb, 3.575f, z + 0.018f}}, st); // web
+    dec_box((v3){{xa, 3.355f, z - 0.08f}}, (v3){{xb, 3.380f, z + 0.08f}}, st);   // bottom flange
+  }
+  // the tie and a purlin each side of it, under the rafters' bottom flanges
+  for (int j = 0; j < 3; j++) {
+    float x = s * (15.6f + 2.7f * (float)j);
+    dec_box((v3){{x - 0.05f, 3.30f, -14.2f}}, (v3){{x + 0.05f, 3.355f, 14.2f}}, dk);
+  }
+  // pendant lamps: rod, an enamelled shade, the lamp glass (SMAT_LAMP: lit at dusk)
+  for (int k = 1; k <= 11; k += 2) {
+    float z = s * (-13.2f + 2.2f * (float)k), x = s * 18.3f;
+    dec_box((v3){{x - 0.012f, 3.02f, z - 0.012f}}, (v3){{x + 0.012f, 3.30f, z + 0.012f}}, dk);
+    mat_set(0.35f, 0.0f);
+    ptaper((v3){{x, 3.04f, z}}, (v3){{x, 2.90f, z}}, 0.07f, 0.24f, 14, rgb(0.20f, 0.30f, 0.24f), 1);
+    g_scene_smat = SMAT_LAMP;
+    mat_set(0.05f, 0.0f);
+    dec_box((v3){{x - 0.07f, 2.86f, z - 0.07f}}, (v3){{x + 0.07f, 2.90f, z + 0.07f}},
+            rgb(0.95f, 0.86f, 0.62f));
+    g_scene_smat = 0;
+    mat_set(0.58f, 0.35f);
+  }
+}
+
 static void mesh_props(void) {
   int save_floats = g_scene_floats, save_want = g_scene_want;
   int save_peak = g_scene_peak;
@@ -935,6 +721,8 @@ static void mesh_props(void) {
     else if (pr->kind == PROP_HELI) prop_heli(pr);
     else if (pr->kind == PROP_PALM) prop_palm(pr);
     else if (pr->kind == PROP_BARREL) prop_barrel(pr);
+    else if (pr->kind == PROP_MESH) prop_mesh(pr);
+    else if (pr->kind == PROP_ROOF) prop_roof(pr);
   }
   g_scene_smat = 0;
   g_cham = save_cham;
@@ -981,11 +769,20 @@ static void mesh_decor(void) {
   // every pebble in the arena came out a near-black chip on bright sand, which
   // is the highest local contrast anything ankle-high should ever have.
   ao_set(0.0f, 1.0f / 0.16f, 0.78f);
+  // THE HALF-AND-ROTATE ONLY HOLDS ON A SYMMETRIC MAP. The generated arenas are
+  // point-symmetric, so one half is dressed and turned 180 degrees onto the
+  // other. The grid towns are not: there the turned copy of a wall's drift
+  // lay in the open street with no wall behind it. They are dressed whole.
+  int asym = (g_map_id >= 4 && g_map_id <= 6) || g_map_id == MAP_COMPOUND_ID;
 
   for (int i = 0; i < g_num_solids; i++) {
     const solid_t *s = &g_solids[i];
     if (s->max.y < 0.42f) continue;                 // rubble dresses nothing
     if (s->max.y - s->min.y < 0.42f) continue;
+    // A PROP'S HULL IS NOT A WALL. A vehicle's or a cafe table's collision boxes
+    // are hidden under the model, and dressing their feet put a pebble fan round
+    // a chair leg and a sand drift against a wheel.
+    if (g_solid_hide[i]) continue;
     // AND IT HAS TO STAND ON THE GROUND. A stacked top box or a step crate
     // perched on an anchor is a solid like any other, and dressing its foot put
     // a clump of stones at y = 0 — under the box, floating in the open air
@@ -1009,8 +806,8 @@ static void mesh_decor(void) {
         if (c1 - c0 > 0.5f) {
           v3 a0 = (f < 2) ? (v3){{base, 0.0f, c0}} : (v3){{c0, 0.0f, base}};
           v3 a1 = (f < 2) ? (v3){{base, 0.0f, c1}} : (v3){{c1, 0.0f, base}};
-          if (a0.z + a1.z > 0.0f)
-            for (int sg = 0; sg < 2; sg++)
+          if (asym || a0.z + a1.z > 0.0f)
+            for (int sg = 0; sg < (asym ? 1 : 2); sg++)
               dec_drift(a0, a1, o, dl, dh,
                         v3_scale(th->ground, 1.06f), sg ? -1.0f : 1.0f);
         }
@@ -1018,9 +815,10 @@ static void mesh_decor(void) {
       // Clump sites along the face. The MASK is what keeps two thirds of the
       // arena bare: a face that scores under the threshold gets nothing at all,
       // and empty stretches are as much of the read as dressed ones.
-      for (float t = lo + 0.25f; t < hi - 0.15f; t += dr(0.95f, 2.30f)) {
+      for (float t = lo + 0.25f; t < hi - 0.15f;
+           t += asym ? dr(1.30f, 2.80f) : dr(0.95f, 2.30f)) {
         v3 p = (f < 2) ? (v3){{base, 0.0f, t}} : (v3){{t, 0.0f, base}};
-        if (p.z <= 0.0f) continue;                   // one half, then rotate
+        if (!asym && p.z <= 0.0f) continue;          // one half, then rotate
         if (fabsf(p.x) > H - 0.4f || fabsf(p.z) > H - 0.4f) continue;
         float m = fnoise2(p.x * 0.21f, p.z * 0.21f) * 0.68f +
                   fnoise2(p.x * 0.62f, p.z * 0.62f) * 0.32f;
@@ -1028,7 +826,7 @@ static void mesh_decor(void) {
         // which is also where the wall/floor line is hardest to hide.
         float corner = fminf(t - lo, hi - t) < 0.55f ? 0.14f : 0.0f;
         if (m + corner < 0.645f) continue;
-        for (int sg = 0; sg < 2; sg++)
+        for (int sg = 0; sg < (asym ? 1 : 2); sg++)
           dec_clump(p, o, wind, th, s->color, grass, sg ? -1.0f : 1.0f);
       }
     }

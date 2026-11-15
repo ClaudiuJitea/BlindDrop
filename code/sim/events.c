@@ -34,7 +34,12 @@ typedef enum {
   EV_FIRE, EV_HIT, EV_HIT_HEAD, EV_KILL, EV_IMPACT, EV_DRYFIRE, EV_RELOAD,
   EV_RELOAD_CANCEL,  // a swap abandoned a running reload; wpn = the weapon
   EV_RESPAWN, EV_END, EV_STEP, EV_LAND,
-  EV_MELEE, EV_BLOCK, EV_NADE, EV_BLAST
+  EV_MELEE, EV_BLOCK, EV_NADE, EV_BLAST,
+  EV_SMOKE,          // a smoke canister came to rest and popped: a = where
+  EV_FLAME,          // an incendiary went off: a = where, k = 1 the fire caught,
+                     // 0 it burst in the air and is wasted
+  EV_PICKUP          // a supply station was used: a = the station, k = its index,
+                     // i = SUP_HEALTH / SUP_NADES, src = who took it
 } ev_type_t;
 
 // AI hearing is simulation state, deliberately separate from g_events: events
@@ -83,6 +88,12 @@ typedef struct {
   ev_type_t type; v3 a, b; float f, g, pen; int i, k, wpn, src, dst;
 } event_t;
 static int hit_on_plate(const event_t *e);   // presentation: a chest-band hit
+// THE INSURGENT ARCHETYPE OF ENTITY e: 0 rifleman, 1 gunner, 2 scout, 3 leader
+// (figure/builder.c INS_*). One function, read by the figure builder (what he
+// wears), the bot brain (how he fights) and the death screen (who got you), so
+// the man with the ammo belt is the one laying down suppressing fire.
+// Defined with the rescue guards (sim/rescue.c), whose posts decide it there.
+static int ent_kind(int e);
 
 // 128 against a measured ev_peak of ~10 at 21 entities (20 bots hard); the
 // MAX_ENTS growth to 28 entities moves that peak proportionally at most —
@@ -145,8 +156,15 @@ static int g_predicting;
 static long g_sc_spawn[MAX_ENTS];
 static int  g_sc_deaths, g_sc_quick, g_sc_slow;
 #endif
+static void smoke_on_event(const event_t *e);   // sim/smoke.c
+static void inferno_on_event(const event_t *e);    // sim/inferno.c
 static void ev_push(event_t e) {
   if (g_predicting) return;   // a replayed shot must not re-spawn its VFX/audio
+  // SMOKE STATE rides the event stream: the pop builds the cloud and shots and
+  // blasts tear it, on the server, offline and on every client alike (a client's
+  // received events come through here too).
+  smoke_on_event(&e);
+  inferno_on_event(&e);       // ...and fire the same way (a smoke snuffs it)
   if (g_num_events < MAX_EVENTS) {
     g_events[g_num_events++] = e;
     if (g_num_events > g_ev_peak) g_ev_peak = g_num_events;
@@ -222,6 +240,9 @@ static void ev_push(event_t e) {
   case EV_NADE:    if (e.k == 2) printf("spoon t=%ld\n", g_tick); else if (!e.k) printf("nade t=%ld src=%s at=(%.2f %.2f %.2f) v=(%.2f %.2f %.2f) fuse=%d\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z, (double)e.b.x, (double)e.b.y, (double)e.b.z, e.i); break;
   case EV_BLAST:   printf("blast t=%ld src=%s at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
   case EV_BLOCK:   printf("block t=%ld %s -> %s parry=%d\n", g_tick, ent_name(e.src), ent_name(e.dst), e.k); break;
+  case EV_PICKUP:  printf("pickup t=%ld src=%s station=%d kind=%d\n", g_tick, ent_name(e.src), e.k, e.i); break;
+  case EV_FLAME:   printf("flame t=%ld src=%s k=%d at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), e.k, (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
+  case EV_SMOKE:   printf("smoke t=%ld src=%s at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
   }
 #endif
 }

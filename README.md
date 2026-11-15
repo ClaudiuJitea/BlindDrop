@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="media/hero.jpg" alt="An operator in third person on Citadel at dusk, pistol drawn, both rifles slung on his back, the minaret behind" width="832">
+  <img src="media/hero.jpg" alt="A Citadel street at dusk: a plastered room carried across the street on stone corbels between two houses, balconies and shutters either side" width="832">
 </p>
 
 <h1 align="center">BlindDrop</h1>
 
 <p align="center">
   <b>A free, private arena FPS in one C file.</b><br>
-  Seven modes, eight maps, team play with friends, bots that push, and no telemetry.
+  Seven modes, eight maps, 34 weapons, team play with friends, bots that push, and no telemetry.
 </p>
 
 <p align="center">
@@ -14,10 +14,10 @@
 </p>
 
 <p align="center">
-  <img src="media/foundry.jpg" alt="Foundry: furnace stacks, the overhead crane, the railed gantry and the shed roofs under a storm sky" width="49%">
-  <img src="media/bazaar.jpg" alt="Bazaar: a firefight in the fountain square under striped canopies and palms at golden hour" width="49%">
-  <img src="media/outpost.jpg" alt="Outpost: T-wall blast barriers, the sandbagged watchtower and a fight down the middle lane" width="49%">
-  <img src="media/harbor.jpg" alt="Harbor's rooftops and lighthouse from above the warehouses" width="49%">
+  <img src="media/foundry_yard.jpg" alt="Foundry: a yellow forklift by the container stack in the steelworks yard under a storm sky" width="49%">
+  <img src="media/bazaar_square.jpg" alt="Bazaar: the fountain square at golden hour, palms, striped canopies and a bench facing the fountain" width="49%">
+  <img src="media/citadel_arch.jpg" alt="Citadel: a stone arch with a keystone spanning an alley between two houses at dusk" width="49%">
+  <img src="media/refinery_stairs.jpg" alt="Refinery: the stairs up to the catwalk bridge over mid, with yellow handrails, under a golden haze" width="49%">
 </p>
 
 ## The game
@@ -26,22 +26,59 @@
   another. **Team Deathmatch** up to 9 v 9, ALPHA in red against BRAVO in blue, bots filling the gaps.
 - **A hostage-rescue mission:** sneak into a guarded compound, free three hostages and walk them
   out to a helicopter, alone or as a squad of up to three with friends and bots.
-- **Five weapons** on `1`-`5` (rifle, bolt sniper, sidearm, knife, frag grenades), no loadouts or
-  unlocks. Grenades cook, bounce and roll; the knife chains slashes, guards and parries.
+- **34 weapons, no unlocks:** pick a primary, a pistol and a sniper under **Armory > Loadout**. Twenty
+  primaries (M4A4, AK-47, FAMAS, M4A1-S, Galil AR, SG 553, AUG, seven SMGs, four shotguns, the M249
+  and the Negev), ten pistols (P2000 to the R8 Revolver and Dual Berettas) and four snipers (AWP,
+  SCAR-20, SSG 08, G3SG1), each with its own model, damage, magazine, rate, recoil and recorded
+  report. `B` switches fire mode where a gun has one (a burst, the revolver's fanned hammer).
+- **Three grenades, three of each per life:** frags on `5` cook, bounce and roll; the **smoke** on `6`
+  pops where it comes to rest and blooms into a volumetric cloud that fills the space it lands in,
+  never through a wall, blocking sight but not bullets for 18 seconds; the **incendiary** on `7`
+  goes off where it hits the floor and lays a pool of fire that spreads over the ground.
+- **Supplies on every handmade map:** medical stations give +50 health and ammunition crates
+  restock every grenade. A used station empties and restocks after 25 seconds; the lamp on its sign
+  tells you which (lit, or dim red).
+- **You feel every hit:** blood lands on the side the round came from, the screen edge flashes red,
+  and as your health drops the colour drains, the edges close in and the frame crusts with blood in
+  time with your heartbeat.
 - **Weapon handling:** realistic magazine changes, scopes, sway and inertia, tracers from the muzzle
   to the impact, a mantle over low walls and ladders to climb.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots** hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **Two forces you can tell apart by shape:** you and your side are operators (helmet, goggles,
-  plate carrier, pack); whoever you're fighting are insurgents (head wrap, face scarf, light chest
-  rig, no armour), on every map and in every mode. Team games keep their red and blue on top.
+  plate carrier, pack, a cyan armband and helmet strobe); whoever you're fighting are insurgents
+  (red head wrap, dark knee-length tunic, loose trousers, AK), on every map and in every mode.
+  Insurgents come in four outlines: rifleman, gunner with an ammo belt, scout in trainers, and a
+  leader with a radio. Each one fights to match its kit. Hostile tracers burn green and hostile
+  rifles sound like AKs. Team games keep their red and blue on top.
 - **Third person (`V`):** your operator wears the outfit you pick, carries the rifles he isn't using
   on his back and the pistol in a thigh holster, and stows one weapon and draws the next when you switch.
 - **Armory:** five knives and eleven weapon themes; five outfit colourways with a choice of headgear,
   vest and pack for your operator; the weapon's field of view and a lower hip position.
 - **Match summary and career:** your headshots and best run each match, lifetime totals in `config.cfg`.
-- **No engine and no asset files:** maps, models and every sound are generated in code, with
-  physically based materials, soft shadows, ambient occlusion, light shafts and lit windows at dusk.
+- **No engine and no asset files:** maps and models are generated in code and the recorded sound bank
+  is built into the one binary, with physically based materials, soft shadows, ambient occlusion,
+  light shafts and lit windows at dusk.
+
+## Supplies, wounds and the world
+
+<p align="center">
+  <img src="media/supply_med.jpg" alt="A medical station: a white cabinet on steel posts, door open, a red trauma bag and a first-aid box on the shelves, a green-cross sign with a lit green lamp above" width="49%">
+  <img src="media/supply_ammo.jpg" alt="An ammunition crate: an olive crate with its lid propped open and grenades standing in the foam, a yellow hazard sign with a grenade on a post beside it" width="49%">
+  <img src="media/wounds.jpg" alt="First person at 22 health: blood smeared round the edges of the screen and a dark red vignette closing in" width="49%">
+  <img src="media/outpost_bastion.jpg" alt="Outpost: a HESCO sniper bastion with a ladder and a handrail, an ammunition crate in front of it" width="49%">
+  <img src="media/harbor_forklift.jpg" alt="Harbor: a yellow counterbalance forklift with its LPG bottle and forks down beside the container yard" width="49%">
+  <img src="media/foundry_shed.jpg" alt="Foundry: two IBC tote tanks in their steel cages against the shed wall" width="49%">
+</p>
+
+Walk up to a **medical station** (a white cabinet under a green cross) when you're hurt, or an
+**ammunition crate** (under a yellow sign with a grenade) when you're short of grenades: you take
+what it holds only if you need it, it empties, and it restocks 25 seconds later. Bots use them too
+when they pass one. Every stair and raised walkway has a handrail; narrow streets are spanned by
+covered rooms and stone arches in the old towns and pipe bridges at the docks and the refinery; the
+yards and streets have forklifts, IBC tanks, sack pallets, benches and power cabinets; Outpost has a
+climbable HESCO bastion and barracks tents in each side lane, and Bazaar's second house a ladder to
+its roof.
 
 ## Your operator
 
@@ -61,7 +98,8 @@
 
 Pick your look under **Armory > Gear**: **OUTFIT** (slate, coyote, ranger, shadow, arctic) colours the
 whole kit, from fatigues and plate carrier to helmet, gloves and goggles; **HEADGEAR** is a helmet,
-cap, head wrap or bare; **VEST** a plate carrier, chest rig or none; **PACK** an assault pack or none.
+cap, head wrap or bare; **FACE** a balaclava, skull mask, gas mask, respirator, goggles, face plate
+or shemagh; **VEST** a plate carrier, chest rig or none; **PACK** an assault pack or none.
 Press `V` for the shoulder camera. The carbine rides on your back, the sniper down your left side and
 the pistol in a drop-leg holster; switching weapons puts the old one away and draws the new one,
 over the shoulder for a rifle and from the holster for the pistol. It is all looks: nothing here
@@ -72,12 +110,12 @@ changes how a weapon handles, and in team games your side's colours stay on top.
 | Map | |
 |---|---|
 | **Arena** | Procedural: a new layout and sky every match. |
-| **Foundry** | Handmade 48 m steelworks yard: furnace stacks, a railed gantry, an overhead crane, roofed sheds, containers and a conveyor. |
-| **Bazaar** | Handmade 48 m market quarter: houses with rooftops, striped canopies over the streets, stalls, palms and a fountain square. |
-| **Outpost** | Handmade 48 m forward base: T-wall lanes, HESCO and sandbags, a watchtower, container perches, long sniper lines. |
-| **Citadel** | 104 m desert old town: a domed mosque, a climbable minaret, arched gates and rooftop stairs. |
-| **Harbor** | 104 m waterfront: brick warehouses, stacked containers, a crane walkway, a lighthouse and ladders up to the rooftops. |
-| **Refinery** | 104 m industrial site: storage tanks, pipe racks over mid, a flare stack and a column lookout. |
+| **Foundry** | Handmade 48 m steelworks yard: furnace stacks, a railed gantry, an overhead crane, roofed sheds with oil tanks, containers, a forklift and a conveyor. |
+| **Bazaar** | Handmade 48 m market quarter: houses with two climbable roofs, striped canopies over the streets, stalls, palms and a fountain square with benches. |
+| **Outpost** | Handmade 48 m forward base: T-wall lanes, HESCO and sandbags, a watchtower, a HESCO sniper bastion and a barracks tent each side, long sniper lines. |
+| **Citadel** | 104 m desert old town: a domed mosque, a climbable minaret, arched gates, rooms and arches across the alleys, railed rooftop stairs. |
+| **Harbor** | 104 m waterfront: brick warehouses, stacked containers, a crane walkway, pipe bridges, a lighthouse and ladders up to the rooftops. |
+| **Refinery** | 104 m industrial site: storage tanks, pipe racks over mid, a railed catwalk bridge, a flare stack and a column lookout. |
 | **Compound** | 104 m walled stronghold at blue hour, the Hostage Rescue map; also a normal map. |
 
 | Mode | |
@@ -188,9 +226,11 @@ make build/game-x86_64
 ./build/game-x86_64
 ```
 
-`make dist-linux RELEASE_VERSION=v0.7.7` builds the redistributable binary (needs Docker). The
+`make dist-linux RELEASE_VERSION=v0.8` builds the redistributable binary (needs Docker). The
 first-person models come from `tools/build_models.py`, regenerated with
-`blender -b --factory-startup -P tools/build_models.py`.
+`blender -b --factory-startup -P tools/build_models.py`; the world props (vehicles, street furniture,
+supply stations) are in `tools/props_models.py` and rebuild on their own with
+`blender -b --factory-startup -P tools/build_props.py -- PROP_FORKLIFT ...`.
 
 ## Credits and license
 

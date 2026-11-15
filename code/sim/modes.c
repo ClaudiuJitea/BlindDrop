@@ -115,13 +115,19 @@ static int mode_round_goal(void) { return g_online && g_net_rounds ? g_net_round
 // LAST MAN STANDING: the dead stay down until the round resets everyone.
 static int mode_respawns(void) { return game_mode() != GM_LMS && game_mode() != GM_RESCUE; }
 
-// Grenade stock that is not the spawn's fixed two. The GUN GAME grenade rung is
+// Grenade stock that is not the spawn's fixed three (or a supply crate's). The GUN GAME grenade rung is
 // bottomless (one kill to climb, and running dry would strand you on a weapon
 // you may not hold); KNIVES + NADES grows one back every NADE_REGEN_TICKS.
 // Runs in the shared weapon paths, so a client's prediction counts the same.
 #define NADE_REGEN_TICKS (5 * TICK_HZ)
 static void mode_nade_refill(int ent, weapon_t *w) {
   int m = game_mode();
+  // GUN GAME's grenade rung and BLADES' regenerating frags are frag rules: no
+  // smoke or fire rides in those modes, and the slot always holds the frag.
+  if (m == GM_GUN || m == GM_BLADES) {
+    if (w->gr_kind != NADE_FRAG && w->gr_cook == 0 && w->gr_t == 0) nade_swap_to(w, NADE_FRAG);
+    if (w->gr_kind == NADE_FRAG) w->gr_bag[NADE_SMOKE] = w->gr_bag[NADE_INC] = 0;
+  }
   if (m == GM_GUN && GG_LADDER[gg_level(ent)] == WPN_GR) {
     if (w->ammo[WPN_GR] < 1) w->ammo[WPN_GR] = 1;
     w->gr_regen = 0;

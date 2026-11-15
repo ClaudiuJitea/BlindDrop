@@ -825,7 +825,13 @@ static int ui_button(const char *label, float x, float y, float w, float h,
 
 // Section eyebrow: small, wide-tracked, cool — a label and one hairline.
 // Structure whispers; only data and focus get color.
+// Drawn 4 units BELOW the y it is handed: every page allots 4 above a header
+// and 14 below it, which left 8 units of air over the eyebrow and 12 under it,
+// so each header sat against the group above and floated over its own. Moved
+// inside the same allotment, it is 12 above and 8 below — it belongs to the
+// rows it names — and no page grew by a unit (the 720p clamp holds).
 static void ui_section(const char *title, float px, float pw, float y) {
+  y += 4.0f;
   ui_text_ex(title, px + 16, y - 1, 0.8f, TXT_BOLD, 2.2f, C4(C_HAZE, 0.95f));
   float tw = ui_text_width_tr(title, 0.8f, 2.2f);
   ui_rect(px + 16 + tw + 8, y + 2, pw - 32 - tw - 8, 1, C_BONE, 0.10f);

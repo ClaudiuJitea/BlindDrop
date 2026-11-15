@@ -52,10 +52,11 @@ typedef struct {
   char  name[12];            // player name; glyph policy lives in name_glyph
   int   third_person;        // camera: 0 = first person, 1 = shoulder cam
   int   knife_model;         // ARMORY: KNIFE_MODEL_NAMES index
-  int   rifle_var, pistol_var; // ARMORY LOADOUT: *_VAR_NAMES index, 0 = shipped gun
+  int   rifle_var, pistol_var, sniper_var; // ARMORY LOADOUT: *_VAR_NAMES index, 0 = shipped gun
   int   wpn_theme;           // ARMORY: WPN_THEME_NAMES index, 0 = factory
   int   gear_theme;          // ARMORY: GEAR_THEME_NAMES index, 0 = slate
   int   head_gear, vest_gear, pack_gear;   // ARMORY: *_GEAR_NAMES, 0 = operator
+  int   face_gear;                         // ARMORY: FACE_GEAR_NAMES, 0 = plain balaclava
   // CAREER: lifetime totals for the local player, shown on the end screen.
   // Counted on the presentation side (vfx_on_event), so offline and online
   // matches both add to them; the boot screen's showcase match never does.
@@ -223,9 +224,10 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "post_fx %d\nmp_host %s\nmp_port %d\n", c->post_fx, c->mp_host, c->mp_port);
   fprintf(f, "knife_model %d\nweapon_theme %d\ngear_theme %d\n",
           c->knife_model, c->wpn_theme, c->gear_theme);
-  fprintf(f, "rifle_model %d\npistol_model %d\n", c->rifle_var, c->pistol_var);
-  fprintf(f, "head_gear %d\nvest_gear %d\npack_gear %d\n",
-          c->head_gear, c->vest_gear, c->pack_gear);
+  fprintf(f, "rifle_model %d\npistol_model %d\nsniper_model %d\n",
+          c->rifle_var, c->pistol_var, c->sniper_var);
+  fprintf(f, "head_gear %d\nvest_gear %d\npack_gear %d\nface_gear %d\n",
+          c->head_gear, c->vest_gear, c->pack_gear, c->face_gear);
   fprintf(f, "hints %d\n", c->hints);
   fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\nperf_overlay %d\n",
           c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale,
@@ -405,13 +407,17 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "knife_model"))
       c->knife_model = parse_int(val, c->knife_model, 0, KNIFE_MODEL_COUNT - 1);
     else if (!strcmp(key, "rifle_model"))
-      c->rifle_var = parse_int(val, c->rifle_var, 0, WPN_VARS - 1);
+      c->rifle_var = parse_int(val, c->rifle_var, 0, RV_N - 1);
     else if (!strcmp(key, "pistol_model"))
-      c->pistol_var = parse_int(val, c->pistol_var, 0, WPN_VARS - 1);
+      c->pistol_var = parse_int(val, c->pistol_var, 0, PV_N - 1);
+    else if (!strcmp(key, "sniper_model"))
+      c->sniper_var = parse_int(val, c->sniper_var, 0, SV_N - 1);
     else if (!strcmp(key, "weapon_theme"))
       c->wpn_theme = parse_int(val, c->wpn_theme, 0, WPN_THEME_COUNT - 1);
     else if (!strcmp(key, "gear_theme"))
       c->gear_theme = parse_int(val, c->gear_theme, 0, GEAR_THEME_COUNT - 1);
+    else if (!strcmp(key, "face_gear"))
+      c->face_gear = parse_int(val, c->face_gear, 0, FACE_GEAR_COUNT - 1);
     else if (!strcmp(key, "head_gear"))
       c->head_gear = parse_int(val, c->head_gear, 0, HEAD_GEAR_COUNT - 1);
     else if (!strcmp(key, "vest_gear"))

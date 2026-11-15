@@ -260,7 +260,8 @@ static void post_pass(int fx) {
     tex_on(i, texs[i]);
   }
   glUniform1f(uloc(pp, "uBloomK"), 0.05f + a->bloom * 0.16f);
-  glUniform1f(uloc(pp, "uCA"), 0.0065f);
+  glUniform1f(uloc(pp, "uCA"), 0.0065f + 0.045f * g_hurt_u[0] + 0.008f * g_hurt_u[1]);
+  glUniform4f(uloc(pp, "uHurt"), g_hurt_u[0], g_hurt_u[1], g_hurt_u[2], 0.0f);
   glUniform1f(uloc(pp, "uMotion"), R.have_prev && !snap ? 0.32f : 0.0f);
   glUniform1f(uloc(pp, "uAds"), R.ads_now);
   glUniform1f(uloc(pp, "uVmOn"), R.vm_drawn ? 1.0f : 0.0f);
@@ -301,13 +302,34 @@ static int holo_local(float x, float y, float *u, float *v) {
 static float holo_clip(float x, float y) {
   float u, v;
   if (!holo_local(x, y, &u, &v)) return 0.0f;
-  float e = fmaxf(fabsf(u), fabsf(v));
+  float e = g_holo_kind == 2 ? sqrtf(u * u + v * v) : fmaxf(fabsf(u), fabsf(v));
   return 1.0f - smooth01(f_clamp((e - 0.86f) / 0.14f, 0.0f, 1.0f));
 }
 static void holo_draw(float ccx, float ccy, float glass_a, float dot_a) {
   if (g_holo_ex[0] == 0.0f && g_holo_ey[1] == 0.0f) return;
   g_ui_mode = UIM_RAW;
   float su = g_hf_solid_u, sv = g_hf_solid_v;
+  if (g_holo_kind == 2) {
+    // A RIFLE SCOPE (SG 553, AUG): a magnified glass, its reticle etched, not
+    // projected — a black duplex: heavy posts from the rim, fine wires through
+    // the middle, a small open centre. The ocular is round, so is the clip.
+    if (dot_a <= 0.0f) return;
+    float rr = sqrtf(g_holo_ex[0] * g_holo_ex[0] + g_holo_ex[1] * g_holo_ex[1]);
+    for (int i = 0; i < 4; i++) {
+      float dx = (float)((i == 0) - (i == 1)), dy = (float)((i == 2) - (i == 3));
+      for (int k = 0; k < 12; k++) {             // segmented, so the clip cuts it at the rim
+        float t0 = 1.6f + (rr * 1.1f) * (float)k / 12.0f, t1 = 1.6f + (rr * 1.1f) * (float)(k + 1) / 12.0f;
+        float x0 = ccx + dx * t0, y0 = ccy + dy * t0, x1 = ccx + dx * t1, y1 = ccy + dy * t1;
+        float c = fminf(holo_clip(x0, y0), holo_clip(x1, y1));
+        if (c <= 0.0f) continue;
+        float wdt = t0 > rr * 0.45f ? 1.25f : 0.32f;   // posts outside, wires inside
+        ui_line(x0, y0, x1, y1, wdt, 0.02f, 0.02f, 0.02f, 0.92f * dot_a * c);
+      }
+    }
+    float dc = holo_clip(ccx, ccy);
+    if (dc > 0.0f) ui_disk(ccx, ccy, 0.55f, 0.95f, 0.18f, 0.08f, 0.9f * dot_a * dc);
+    return;
+  }
   // Glass: a 4x4 patch so the Fresnel tint can vary across it.
   for (int j = 0; j < 4; j++)
     for (int i = 0; i < 4; i++) {

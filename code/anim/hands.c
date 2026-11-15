@@ -56,6 +56,10 @@ typedef struct {
   // The grenade throw's body (third person only, see NADE_HOLD): trunk twist
   // and bend in radians, throwing-elbow lift and off-arm reach 0..1.
   float tw, bd, eu, lr;
+  // ...and the KNIFE's body (v5, third person only, see KNIFE_BODY): the same
+  // tw/bd trunk channels, plus the lunge — `ln` metres the hips and everything
+  // above them travel forward and down, `lf` the lead foot's lift as it steps.
+  float ln, lf, kg;   // kg: the off hand's guard during a swing (3P only)
 } gunanim_t;
 
 // One keyframe of the knife. t is the normalised swing time.
@@ -89,6 +93,42 @@ static const knife_key_t KNIFE_KEY[3][6] = {
 };
 // The guard: blade upright across the centre line, edge out, off hand behind it.
 static const float KNIFE_GUARD[6] = {0.135f, -0.085f, 0.300f, -0.42f, -0.22f, 0.50f};
+// THE KNIFE MOVES THE BODY (v5). In third person only the hand used to move:
+// a man standing square and still while his fist flew a timeline in front of
+// his face. These are the grenade's body channels on the knife, keyed at the
+// SAME times as KNIFE_KEY so the hand and the body hit their marks together;
+// the hand's six numbers (shared with the first-person viewmodel) are not
+// touched, and MELEE[] timing and strike windows are sim and not touched either.
+//   tw  trunk twist, rad: + takes the knife (right) shoulder BACK
+//   bd  trunk bend, rad: + brings the chest forward over the hips
+//   ln  the lunge, m: hips and trunk forward (and a quarter of it down)
+//   lf  the lead foot's lift, m, as it steps out with the lunge
+//   gd  the off hand up into the guard, 0..1 (on top of an ADS guard)
+// Wind-up, strike, recovery, with a distinct body shape per swing: the
+// forehand loads the knife shoulder back and unwinds through; the backhand
+// loads it ACROSS (shoulder forward) and opens out; the thrust draws the hip
+// back and drives straight in on the longest lunge, chest square.
+enum { KB_TW, KB_BD, KB_LN, KB_LF, KB_GD, KB_N };
+static const float KNIFE_BODY[3][6][KB_N] = {
+  {{0, 0, 0, 0, 0},                                    // forehand
+   {0.38f, -0.06f, -0.015f, 0.000f, 0.65f},            // cock: shoulder back, weight back
+   {0.42f, -0.05f, -0.010f, 0.012f, 0.75f},            // ...lead foot unweights
+   {-0.18f, 0.16f, 0.090f, 0.030f, 0.70f},             // strike: through, stepping in
+   {-0.42f, 0.22f, 0.130f, 0.000f, 0.55f},             // follow-through, planted
+   {0, 0, 0, 0, 0}},
+  {{0, 0, 0, 0, 0},                                    // backhand
+   {-0.36f, 0.04f, 0.000f, 0.000f, 0.60f},             // load across: shoulder forward
+   {-0.40f, 0.05f, 0.010f, 0.012f, 0.70f},
+   {0.10f, 0.14f, 0.080f, 0.028f, 0.70f},              // open out through the cut
+   {0.34f, 0.18f, 0.110f, 0.000f, 0.55f},
+   {0, 0, 0, 0, 0}},
+  {{0, 0, 0, 0, 0},                                    // thrust
+   {0.30f, -0.08f, -0.030f, 0.000f, 0.70f},            // draw back to the hip
+   {0.28f, -0.07f, -0.025f, 0.014f, 0.80f},
+   {-0.10f, 0.24f, 0.140f, 0.030f, 0.75f},             // drive: longest lunge, square
+   {-0.12f, 0.26f, 0.155f, 0.000f, 0.65f},
+   {0, 0, 0, 0, 0}},
+};
 
 // The grenade, third person. The first six numbers are the knife's timeline
 // (the hand, metres right/up/forward of the eye, then pitch/yaw/roll); the last
@@ -200,6 +240,15 @@ static void knife_anim(const weapon_t *w, float alpha, gunanim_t *g) {
     u = (s == 2 || s == 3) ? u * u * (1.6f - 0.6f * u) : smooth01(u);
     for (int i = 0; i < 6; i++)
       g->kn[i] = kk[s].k[i] + (kk[s + 1].k[i] - kk[s].k[i]) * u;
+    const float *b0 = KNIFE_BODY[v][s], *b1 = KNIFE_BODY[v][s + 1];
+    // The body leads the hand by a breath: a smoothstep on the same leg, so the
+    // hips arrive at the strike while the blade is still accelerating.
+    float ub = smooth01(f_clamp(u * 1.15f, 0.0f, 1.0f));
+    g->tw = b0[KB_TW] + (b1[KB_TW] - b0[KB_TW]) * ub;
+    g->bd = b0[KB_BD] + (b1[KB_BD] - b0[KB_BD]) * ub;
+    g->ln = b0[KB_LN] + (b1[KB_LN] - b0[KB_LN]) * ub;
+    g->lf = b0[KB_LF] + (b1[KB_LF] - b0[KB_LF]) * ub;
+    g->kg = b0[KB_GD] + (b1[KB_GD] - b0[KB_GD]) * ub;
   }
   float ga = w->prev_ads_s + (w->ads_s - w->prev_ads_s) * alpha;
   for (int i = 0; i < 6; i++) g->kn[i] += (KNIFE_GUARD[i] - g->kn[i]) * ga;
@@ -236,8 +285,52 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
       g.slide = c < 0.28f ? c / 0.28f : (1.0f - c) / 0.72f;
     if (w->ammo[WPN_PT] == 0 && w->reload_t == 0) g.slide = 1.0f;
   }
+  // THE SCAR-20'S CHARGING HANDLE RIDES THE BOLT CARRIER, so every shot throws it
+  // back and the spring drives it home: back in SCAR_CYC_BACK ticks, home over the
+  // rest of SCAR_CYC_T (0.2 s: a gas gun's cycle stretched so the throw reads at
+  // any frame rate), eased so neither end has a velocity step. On the last round the
+  // carrier locks open and the handle stays back until the reload releases it.
+  // `slide` carries it, as it carries the pistol's slide.
+  int scar = cur == WPN_SR && sr_semi(wvar(w, WPN_SR));   // SCAR-20, G3SG1
+  if (scar) {
+    enum { SCAR_CYC_BACK = 5, SCAR_CYC_T = 24 };
+    float fb[WP_COUNT];
+    float cyc = 60.0f / gun_feel(w, WPN_SR, fb)[WP_RPM] * (float)TICK_HZ;
+    float t = cyc - ((float)w->cool[WPN_SR] - alpha);    // ticks since the shot
+    if (w->cool[WPN_SR] > 0 && t >= 0.0f && t < (float)SCAR_CYC_T)
+      g.slide = t < SCAR_CYC_BACK ? smooth01(t / SCAR_CYC_BACK)
+              : 1.0f - smooth01((t - SCAR_CYC_BACK) / (float)(SCAR_CYC_T - SCAR_CYC_BACK));
+    if (w->ammo[WPN_SR] == 0 && w->reload_t == 0) g.slide = 1.0f;
+  }
+  // THE PUMP (Nova, Sawed-Off, MAG-7): after the shot the support hand racks
+  // the fore-end (mesh group 3) back and drives it home, inside the gun's cycle.
+  const wpn_var_t *gv = wvrow(w, cur);
+  if (gv && gv->pump && w->cool[cur] > 0) {
+    float fb[WP_COUNT];
+    float cyc = 60.0f / gun_feel(w, cur, fb)[WP_RPM] * (float)TICK_HZ;
+    float c = 1.0f - ((float)w->cool[cur] - alpha) / fmaxf(cyc, 1.0f);
+    g.slide = c < 0.18f ? 0.0f : c < 0.45f ? smooth01((c - 0.18f) / 0.27f)
+            : c < 0.72f ? 1.0f - smooth01((c - 0.45f) / 0.27f) : 0.0f;
+  }
   g.drop_t = -1.0f;
   if (w->reload_t <= 0) return g;
+  // A TUBE, ONE SHELL AT A TIME: the support hand takes a shell from the pouch
+  // and thumbs it into the loading port (mesh group 1 is that shell), the gun
+  // tipped a little toward it; the cycle repeats per shell until full or fired.
+  if (gv && gv->shell_t > 0) {
+    float pr = 1.0f - ((float)w->reload_t - alpha) / (float)gv->shell_t;
+    pr = f_clamp(pr, 0.0f, 1.0f);
+    g.arc = 0.30f * sinf(pr * F_PI);
+    g.old_vis = 0; g.fresh_vis = 1;
+    g.retain = 0; g.pair = 0.0f; g.index = 0.0f;
+    g.pouch = 1.0f - smooth01(f_clamp(pr / 0.55f, 0.0f, 1.0f));
+    g.fresh_pouch = 1.0f;
+    g.mag = 1.0f - smooth01(f_clamp((pr - 0.35f) / 0.50f, 0.0f, 1.0f));
+    g.hand = sinf(pr * F_PI);
+    float x1 = (pr - 0.86f) / 0.04f;
+    g.punch = x1 > 0.0f ? 0.6f * x1 * expf(1.0f - x1) : 0.0f;
+    return g;
+  }
   // The SAME duration the sim is counting down, or every beat in the animation
   // lands on a different tick from the sound it is supposed to share.
   float ticks = (float)(w->reload_tac ? WPN_DEF[cur].reload_tac_ticks
@@ -411,7 +504,16 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
   g.bolt = tac_ar
          ? 0.0f
          : f_clamp((prog - 0.660f) / (0.330f - 1.0f / ticks), 0.0f, 1.0f);
-  if (cur == WPN_SR) {
+  if (scar && !w->reload_tac) {
+    // Empty: the carrier stayed locked open through the magazine change and is
+    // released on the bolt window — held back until the window's draw peaks,
+    // then it rides the draw home (the slam is the bolt beat's punch).
+    // gun_bolt_phase's draw lobe (defined with the weapon models, after this file)
+    float b = g.bolt;
+    float draw = b < 0.25f || b >= 0.80f ? 0.0f : sinf((b - 0.25f) / 0.55f * F_PI);
+    g.slide = b < 0.525f ? 1.0f : draw;
+  }
+  if (cur == WPN_SR && !scar) {
     // A bolt gun's reload ENDS with the action being worked, and that is the
     // half of it a player recognises. The window opens after the magazine is
     // seated and closes one tick short of the end, for the same reason every
@@ -776,7 +878,11 @@ static int bot_flank_steer(bot_t *b, const bot_skill_t *sk, float tdist,
   if (b->flank_t == 0 && b->flank_cd == 0 && b->grounded &&
       b->wp.reload_t == 0 && !(b->hurt_t > 0 && b->hp < 45) && !b->sliding &&
       tdist > 7.0f && tdist < 28.0f &&
-      rng_rangef(&g_rng_bot, 0.0f, 1.0f) < sk->tac * 0.0007f) {
+      // THE SCOUT FLANKS. The insurgent travelling light (no rig, trainers)
+      // is the one who swings wide: 2.5x the attempt rate, so the outline a
+      // player learns to fear on his shoulder is the one that is there.
+      rng_rangef(&g_rng_bot, 0.0f, 1.0f) <
+          sk->tac * 0.0007f * (ent_kind((int)(b - g_bots) + 1) == 2 ? 2.5f : 1.0f)) {
     // The way it was already leaning — a swing the player can read and learn
     // beats a coin flip. strafe_dir is -1/0/+1 and the plant (0) must not fold
     // into one side, or a mirror-symmetric arena gets a 60/40 bias and every

@@ -220,25 +220,53 @@ static float audio_place(v3 at, float *dist) {
 
 // A take of this gun's report, never the one just played: two the same back to back
 // is what makes a burst sound like a loop.
-// The loadout guns' own takes, [slot: 0 AR, 1 PT][variant - 1]. Sampled-only:
-// a variant whose takes are not in the pack falls back to its slot's.
-static const int VAR_TAKE[2][2][3] = {
-  {{SFX_FIRE_AK1, SFX_FIRE_AK2, SFX_FIRE_AK3}, {SFX_FIRE_FAMAS1, SFX_FIRE_FAMAS2, SFX_FIRE_FAMAS3}},
-  {{SFX_FIRE_GLOCK1, SFX_FIRE_GLOCK2, SFX_FIRE_GLOCK3},
-   {SFX_FIRE_DEAGLE1, SFX_FIRE_DEAGLE2, SFX_FIRE_DEAGLE3}},
+// Every loadout gun's report, [row][variant] = {its own takes, a stand-in's}:
+// the first take's id of three in a row, -1 for none. Sampled-only: a gun whose
+// own takes are not in the pack plays its STAND-IN's (the nearest recorded
+// cousin: the Galil the AK, the 9 mm SMGs the Glock), re-pitched by the
+// variant, and with neither it falls back to its slot's takes, re-pitched.
+static const int VAR_SOUND[3][WPN_VARS][2] = {
+  { {-1, -1}, {SFX_FIRE_AK1, -1}, {SFX_FIRE_FAMAS1, -1}, {SFX_T_M4A1S, -1},
+    {SFX_T_GALIL, SFX_FIRE_AK1}, {SFX_T_SG553, -1}, {SFX_T_AUG, SFX_FIRE_FAMAS1},
+    {SFX_T_MAC10, SFX_FIRE_GLOCK1}, {SFX_T_MP9, SFX_FIRE_GLOCK1}, {SFX_T_MP7, SFX_FIRE_FAMAS1},
+    {SFX_T_MP5SD, -1}, {SFX_T_UMP45, SFX_FIRE_GLOCK1}, {SFX_T_P90, SFX_FIRE_FAMAS1},
+    {SFX_T_BIZON, SFX_FIRE_GLOCK1}, {SFX_T_NOVA, -1}, {SFX_T_XM1014, -1},
+    {SFX_T_SAWEDOFF, -1}, {SFX_T_MAG7, -1}, {SFX_T_M249, -1}, {SFX_T_NEGEV, -1} },
+  { {-1, -1}, {SFX_FIRE_GLOCK1, -1}, {SFX_FIRE_DEAGLE1, -1}, {SFX_T_USPS, -1},
+    {SFX_T_P250, SFX_FIRE_GLOCK1}, {SFX_T_FIVESEVEN, SFX_FIRE_GLOCK1},
+    {SFX_T_TEC9, SFX_FIRE_GLOCK1}, {SFX_T_CZ75, SFX_FIRE_GLOCK1}, {SFX_T_R8, SFX_FIRE_DEAGLE1},
+    {SFX_T_ELITES, SFX_FIRE_GLOCK1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1},
+    {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1} },
+  { {-1, -1}, {SFX_T_SCAR20, -1}, {SFX_T_SSG08, -1}, {SFX_T_G3SG1, -1},
+    {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1},
+    {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1} },
 };
+// The takes this (slot, variant) plays and whether they are its OWN (a gun's
+// own recording keeps its pitch: re-pitching an AK recording only makes it a
+// worse AK). -1: the slot's.
+static int var_takes(int wpn, int var, int *own) {
+  int row = wpn_var_row(wpn);
+  *own = 0;
+  if (row < 0 || var <= 0 || var >= wpn_var_n(wpn)) return -1;
+  const int *vs = VAR_SOUND[row][var];
+  if (vs[0] >= 0 && g_sfx_buf[vs[0]]) { *own = 1; return vs[0]; }
+  if (vs[1] >= 0 && g_sfx_buf[vs[1]]) return vs[1];
+  return -1;
+}
 static int var_has_takes(int wpn, int var) {
-  return (wpn == WPN_AR || wpn == WPN_PT) && var >= 1 && var <= 2
-      && g_sfx_buf[VAR_TAKE[wpn == WPN_PT][var - 1][0]];
+  int own;
+  var_takes(wpn, var, &own);
+  return own;
 }
 static int sfx_shot_id(int wpn, int var) {
-  if (var_has_takes(wpn, var)) {
-    static int vlast[2][2];
-    int *l = &vlast[wpn == WPN_PT][var - 1];
+  int own, t0 = var_takes(wpn, var, &own);
+  if (t0 >= 0) {
+    static int vlast[3][WPN_VARS];
+    int *l = &vlast[wpn_var_row(wpn)][var];
     int k = (*l + 1 + (int)rng_rangef(&g_rng_audio, 0.0f, 1.999f)) % 3;
     *l = k;
-    int id = VAR_TAKE[wpn == WPN_PT][var - 1][k];
-    if (g_sfx_buf[id]) return id;
+    if (g_sfx_buf[t0 + k]) return t0 + k;
+    return t0;
   }
   static const int T[3][5] = {
     [WPN_AR] = {SFX_FIRE_AR, SFX_FIRE_AR2, SFX_FIRE_AR3, SFX_FIRE_AR4, SFX_FIRE_AR5},
@@ -304,9 +332,17 @@ static void audio_slap(int wpn) {
 
 static int ent_wvar(int ent, int wpn);   // defined with ent_weapon
 static v3 ent_pos(int e);                // defined with the rescue sim
+static int fig_ins_of(int e);            // defined with the rescue sim
 static int ev_var(const event_t *e) {
-  if (e->src < 0 || e->src >= MAX_ENTS || (e->wpn != WPN_AR && e->wpn != WPN_PT)) return 0;
-  return ent_wvar(e->src, e->wpn);
+  if (e->src < 0 || e->src >= MAX_ENTS || wpn_var_row(e->wpn) < 0) return 0;
+  int v = ent_wvar(e->src, e->wpn);
+  // HOSTILE FIRE SOUNDS LIKE THE GUN IT LOOKS LIKE. An insurgent's carbine is
+  // drawn as an AK (figure/weapons.c g_gun_ak, looks only), so it is HEARD as
+  // one too: the AK's own recorded takes, lower and heavier than the M4's. In
+  // a firefight that is a side read by ear before the shooter is on screen.
+  // Presentation only, from this seat — the round is still the carbine's.
+  if (!v && e->wpn == WPN_AR && e->src != g_local_ent && fig_ins_of(e->src)) v = 1;
+  return v;
 }
 // The shooter's variant voice: a lower, heavier report for the AK and the
 // Deagle, a snappier one for the FAMAS and the Glock. Variant 0 is (1, 1). A
@@ -315,8 +351,8 @@ static int ev_var(const event_t *e) {
 static void audio_var_voice(const event_t *e, float *rate, float *lvl) {
   int v = ev_var(e);
   if (!v) return;
-  if (!var_has_takes(e->wpn, v)) *rate *= WPN_VAR[e->wpn == WPN_PT][v].pitch;
-  *lvl *= WPN_VAR[e->wpn == WPN_PT][v].level;
+  if (!var_has_takes(e->wpn, v)) *rate *= WPN_VAR[wpn_var_row(e->wpn)][v].pitch;
+  *lvl *= WPN_VAR[wpn_var_row(e->wpn)][v].level;
 }
 // A MAN GOING DOWN, as the world hears it: one of the death voices at the
 // victim, and his body reaching the floor a beat later. Never the same voice
@@ -353,6 +389,12 @@ static int audio_take(const int *ids, int n, int *last) {
 static void audio_on_event(const event_t *e) {
   switch (e->type) {
   case EV_FIRE: {
+    // A SHOTGUN'S PELLETS are one EV_FIRE each, all on one idx: one report.
+    {
+      static int ls = -2, li = -1; static long lt = -1;
+      if (e->src == ls && e->i == li && (long)g_tick - lt < 2) break;
+      ls = e->src; li = e->i; lt = (long)g_tick;
+    }
     float rate = rng_rangef(&g_rng_audio, 0.985f, 1.015f);
     float vlvl = 1.0f;
     audio_var_voice(e, &rate, &vlvl);
@@ -369,7 +411,9 @@ static void audio_on_event(const event_t *e) {
       float lvl = (e->wpn == WPN_SR ? 1.12f : 1.0f) * vlvl;
       audio_play(sfx_shot_id(e->wpn, ev_var(e)),
                  lvl * rng_rangef(&g_rng_audio, 0.92f, 1.0f), rate, 0.0f, 0.0f);
-      audio_slap(e->wpn);
+      // A suppressed shot has no blast for the walls to send back.
+      if (!WPN_VAR[wpn_var_row(e->wpn) < 0 ? 0 : wpn_var_row(e->wpn)][ev_var(e)].supp)
+        audio_slap(e->wpn);
       break;
     }
     // Someone else's. Distance is not a volume knob: past ~18 m what reaches
@@ -398,6 +442,12 @@ static void audio_on_event(const event_t *e) {
   }
   case EV_HIT:
   case EV_HIT_HEAD: {
+    // Several pellets into one man on one tick: ONE confirmation.
+    {
+      static int hs = -2, hd = -2; static long ht = -1;
+      if (e->src == hs && e->dst == hd && (long)g_tick == ht) break;
+      hs = e->src; hd = e->dst; ht = (long)g_tick;
+    }
     // THE WORLD HEARS IT, WHOEVER FIRED. This runs before and independently of
     // the screen-space confirmation below, because the two are different things
     // for different listeners: the LEAD tick is feedback about the player and is
@@ -551,6 +601,46 @@ static void audio_on_event(const event_t *e) {
     if (fmix > 0.02f) audio_play(SFX_BLAST_FAR, att * sqrtf(fmix) * 1.2f, 1.0f, pan * 0.7f, t);
     break;
   }
+  case EV_SMOKE: {
+    // The canister going: a dull pop, then the long hiss of the gas pouring out
+    // under the bloom. Quieter than a frag at every range — it is a cue, not a
+    // threat — and the hiss is played twice, the second take lower and later, so
+    // the gas keeps going for the four seconds a real canister does.
+    float dist, pan = audio_place(e->a, &dist);
+    float att = f_clamp(1.0f / (1.0f + dist * dist * 0.010f), 0.05f, 0.9f);
+    float t = dist / 343.0f;
+    audio_play(SFX_SMOKE_POP, att, rng_rangef(&g_rng_audio, 0.94f, 1.05f), pan, t);
+    audio_play(SFX_SMOKE_HISS, att * 0.85f, rng_rangef(&g_rng_audio, 0.97f, 1.03f), pan, t + 0.05f);
+    audio_play(SFX_SMOKE_HISS, att * 0.55f, rng_rangef(&g_rng_audio, 0.88f, 0.93f), pan, t + 1.85f);
+    break;
+  }
+  case EV_PICKUP: {
+    // A SUPPLY STATION: the chime for health, the grenade pouch's clack for
+    // the crate — loud for the taker, placed in the world for anyone else.
+    float dist = 0.0f, pan = e->src == g_local_ent ? 0.0f : audio_place(e->a, &dist);
+    float att = e->src == g_local_ent ? 0.85f : f_clamp(1.0f / (1.0f + dist * dist * 0.05f), 0.0f, 0.5f);
+    if (att < 0.02f) break;
+    if (e->i == SUP_HEALTH) audio_play(SFX_CHIME, att, 1.12f, pan, 0.0f);
+    else {
+      audio_play(SFX_NADE_EQUIP, att, 1.0f, pan, 0.0f);
+      audio_play(SFX_NADE_EQUIP, att * 0.8f, 0.92f, pan, 0.12f);
+    }
+    break;
+  }
+  case EV_FLAME: {
+    // THE INCENDIARY: the whoomp as it catches, then the crackle for the life
+    // of the pool (FIRE_LIFE), takes overlapping a little so it never gaps. A
+    // wasted air burst is the whoomp alone, thinner and shorter.
+    float dist, pan = audio_place(e->a, &dist);
+    float att = f_clamp(1.0f / (1.0f + dist * dist * 0.012f), 0.04f, 0.95f);
+    float t = dist / 343.0f;
+    audio_play(SFX_FLAME_POP, att * (e->k ? 1.0f : 0.6f), rng_rangef(&g_rng_audio, 0.93f, 1.06f) * (e->k ? 1.0f : 1.25f), pan, t);
+    if (e->k)
+      for (int k = 0; k < 4; k++)
+        audio_play(SFX_FLAME_BURN, att * 0.75f * (k == 3 ? 0.6f : 1.0f),
+                   rng_rangef(&g_rng_audio, 0.92f, 1.08f), pan, t + 0.25f + 1.8f * (float)k);
+    break;
+  }
   case EV_MELEE: {
     float dist, pan = e->src == g_local_ent ? 0.0f : audio_place(e->a, &dist);
     float att = e->src == g_local_ent ? 0.8f
@@ -604,6 +694,17 @@ static void audio_on_event(const event_t *e) {
     // so a later cancel would fade the player's own reload. There is also no
     // entity to place the sound at.
     if (e->src < 0) break;
+    if (e->k == 2) {
+      // A SHELL into a tube: the brass on the loading gate and the spring's click,
+      // one per shell (a magazine's reload buffer would play a whole mag change).
+      float sd = 0.0f, sp = e->src == g_local_ent ? -0.12f : audio_place(e->a, &sd);
+      float sa = e->src == g_local_ent ? 1.0f : f_clamp(1.0f - sd / 14.0f, 0.0f, 1.0f);
+      if (sa > 0.0f) {
+        audio_play(SFX_BRASS, 0.85f * sa, rng_rangef(&g_rng_audio, 0.58f, 0.64f), sp, 0.0f);
+        audio_play(SFX_DRY, 0.45f * sa, rng_rangef(&g_rng_audio, 0.80f, 0.86f), sp, 0.03f);
+      }
+      break;
+    }
     int rid = (e->k && e->wpn == WPN_AR) ? SFX_RELOAD_AR_TAC
                                          : WPN_DEF[e->wpn].sfx_reload;
     if (e->src == g_local_ent) {

@@ -104,6 +104,24 @@ static int g_sfx_sampled;   // how many ids the pack replaced (harness / log)
 // (0 = none).
 typedef struct { int ref; float db; float head_ms; } sfx_sample_rule_t;
 static sfx_sample_rule_t sfx_rule(int id) {
+  // The CS2 guns' own takes: matched to the slot's synth report they stand in
+  // for, the snipers to the sniper's, the pistols to the pistol's. A SUPPRESSED
+  // gun gets none of the synth's crack laid under it — the crack is exactly
+  // what a can removes — and its level is the variant's job (WPN_VAR.level).
+  if (id >= SFX_T_M4A1S && id < SFX_COUNT) {
+    int g = (id - SFX_T_M4A1S) / 3;   // GUN_TAKE_LIST order
+    enum { G_M4A1S, G_GALIL, G_SG553, G_AUG, G_MAC10, G_MP9, G_MP7, G_MP5SD, G_UMP45,
+           G_P90, G_BIZON, G_USPS, G_P250, G_FIVESEVEN, G_TEC9, G_CZ75, G_R8,
+           G_SSG08, G_G3SG1, G_SCAR20, G_NOVA, G_XM1014, G_SAWEDOFF, G_MAG7, G_M249,
+           G_NEGEV, G_ELITES };
+    int supp = g == G_M4A1S || g == G_MP5SD || g == G_USPS;
+    if (g == G_ELITES) return (sfx_sample_rule_t){SFX_FIRE_PT, 3.0f, 50.0f};
+    if (g >= G_M249)   return (sfx_sample_rule_t){SFX_FIRE_AR, 2.5f, 60.0f};
+    if (g >= G_NOVA)   return (sfx_sample_rule_t){SFX_FIRE_SR, 1.0f, 70.0f};   // a shotgun's blast: the big one
+    if (g >= G_SSG08) return (sfx_sample_rule_t){SFX_FIRE_SR, 1.5f, 60.0f};
+    if (g >= G_USPS)  return (sfx_sample_rule_t){SFX_FIRE_PT, g == G_R8 ? 5.0f : 3.0f, supp ? 0.0f : 50.0f};
+    return (sfx_sample_rule_t){SFX_FIRE_AR, supp ? 0.0f : 2.0f, supp ? 0.0f : 55.0f};
+  }
   switch (id) {
     case SFX_FIRE_AR: case SFX_FIRE_AR2: case SFX_FIRE_AR3: case SFX_FIRE_AR4:
     case SFX_FIRE_AR5: case SFX_FIRE_SR: case SFX_FIRE_SR2: case SFX_FIRE_SR3:

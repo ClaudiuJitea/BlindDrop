@@ -43,13 +43,20 @@ static void grenade_tick(player_t *p, int ent, weapon_t *w, const int held[IN_CO
     if (++w->gr_t == NADE_RELEASE_T) {
       v3 at, vel;
       nade_launch(p, w->gr_lob, &at, &vel);
-      nade_throw(at, vel, w->gr_fuse, ent);
+      nade_throw(at, vel, nade_flight(w, w->gr_fuse), ent, w->gr_kind);
       w->ammo[WPN_GR]--;
     }
     if (w->gr_t > NADE_THROW_T) {
       w->gr_t = 0;
       mode_nade_refill(ent, w);                  // the bottomless GUN GAME rung
-      if (w->ammo[WPN_GR] <= 0) {                // out: back to the gun you had
+      // The last of this kind gone: the other kind moves into the slot for the
+      // next time 5 is pressed, and the hands still go back to the gun.
+      if (w->ammo[WPN_GR] <= 0 && nade_others(w) > 0) {
+        nade_swap(w);
+        w->cur = w->gr_prev == WPN_GR ? WPN_AR : w->gr_prev;
+        if (!mode_allowed(ent, w->cur)) w->cur = mode_primary(ent);
+        w->switch_t = GUN_SWITCH_TICKS;
+      } else if (w->ammo[WPN_GR] <= 0) {         // out: back to the gun you had
         w->cur = w->gr_prev == WPN_GR ? WPN_AR : w->gr_prev;
         if (!mode_allowed(ent, w->cur)) w->cur = mode_primary(ent);
         w->switch_t = GUN_SWITCH_TICKS;
@@ -74,6 +81,9 @@ static void grenade_tick(player_t *p, int ent, weapon_t *w, const int held[IN_CO
     v3 sp = v3_add(player_eye_pos(p), v3_add(v3_scale(rt, 0.26f), (v3){{0, -0.10f, 0}}));
     ev_push((event_t){.type = EV_NADE, .k = 2, .a = sp, .b = sv, .src = ent, .dst = -1});
   }
+  // A SMOKE (OR AN INCENDIARY) HAS NO COOK: it only starts once it is thrown and
+  // lands, so holding it costs nothing but time.
+  if (w->gr_kind != NADE_FRAG && w->gr_cook >= NADE_FUSE - 1) w->gr_cook = NADE_FUSE - 1;
   if (w->gr_cook >= NADE_FUSE) {                 // held too long
     w->gr_cook = 0;
     w->ammo[WPN_GR]--;
@@ -88,6 +98,23 @@ static void grenade_tick(player_t *p, int ent, weapon_t *w, const int held[IN_CO
     w->gr_cook = 0;
     w->gr_t = 1;
   }
+}
+
+// THE SELECTION LIST (weapon_tick, and the HUD's carousel): the four weapons by
+// their ids, then WPN_GR + kind for each grenade kind.
+#define SEL_COUNT (WPN_GR + NADE_KINDS)
+static int sel_of(const weapon_t *w) { return w->cur == WPN_GR ? WPN_GR + w->gr_kind : w->cur; }
+static int sel_avail(int ent, const weapon_t *w, int s) {
+  if (s < WPN_GR) return mode_allowed(ent, s);
+  return mode_allowed(ent, WPN_GR) && nade_count(w, s - WPN_GR) > 0;
+}
+// The next entry after `from` in direction dir (+1 / -1) that can be drawn; -1 none.
+static int sel_step(int ent, const weapon_t *w, int from, int dir) {
+  for (int k = 1; k <= SEL_COUNT; k++) {
+    int s = ((from + dir * k) % SEL_COUNT + SEL_COUNT) % SEL_COUNT;
+    if (sel_avail(ent, w, s)) return s;
+  }
+  return -1;
 }
 
 static int rescue_reload_block(const player_t *p);
@@ -107,55 +134,69 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   // and a menu change should not have to wait for a death.
   if (w->fresh) {
     int lo = human_loadout_src(human_of_ent(ent));
-    if (lo >= 0 && lo != loadout_pack(w->var[WPN_AR], w->var[WPN_PT])) {
+    if (lo >= 0 && lo != loadout_pack(w->var[WPN_AR], w->var[WPN_PT], w->var[WPN_SR])) {
       loadout_take(w, lo);
       def = wdef(w, w->cur);
     }
   }
 
-  // Swap: instant identity change, then the raise animation gates everything.
-  // A running reload is abandoned (the mag stays as it was). Three keys reach
-  // this: the toggle, and the two direct slots (1 = AR, 2 = SNIPER). A slot
-  // press for the weapon already in the hands is a no-op — re-raising the gun
-  // you are holding because you double-tapped its own key is the one thing a
-  // direct slot key must never do.
-  int want = -1;
-  if (held[IN_SWAP] && !p->prev_held[IN_SWAP]) want = (w->cur + 1) % WPN_COUNT;
-  if (held[IN_SLOT1] && !p->prev_held[IN_SLOT1]) want = WPN_AR;
-  if (held[IN_SLOT2] && !p->prev_held[IN_SLOT2]) want = WPN_SR;
-  if (held[IN_SLOT3] && !p->prev_held[IN_SLOT3]) want = WPN_PT;
-  if (held[IN_SLOT4] && !p->prev_held[IN_SLOT4]) want = WPN_KN;
-  if (held[IN_SLOT5] && !p->prev_held[IN_SLOT5]) want = WPN_GR;
+  // THE SELECTION. One list, in key order: 1 rifle, 2 sniper, 3 pistol, 4 knife,
+  // then each GRENADE KIND as its own entry — 5 frag, 6 smoke, 7 incendiary. The
+  // number keys go straight to an entry; NEXT / PREV (and the wheel) step
+  // through the list, skipping what the mode forbids and grenades you have none
+  // of, wrapping at the ends. The HUD's carousel draws the same list. A key for
+  // the entry already in the hands is a no-op — re-raising the gun you are
+  // holding because you double-tapped its key is what a slot key must never do.
+  // A press during a raise is TAKEN (the new raise restarts), so two quick
+  // notches of the wheel are two steps, not one step and one lost press.
   mode_nade_refill(ent, w);
-  // THE MODE'S WEAPON GATE. The cycle walks on to the next weapon the mode
-  // allows (with grenades in stock); a slot key for a forbidden weapon does
-  // nothing; and a weapon in the hands that the mode no longer allows — a GUN
-  // GAME promotion, a respawn preference — is swapped out by the same path.
-  int cycling = held[IN_SWAP] && !p->prev_held[IN_SWAP];
-  if (cycling) {
-    want = -1;
-    for (int k = 1; k <= WPN_COUNT; k++) {
-      int c = (w->cur + k) % WPN_COUNT;
-      if (!mode_allowed(ent, c) || (c == WPN_GR && w->ammo[WPN_GR] <= 0)) continue;
-      want = c;
-      break;
-    }
-  } else if (want >= 0 && !mode_allowed(ent, want)) {
-    want = -1;
+  int nade_idle = w->gr_cook == 0 && w->gr_t == 0;
+  int sel = -1;
+  if (held[IN_SWAP] && !p->prev_held[IN_SWAP]) sel = sel_step(ent, w, sel_of(w), 1);
+  if (held[IN_SWAP_PREV] && !p->prev_held[IN_SWAP_PREV]) sel = sel_step(ent, w, sel_of(w), -1);
+  static const int SLOT_KEY[SEL_COUNT] = {IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4,
+                                          IN_SLOT5, IN_SLOT6, IN_SLOT7};
+  static const int SLOT_SEL[SEL_COUNT] = {WPN_AR, WPN_SR, WPN_PT, WPN_KN, WPN_GR + NADE_FRAG,
+                                          WPN_GR + NADE_SMOKE, WPN_GR + NADE_INC};
+  for (int k = 0; k < SEL_COUNT; k++) {
+    if (!held[SLOT_KEY[k]] || p->prev_held[SLOT_KEY[k]]) continue;
+    sel = SLOT_SEL[k];
+    // A grenade key for a kind you have none of: whichever grenade you do have.
+    if (sel >= WPN_GR && !sel_avail(ent, w, sel))
+      for (int g = 0; g < NADE_KINDS; g++)
+        if (sel_avail(ent, w, WPN_GR + g)) { sel = WPN_GR + g; break; }
   }
+  if (sel >= 0 && !sel_avail(ent, w, sel)) sel = -1;
+  int want = -1;
+  if (sel >= WPN_GR) {
+    // Another kind is only taken while the pin is still in.
+    if (nade_idle) {
+      if (sel - WPN_GR != w->gr_kind) {
+        nade_swap_to(w, sel - WPN_GR);
+        if (w->cur == WPN_GR)
+          ev_push((event_t){.type = EV_NADE, .k = 3, .a = p->pos, .src = ent, .dst = -1});
+      }
+      want = WPN_GR;
+    }
+  } else if (sel >= 0) {
+    want = sel;
+  }
+  // THE MODE'S WEAPON GATE: a weapon in the hands that the mode no longer
+  // allows — a GUN GAME promotion, a respawn preference — is swapped out.
   if (want < 0 && !mode_allowed(ent, w->cur)) want = mode_primary(ent);
-  // No grenades left: the cycle steps past the slot and the key does nothing.
-  if (want == WPN_GR && w->ammo[WPN_GR] <= 0)
-    want = cycling && mode_allowed(ent, WPN_AR) ? WPN_AR : -1;
+  // The kind in the slot spent but another left: it comes forward.
+  if (want == WPN_GR && w->ammo[WPN_GR] <= 0 && nade_others(w) > 0 && nade_idle) nade_swap(w);
+  // No grenades left: nothing to draw.
+  if (want == WPN_GR && w->ammo[WPN_GR] <= 0) want = -1;
   // A live grenade stays in the hand: the pin does not go back in.
   if (w->gr_cook > 0 || w->gr_t > 0) want = -1;
   // Dying with the pin out drops it where you fall, on what is left of the fuse.
   if (!p->alive && w->gr_cook > 0) {
     nade_throw(v3_add(p->pos, (v3){{0, 0.25f, 0}}), p->vel,
-               NADE_FUSE - w->gr_cook, ent);
+               nade_flight(w, NADE_FUSE - w->gr_cook), ent, w->gr_kind);
     w->gr_cook = 0;
   }
-  if (want >= 0 && want != w->cur && w->switch_t == 0) {
+  if (want >= 0 && want != w->cur) {
     if (want == WPN_GR) {
       w->gr_prev = w->cur;
       ev_push((event_t){.type = EV_NADE, .k = 3, .a = p->pos, .src = ent, .dst = -1});
@@ -201,28 +242,77 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
     return;
   }
 
-  gun_reload_tick(w);
+  if (gun_reload_tick(w))
+    ev_push((event_t){.type = EV_RELOAD, .src = ent, .a = p->pos, .wpn = w->cur, .k = 2});
+  // A TUBE'S RELOAD IS CUT SHORT BY THE TRIGGER: the shells already in are in,
+  // and the gun fires — CS2's shotgun rhythm, load two and shoot.
+  if (w->reload_t > 0 && gun_tube(w) && held[IN_FIRE] && !p->prev_held[IN_FIRE] &&
+      w->ammo[w->cur] > 0) {
+    w->reload_t = 0;
+    ev_push((event_t){.type = EV_RELOAD_CANCEL, .src = ent, .a = p->pos, .wpn = w->cur});
+    busy = w->switch_t > 0;
+  }
+  // FIRE MODE (CS2's secondary fire): the burst, the fanned hammer.
+  {
+    const wpn_var_t *vr = wvrow(w, w->cur);
+    if (held[IN_ALTFIRE] && !p->prev_held[IN_ALTFIRE] && vr && vr->alt) {
+      w->alt[w->cur] ^= 1;
+      w->burst_n = 0;
+      w->cock_t = 0;
+      ev_push((event_t){.type = EV_DRYFIRE, .src = ent, .a = p->pos});   // the selector's click
+    }
+  }
   // AUTO RELOAD: an empty magazine starts its own reload as soon as the last shot
   // has cycled. Same path as the key, so it predicts, sounds and animates alike,
   // and a swap onto an empty weapon reloads once the raise finishes.
   int auto_rl = w->ammo[w->cur] == 0 && w->cool[w->cur] == 0 && p->alive;  // the grenade returned above
   if (((held[IN_RELOAD] && !p->prev_held[IN_RELOAD] && !rescue_reload_block(p)) || auto_rl) && !busy &&
       w->ammo[w->cur] < def->mag) {
-    w->reload_tac = w->ammo[w->cur] > 0;
-    w->reload_t = w->reload_tac ? def->reload_tac_ticks : def->reload_ticks;
+    int rk = gun_reload_start(w);
     w->fresh = 0;
     w->dry_done = 0;         // ...and so does a fresh magazine
     // .src AND .a, mirroring the bot push: with .src set and .a zero the
     // audio router takes the audio_place branch and pans a remote reload to
     // the ARENA ORIGIN (screen centre) — no proof watches reload panning.
     ev_push((event_t){.type = EV_RELOAD, .src = ent, .a = p->pos,
-                      .wpn = w->cur, .k = w->reload_tac});
+                      .wpn = w->cur, .k = rk});
   }
 
   // Full-auto weapons fire while held; semi/bolt only on the press edge.
   // No shots from the dead or after the match ended.
   int trigger = held[IN_FIRE] && p->alive && !g_match.over &&
                 (def->full_auto || !p->prev_held[IN_FIRE]);
+  const wpn_var_t *vr = wvrow(w, w->cur);
+  int ready = w->cool[w->cur] == 0 && w->reload_t == 0 && w->switch_t == 0 && w->stagger_t == 0;
+  // THE BURST: a press with the burst selected fires three, the gun's own gap
+  // between them (BURST_GAP) and a longer one after (BURST_REST).
+  if (vr && vr->alt == ALT_BURST && w->alt[w->cur]) {
+    if (trigger && ready && w->burst_n == 0 && w->ammo[w->cur] > 0) w->burst_n = 3;
+    trigger = 0;
+    if (w->burst_n > 0 && p->alive && ready) {
+      if (w->ammo[w->cur] > 0) {
+        weapon_fire(p, ent);
+        w->burst_n--;
+        int fam = w->cur == WPN_AR;
+        w->cool[w->cur] = w->burst_n > 0 ? (fam ? 9 : 6) : (fam ? 42 : 54);
+      }
+      if (w->ammo[w->cur] <= 0) w->burst_n = 0;
+    }
+  }
+  // THE R8'S HAMMER: held, the hammer comes back for R8_COCK_T and the round
+  // goes; released early, it eases home. FIRE MODE fans it instead: every press
+  // fires at once, fast and wild (the bloom does the wildness).
+  if (vr && vr->alt == ALT_R8) {
+    if (w->alt[w->cur]) {
+      w->cock_t = 0;
+    } else {
+      enum { R8_COCK_T = 43 };   // 0.36 s
+      int pull = held[IN_FIRE] && p->alive && !g_match.over && ready && w->ammo[w->cur] > 0;
+      w->cock_t = pull ? w->cock_t + 1 : 0;
+      trigger = pull && w->cock_t >= R8_COCK_T;
+      if (trigger) w->cock_t = 0;
+    }
+  }
   // THE DRY CLICK IS A LATCH, NOT AN EDGE. `trigger` is already false on every
   // held tick of a semi/bolt weapon, so the latch alone gives exactly one click
   // per press there and exactly one for a full-auto weapon that runs dry under
@@ -231,7 +321,13 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   if (!held[IN_FIRE]) w->dry_done = 0;
   if (trigger && w->cool[w->cur] == 0 && w->reload_t == 0 && w->switch_t == 0 &&
       w->stagger_t == 0) {
-    if (w->ammo[w->cur] > 0) weapon_fire(p, ent);
+    if (w->ammo[w->cur] > 0) {
+      weapon_fire(p, ent);
+      if (vr && vr->alt == ALT_R8 && w->alt[w->cur]) {   // the fan: quick and loose
+        w->cool[w->cur] = 30;
+        w->bloom = fminf(w->bloom + 2.4f, GUN_BLOOM_CAP);
+      }
+    }
     else if (!w->dry_done) {
       ev_push((event_t){.type = EV_DRYFIRE, .src = ent, .a = p->pos});
       w->dry_done = 1;
@@ -255,6 +351,65 @@ static void vm_spring(float *x, float *xv, float target, float hz, float zeta) {
   *xv += (w * w * (target - *x) - 2.0f * zeta * w * *xv) * TICK_DT;
   *x += *xv * TICK_DT;
 }
+// The viewmodel's keyframed clips: lengths in ticks (the keys themselves live
+// with the pose, in viewmodel.c). An INSPECT is asked for; a FIDGET is what the
+// hands do on their own after VMC_IDLE_AFTER ticks of nobody touching anything.
+enum { VMC_NONE, VMC_KN_INSP, VMC_PT_INSP, VMC_KN_IDLE, VMC_PT_IDLE, VMC_N };
+static const int VMC_LEN[VMC_N] = {0, 456, 468, 204, 216};
+#define VMC_IDLE_AFTER 1080   // 9 s
+static void vm_clip_tick(player_t *p, float dyaw, float dpit) {
+  vm_t *v = &p->vm;
+  const weapon_t *w = &p->wp;
+  int cur = w->cur;
+  v->prev_clip_t = v->clip_t;
+  v->prev_clip_k = v->clip_k;
+  // Anything the weapon is really doing outranks a look at it.
+  int able = p->alive && (cur == WPN_KN || cur == WPN_PT) && w->switch_t == 0 &&
+             w->reload_t == 0 && w->melee_t == 0 && w->stagger_t == 0 &&
+             w->ads_s < 0.02f && w->block_k < 0.05f && w->cool[cur] == 0;
+  int req = v->insp_req;
+  v->insp_req = 0;
+  if (v->clip && (!able || cur != v->clip_w)) {
+    // Interrupted: freeze the pose where it is and bleed it out over ~5 ticks.
+    v->clip_k -= 0.2f;
+    if (v->clip_k <= 0.0f || cur != v->clip_w) {
+      v->clip = 0; v->clip_k = v->prev_clip_k = 0.0f;
+      v->clip_t = v->prev_clip_t = 0.0f;
+    }
+    v->idle_t = 0;
+    return;
+  }
+  if (req && able && (v->clip == VMC_NONE || v->clip == VMC_KN_IDLE || v->clip == VMC_PT_IDLE)) {
+    v->clip = cur == WPN_KN ? VMC_KN_INSP : VMC_PT_INSP;
+    v->clip_w = cur;
+    v->clip_t = v->prev_clip_t = 0.0f;
+    v->clip_k = v->prev_clip_k = 1.0f;
+    v->idle_t = 0;
+    return;
+  }
+  // Left alone: no button, no look, standing still.
+  int quiet = able && v->clip == VMC_NONE && p->grounded &&
+              p->vel.x * p->vel.x + p->vel.z * p->vel.z < 0.09f &&
+              fabsf(dyaw) + fabsf(dpit) < 0.0004f;
+  for (int i = 0; i < IN_COUNT && quiet; i++) if (p->prev_held[i]) quiet = 0;
+  v->idle_t = quiet ? v->idle_t + 1 : 0;
+  if (v->idle_t >= VMC_IDLE_AFTER) {
+    v->clip = cur == WPN_KN ? VMC_KN_IDLE : VMC_PT_IDLE;
+    v->clip_w = cur;
+    v->clip_t = v->prev_clip_t = 0.0f;
+    v->clip_k = v->prev_clip_k = 1.0f;
+    // Not on a metronome: every other fidget waits a little longer.
+    v->idle_t = (v->fidget_n++ & 1) ? -420 : 0;
+    return;
+  }
+  if (v->clip) {
+    v->clip_t += 1.0f;
+    if (v->clip_t >= (float)VMC_LEN[v->clip]) {
+      v->clip = 0; v->clip_k = v->prev_clip_k = 0.0f;
+      v->clip_t = v->prev_clip_t = 0.0f;
+    }
+  }
+}
 static void vm_tick(player_t *p) {
   vm_t *v = &p->vm;
   float sc = g_cfg.wp[p->wp.cur][WP_SWAY];
@@ -268,6 +423,7 @@ static void vm_tick(player_t *p) {
   // Look sway: the gun trails the view's angular velocity.
   float dyaw = p->yaw - v->last_yaw, dpit = p->pitch - v->last_pitch;
   v->last_yaw = p->yaw; v->last_pitch = p->pitch;
+  vm_clip_tick(p, dyaw, dpit);
   float damp = 1.0f - 0.88f * p->wp.ads_s;  // ADS pins the sight
   v->prev_twist = v->twist;
   v->prev_wall = v->wall;
@@ -578,6 +734,7 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
     g_score_held = held[IN_SCORE];
     if (held[IN_VIEW] && !p->prev_held[IN_VIEW])
       g_cfg.third_person = !g_cfg.third_person;
+    if (held[IN_INSPECT] && !p->prev_held[IN_INSPECT]) p->vm.insp_req = 1;
   }
 
   // A jump press is buffered for a few ticks so a press just before landing

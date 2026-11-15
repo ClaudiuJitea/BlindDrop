@@ -1,13 +1,200 @@
 // code/render/frame.c — part of the game.c unity build: #included by code/game.c at a
 // fixed position, never compiled on its own. See the file map there.
+
+// THE WEAPON CAROUSEL: the selection list (sim/weapon.c sel_*) drawn up the right
+// edge over the ammo count, for a moment after the selection changes or any
+// selection key (NEXT, PREV, the wheel, 1-7) is pressed — so a scroll shows
+// where it is in the list and what is next. One row per entry the mode allows:
+// its key, its name, a grenade's count; the one in the hands lit in BONE with a
+// BLAZE bar, the rest in HAZE, and a grenade you have none of dimmed.
+static void hud_carousel(const player_t *p, float rxe, float ybot) {
+  static int last = -1;
+  static float shown = -100.0f;
+  int cur = sel_of(&p->wp);
+  int poked = p->prev_held[IN_SWAP] || p->prev_held[IN_SWAP_PREV];
+  for (int k = IN_SLOT1; k <= IN_SLOT7; k++) poked |= p->prev_held[k];
+  if (last < 0) last = cur;                        // a spawn is not a selection
+  if (cur != last || poked) shown = g_ui_time;
+  last = cur;
+  float age = g_ui_time - shown;
+  if (age > 1.8f || age < 0.0f || !p->alive) return;
+  float fa = 1.0f - f_clamp((age - 1.4f) / 0.4f, 0.0f, 1.0f);
+  int ent = g_local_ent;
+  const char *names[SEL_COUNT] = {
+    wvar_name(WPN_AR, wvar(&p->wp, WPN_AR)), wvar_name(WPN_SR, wvar(&p->wp, WPN_SR)),
+    wvar_name(WPN_PT, wvar(&p->wp, WPN_PT)), "KNIFE", "FRAG", "SMOKE", "INCENDIARY"};
+  float y = ybot;
+  for (int s = SEL_COUNT - 1; s >= 0; s--) {
+    int allowed = s < WPN_GR ? mode_allowed(ent, s) : mode_allowed(ent, WPN_GR) &&
+                  (s == WPN_GR + NADE_FRAG || (game_mode() != GM_GUN && game_mode() != GM_BLADES));
+    if (!allowed) continue;
+    int have = sel_avail(ent, &p->wp, s), on = s == cur;
+    y -= 10.0f;
+    char key[4], nm[32];
+    snprintf(key, sizeof key, "%d", s + 1);
+    if (s >= WPN_GR && nade_count(&p->wp, s - WPN_GR) > 1)
+      snprintf(nm, sizeof nm, "%s x%d", names[s], nade_count(&p->wp, s - WPN_GR));
+    else
+      snprintf(nm, sizeof nm, "%s", names[s]);
+    float a = fa * (on ? 1.0f : have ? 0.70f : 0.25f);
+    if (on) {
+      ui_rect(rxe - 104.0f, y - 1.5f, 104.0f, 9.0f, 0.02f, 0.03f, 0.04f, 0.45f * fa);
+      ui_rect(rxe - 2.0f, y - 1.5f, 2.0f, 9.0f, C_BLAZE, 0.95f * fa);
+    }
+    float kx = rxe - 10.0f;
+    ui_text_sh(key, kx, y, 0.75f, on ? TXT_BOLD : TXT_REG, 0,
+               on ? C4(C_BLAZE, a) : C4(C_HAZE, a));
+    float nw = ui_text_width_tr(nm, 0.75f, 1.0f);
+    ui_text_sh(nm, kx - 6.0f - nw, y, 0.75f, on ? TXT_BOLD : TXT_REG, 1.0f,
+               on ? C4(C_BONE, a) : C4(C_HAZE, a));
+  }
+}
+
+// THE ARMORY'S CHARACTER PREVIEW: the player's own operator, built by the same
+// figure builder every figure uses, in the armory's gear and holding the weapon
+// the page says (g_prev_wpn) in its picked variants — the picks are applied at
+// the next spawn, so the variants are patched onto the player's weapon for the
+// length of this one draw and put back. A clean standing pose from its own
+// reset anim_t, turned by the turntable, lit by the viewmodel's hero rig over
+// the world's own light at the player's position, against a dark studio fill.
+static void preview_render(v3 main_eye, const mat4 *main_vp) {
+  static anim_t pa;
+  player_t *pl = &g_players[0];
+  v3 pos = pl->pos;
+  float fyaw = F_PI + g_prev_yaw;
+  anim_reset(&pa, pos, fyaw);
+  weapon_t pw = pl->wp;
+  pw.var[WPN_AR] = armory_idx(g_cfg.rifle_var, RV_N);
+  pw.var[WPN_PT] = armory_idx(g_cfg.pistol_var, PV_N);
+  pw.var[WPN_SR] = armory_idx(g_cfg.sniper_var, SV_N);
+  pw.cur = g_prev_wpn;
+  pw.reload_t = pw.switch_t = pw.melee_t = pw.cool[pw.cur] = 0;
+  pw.ammo[pw.cur] = wdef(&pw, pw.cur)->mag;
+  pw.ads_s = pw.prev_ads_s = 0.0f;
+  int saved_var[WPN_COUNT];
+  memcpy(saved_var, pl->wp.var, sizeof saved_var);
+  memcpy(pl->wp.var, pw.var, sizeof saved_var);
+  // the camera: a long lens on the chest, a little above it
+  float dist = 5.4f, fov = 24.0f * DEG2RAD, aspect = (float)PREV_W / (float)PREV_H;
+  v3 tgt = v3_add(pos, (v3){{0.0f, 0.93f, 0.0f}});
+  float cpit = -0.06f;
+  v3 fwd, rgt, upv;
+  cam_basis(0.0f, cpit, 0.0f, &fwd, &rgt, &upv);
+  v3 eye = v3_sub(tgt, v3_scale(fwd, dist));
+  mat4 vp = m4_mul(m4_perspective(fov, aspect, 0.05f, 40.0f), m4_look(eye, 0.0f, cpit, 0.0f));
+  GLfloat cc[4];
+  glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+  rt_bind(R.prev_fbo, PREV_W, PREV_H);
+  glClearColor(0.018f, 0.022f, 0.030f, 1.0f);   // a dark studio: the lit accents carry
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glClearColor(cc[0], cc[1], cc[2], cc[3]);
+  glUseProgram(R.prog_world);
+  glEnable(GL_DEPTH_TEST);
+  glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, vp.m);
+  glUniform3f(R.u_eye, eye.x, eye.y, eye.z);
+  glUniform1f(R.u_vm, 2.0f);   // the hero rig, armory variant (see the shader's rim)
+  v3 fl = v3_norm(v3_add(v3_scale(rgt, -0.45f), v3_add(v3_scale(upv, 0.70f), v3_scale(fwd, -0.55f))));
+  v3 rm = v3_norm(v3_add(v3_scale(rgt, 0.75f), v3_add(v3_scale(upv, 0.20f), v3_scale(fwd, 0.62f))));
+  glUniform3f(R.u_fill, fl.x, fl.y, fl.z);
+  glUniform3f(R.u_rim, rm.x, rm.y, rm.z);
+  glUniform3f(R.u_muzc, 0.0f, 0.0f, 0.0f);
+  v3 ce = g_cam_eye;
+  g_cam_eye = eye;                // the figure picks its detail tier from here
+  scene_reset();
+  g_fig_team = g_local_ent >= 0 ? fig_team_of(g_local_ent) : -1;
+  g_fig_ins = 0;
+  g_fig_var = 0;
+  g_fig_gear = armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT);
+  g_tp_theme = (armory_theme()->pat > 0.0f ? armory_theme() : NULL);
+  fig_own_pieces(1);
+  g_fig_ent = ent_of_human(0);
+  g_fig_nade_kind = 0;
+  // No swap in flight: the swap clock runs on the sim tick, which a menu pauses,
+  // and the state is the live figure's — so it is set settled and put back.
+  int se = g_fig_ent, sv_seen = g_sw_seen[se], sv_from = g_sw_from[se];
+  float sv_t0 = g_sw_t0[se];
+  g_sw_seen[se] = pw.cur + 1; g_sw_from[se] = pw.cur; g_sw_t0[se] = -1e9f;
+  scene_draw_figure(&pa, pos, fyaw, NULL, 1.0f, 0.0f, (v3){{1, 1, 1}}, 1, pw.cur, gun_anim(&pw, 1.0f));
+  g_sw_seen[se] = sv_seen; g_sw_from[se] = sv_from; g_sw_t0[se] = sv_t0;
+  scene_draw();
+  g_fig_team = -1; g_fig_gear = -1; g_tp_theme = NULL; fig_own_pieces(0); g_fig_ent = -1;
+  g_cam_eye = ce;
+  memcpy(pl->wp.var, saved_var, sizeof saved_var);
+  glUniform1f(R.u_vm, 0.0f);
+  glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, main_vp->m);
+  glUniform3f(R.u_eye, main_eye.x, main_eye.y, main_eye.z);
+  rt_bind(scene_target(), R.width, R.height);
+}
+
+// ONE BLOOD BLOT on the lens: a dark core, a wetter inner pool, ragged lobes,
+// flung droplets and drips that run with `age` (0 fresh .. 1 old). `drip`
+// scales how far the drips have run. Seeded, so a blot keeps its shape.
+// A blood disk, tessellated by size (a 2 px droplet does not need 32 segments,
+// and the lens can carry hundreds of them), flushing the batch before it fills.
+static void bdisk(float x, float y, float r, float cr, float cg, float cb, float a) {
+  if (g_ui_nverts > UI_MAX_VERTS - 600) { ui_flush(); g_ui_nverts = 0; }
+  ui_diskn(x, y, r, r < 2.5f ? 6 : r < 8.0f ? 10 : r < 20.0f ? 16 : 24, (float[4]){cr, cg, cb, a});
+}
+static void blood_blot(float x, float y, float r, float a, uint32_t seed, float age, float drip) {
+  uint32_t h = seed ? seed : 1u;
+  bdisk(x, y, r, 0.17f, 0.008f, 0.012f, a * 0.85f);
+  bdisk(x + (splat_rand(&h) - 0.5f) * r * 0.5f, y + (splat_rand(&h) - 0.5f) * r * 0.5f, r * 0.74f,
+          0.38f, 0.025f, 0.030f, a * 0.85f);
+  for (int k = 0; k < 6; k++) {
+    float an = splat_rand(&h) * 6.2832f, d = r * (0.50f + 0.40f * splat_rand(&h));
+    bdisk(x + cosf(an) * d, y + sinf(an) * d, r * (0.28f + 0.26f * splat_rand(&h)),
+            0.26f, 0.016f, 0.020f, a * 0.80f);
+  }
+  {                                     // a smear stroke dragged off the blot
+    float an = splat_rand(&h) * 6.2832f, cx = cosf(an), cy = sinf(an);
+    for (int k = 1; k <= 7; k++) {
+      float d = r * 0.42f * (float)k, rr = r * (0.62f - 0.07f * (float)k);
+      bdisk(x + cx * d, y + cy * d, rr, 0.24f, 0.014f, 0.018f, a * (0.70f - 0.06f * (float)k));
+    }
+  }
+  bdisk(x - r * 0.22f, y - r * 0.26f, r * 0.20f, 0.62f, 0.10f, 0.10f, a * 0.30f);   // wet highlight
+  int nd = 8 + (int)(splat_rand(&h) * 8.0f);
+  for (int k = 0; k < nd; k++) {
+    float an = splat_rand(&h) * 6.2832f, d = r * (1.10f + 1.6f * splat_rand(&h));
+    bdisk(x + cosf(an) * d, y + sinf(an) * d, r * (0.04f + 0.12f * splat_rand(&h)),
+            0.30f, 0.02f, 0.025f, a * 0.75f);
+  }
+  int ndr = 1 + (int)(splat_rand(&h) * 3.99f);
+  for (int k = 0; k < ndr; k++) {
+    float dx2 = (splat_rand(&h) - 0.5f) * r * 1.3f, wv = r * (0.06f + 0.06f * splat_rand(&h));
+    float len = r * drip * (0.3f + (0.8f + 1.8f * splat_rand(&h)) * fminf(1.0f, age * 2.2f));
+    float y0 = y + r * 0.2f;
+    ui_rect(x + dx2 - wv, y0, 2.0f * wv, len, 0.30f, 0.02f, 0.025f, a * 0.78f);
+    bdisk(x + dx2, y0 + len, wv * 1.5f, 0.30f, 0.02f, 0.025f, a * 0.78f);
+  }
+}
+
 static void render_frame(const player_t *p, float alpha, int fps,
                          const cam_override_t *ov) {
   atm_upload();
-  if (g_world_dirty) { world_upload(); g_world_dirty = 0; }
+  if (g_world_dirty) { world_upload(); g_world_dirty = 0; SV.dirty = 1; }
   msaa_update();
   scene_update();
   R.frame_no++;
   R.vm_drawn = 0;
+  // Wound grading for the composite (post.c, uHurt): only for a living body
+  // seen from its own eyes, and never in the home scene.
+  {
+    float hp01 = f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f);
+    int on = p->alive && !g_home && !(ov && (ov->active || ov->bot || ov->orbit));
+    float sv = f_clamp((0.76f - hp01) / 0.62f, 0.0f, 1.0f);
+    sv = sv * sv * (3.0f - 2.0f * sv);
+    float hb = 0.0f;
+    if (sv > 0.0f) {   // lub-dub, quicker as the health runs out
+      float ph = g_ui_time * (1.15f + 0.9f * sv);
+      ph -= floorf(ph);
+      hb = expf(-ph * 11.0f) + (ph > 0.22f ? 0.65f * expf(-(ph - 0.22f) * 11.0f) : 0.0f);
+      hb = f_clamp(hb, 0.0f, 1.0f);
+    }
+    g_hurt_u[0] = on ? g_hurt_kick : 0.0f;
+    g_hurt_u[1] = on ? sv : 0.0f;
+    g_hurt_u[2] = on ? hb : 0.0f;
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, scene_target());
   v3 feet = v3_lerp(p->prev_pos, p->pos, alpha);
   float eye_h = p->prev_eye + (p->eye - p->prev_eye) * alpha
@@ -30,6 +217,16 @@ static void render_frame(const player_t *p, float alpha, int fps,
   float ads = w->prev_ads_s + (w->ads_s - w->prev_ads_s) * alpha;
   float yaw = p->yaw + rec_y * DEG2RAD;
   float pitch = f_clamp(p->pitch + rec_p * DEG2RAD, -PITCH_MAX, PITCH_MAX);
+  // THE SHOULDER CAM'S POINT OF IMPACT. The round leaves the EYE along the
+  // aim, but the shoulder camera sits 0.58 m right of it and 2.7 m behind, so
+  // the screen centre is NOT where the round goes: it lands left of centre by
+  // a parallax that grows as the target closes (≈20 px at 20 m, ≈80 px at
+  // 3 m), and a corner the camera sees past can stop the round dead while the
+  // centre shows a clear line. The HUD draws the crosshair on the projection
+  // of the round's own trace instead (taken before the shake, which is camera
+  // only), and flags a line that cover blocks short of what the camera sees.
+  int tp_aim = 0, tp_blocked = 0, cam_cut = 0;
+  v3 tp_aim_at = eye;
   // The boot screen owns the camera while it is up. It goes through the SAME
   // override the harness uses rather than beside it, so `cam_free` and every
   // decision that hangs off it — the own-body draw, the suppressed crosshair,
@@ -66,9 +263,20 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // starting inside a solid reports no hit and the camera would tunnel).
     // Aim direction is untouched — shots still leave the player's eye
     // exactly where the sim says.
+    {
+      float ay = p->yaw + rec_y * DEG2RAD;
+      float ap = f_clamp(p->pitch + rec_p * DEG2RAD, -PITCH_MAX, PITCH_MAX);
+      v3 ad = {{cosf(ap) * sinf(ay), sinf(ap), -cosf(ap) * cosf(ay)}};
+      v3 an;
+      int part;
+      float ad_t = trace_world(eye, ad, &an, NULL);
+      ent_trace(g_local_ent, eye, ad, &ad_t, &part);
+      tp_aim_at = v3_add(eye, v3_scale(ad, ad_t));
+      tp_aim = 1;
+    }
     v3 fwd = {{cosf(pitch) * sinf(yaw), sinf(pitch), -cosf(pitch) * cosf(yaw)}};
     v3 rgt = v3_norm(v3_cross(fwd, (v3){{0, 1, 0}}));
-    v3 side = v3_add(v3_scale(rgt, 0.34f), (v3){{0, 0.10f, 0}});
+    v3 side = v3_add(v3_scale(rgt, 0.58f), (v3){{0, 0.16f, 0}});  // clear of the helmet
     float slen = v3_len(side);
     v3 sdir = v3_scale(side, 1.0f / slen);
     for (int i = 0; i < g_num_solids; i++) {
@@ -86,6 +294,16 @@ static void render_frame(const player_t *p, float alpha, int fps,
     tp_dist = f_clamp(tp_dist, 0.30f, 2.7f);
     eye = v3_add(pivot, v3_scale(back, tp_dist));
     if (eye.y < 0.10f) eye.y = 0.10f;
+    {  // What the camera centre sees, for the blocked-line flag.
+      v3 cn;
+      int part;
+      float ct = trace_world(eye, fwd, &cn, NULL);
+      ent_trace(g_local_ent, eye, fwd, &ct, &part);
+      float at = v3_len(v3_sub(tp_aim_at, eye));
+      // Blocked: the round stops well short of the surface under the centre
+      // (a corner or a lip of cover between the muzzle and the target).
+      tp_blocked = at < ct - 1.5f && at < 0.75f * ct;
+    }
   }
   // THE SPECTATOR CHASE CAM (LAST MAN STANDING, while out of the round): over
   // the followed combatant's shoulder along their own yaw, pulled in by any
@@ -154,7 +372,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // the reprojection instead of smearing the first frame of the new view.
     static v3 pe, pf;
     v3 cf = {{cosf(pitch) * sinf(yaw), sinf(pitch), -cosf(pitch) * cosf(yaw)}};
-    if (v3_len(v3_sub(eye, pe)) > 1.5f || v3_dot(cf, pf) < 0.77f) R.have_prev = 0;
+    if (v3_len(v3_sub(eye, pe)) > 1.5f || v3_dot(cf, pf) < 0.77f) R.have_prev = 0, cam_cut = 1;
     pe = eye; pf = cf;
   }
   R.tan_y = tanf(fovy * 0.5f);
@@ -186,6 +404,11 @@ static void render_frame(const player_t *p, float alpha, int fps,
 
   // Sun shadows. One ortho map over the whole arena, centred on it, far enough
   // back along the sun that nothing in the level is behind the near plane.
+  // The map's sky visibility (render/skyvis.c): rebuilt here after a new world,
+  // BEFORE the shadow pass, which leaves its map bound on unit 0 for the lit
+  // passes. Bound on unit 7 for every world-program draw of the frame.
+  sv_bind();
+  rt_bind(scene_target(), R.width, R.height);
   int shadow_on = R.sm_fbo != 0;
   if (shadow_on) {
     v3 ld = v3_scale(atm_sun(), -1.0f);
@@ -409,6 +632,43 @@ static void render_frame(const player_t *p, float alpha, int fps,
     glBlendFunc(GL_ONE, GL_ONE);
     fx_pass_end();
   }
+  // SMOKE GRENADE CLOUDS (fx_pass.c smoke_prep): transmittance, then the
+  // smoke's own light, both raw (uEmis 2) — and through the scope too, or a
+  // sniper would be the one player a smoke does not blind.
+  {
+    v3 sf, sr, su;
+    cam_basis(yaw, pitch, roll, &sf, &sr, &su);
+    smoke_prep(eye, sf);
+  }
+  // THE ALPHA CHANNEL is the post pass's "static world" weight for the sun
+  // glints on convex edges, found from DEPTH — which smoke never writes, so
+  // every crease behind a cloud used to shine straight through it as a white
+  // line. A third draw multiplies the alpha by the same transmittance (uEmis 3
+  // writes it to alpha), so a glint fades behind smoke exactly as the wall
+  // under it does. The colour passes leave alpha alone.
+  if (g_smk_npuff) {
+    fx_pass_begin();
+    for (int sp = 0; sp < 3; sp++) {
+      smoke_build(eye, sp == 1 ? 1 : 0);
+      if (!g_scene_floats) continue;
+      glUniform1f(R.u_emis, sp == 2 ? 3.0f : 2.0f);
+      if (sp == 2) glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_TRUE);
+      else glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+      glBlendFunc(sp == 0 ? GL_DST_COLOR : sp == 1 ? GL_ONE : GL_ZERO,
+                  sp == 0 ? GL_ZERO : sp == 1 ? GL_ONE : GL_SRC_ALPHA);
+      scene_draw_vp(&vp);
+      if (scope_on) {
+        rt_bind(R.scope_fbo, R.scope_size, R.scope_size);
+        glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, svp.m);
+        scene_draw_vp(&svp);
+        rt_bind(scene_target(), R.width, R.height);
+        glUniformMatrix4fv(R.u_vp, 1, GL_FALSE, vp.m);
+      }
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBlendFunc(GL_ONE, GL_ONE);
+    fx_pass_end();
+  }
   fx_build(eye);
   if (g_scene_floats) {
     fx_pass_begin();
@@ -587,9 +847,15 @@ static void render_frame(const player_t *p, float alpha, int fps,
       glUniform3fv(uloc(R.prog_world, "uSkinD"), 1, th->d);
       // The display's "on" colour at the shipped amber is (1, .55, .12): the
       // LED's authored colour pushed redder the way the inlay shader does.
-      if (gt == GEAR_THEMES) glUniform3f(uloc(R.prog_world, "uWristOn"), 1.0f, 0.55f, 0.12f);
-      else glUniform3f(uloc(R.prog_world, "uWristOn"), gt->led[0], gt->led[1] * 0.887f,
-                       gt->led[2] * 1.2f);
+      // The wrist DISPLAY is an ammo readout, not a gear accent: it keeps the
+      // lit per-outfit colour the `led` column had before v5 dimmed the inlays.
+      static const float WRIST_ON[GEAR_THEME_COUNT][3] = {
+        {1.00f, 0.62f, 0.10f}, {1.00f, 0.62f, 0.10f}, {0.45f, 1.00f, 0.30f},
+        {1.00f, 0.16f, 0.08f}, {0.25f, 0.80f, 1.00f}, {0.20f, 0.95f, 1.00f}};
+      int gi = (int)(gt - GEAR_THEMES);
+      if (gi == 0) glUniform3f(uloc(R.prog_world, "uWristOn"), 1.0f, 0.55f, 0.12f);
+      else glUniform3f(uloc(R.prog_world, "uWristOn"), WRIST_ON[gi][0], WRIST_ON[gi][1] * 0.887f,
+                       WRIST_ON[gi][2] * 1.2f);
     }
     glUniform3f(R.u_mdlo, g_vm_mdl_o.x, g_vm_mdl_o.y, g_vm_mdl_o.z);
     glUniform3f(R.u_mdlx, g_vm_mdl_x.x, g_vm_mdl_x.y, g_vm_mdl_x.z);
@@ -622,6 +888,9 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
   }
 
+  // The Armory's character preview, while its page is up (last frame's request).
+  if (g_prev_req && g_menu_open && R.prev_fbo) preview_render(eye, &vp);
+  g_prev_req = 0;
   // HUD + menu: everything batches into one buffer, one draw call.
   if (R.vm_drawn) depth_copy(1);   // ...and the weapon's own, for DoF and masking
   post_pass(g_cfg.post_fx && !g_vmorb.on);
@@ -749,6 +1018,83 @@ static void render_frame(const player_t *p, float alpha, int fps,
   glBindTexture(GL_TEXTURE_2D, R.font_tex);
   ui_begin();
   perf_draw();
+  if (!g_home) {
+    // BLOOD ON THE LENS, in two layers — drawn FIRST, so every readout stays on top.
+    // THE WOUND FRAME: how hurt you are, at a glance, without reading a number.
+    // A fixed set of smears round the border (re-rolled each life), each with
+    // the health below which it shows, so the frame closes in as the health
+    // runs out — a corner or two at 75, every edge crusted at 15 — and it
+    // breathes with the same heartbeat the composite pulses on.
+    if (!p->alive) memset(g_splat, 0, sizeof g_splat);
+    if (p->alive && !g_home) {
+      float hp01 = f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f);
+      float miss = 1.0f - hp01;
+      if (miss > 0.22f) {
+        uint32_t h = 0x9E3779B9u * (uint32_t)(g_cfg.st_deaths + 1) + 0x51u;
+        float beat = 0.86f + 0.14f * g_hurt_u[2];
+        const int NB = 30;
+        for (int k = 0; k < NB; k++) {
+          float thr = 0.22f + 0.70f * (float)k / (float)NB;     // health lost before it shows
+          float side = splat_rand(&h), along = splat_rand(&h), sz = splat_rand(&h);
+          float jit = splat_rand(&h);
+          uint32_t sseed = h;
+          (void)splat_rand(&h);
+          if (miss < thr) continue;
+          float grow = f_clamp((miss - thr) / 0.18f, 0.0f, 1.0f);
+          // corners first (the first few smears), then anywhere on the border
+          float x, y;
+          if (k < 6) {
+            x = (k & 1) ? g_ui_vw * (0.02f + 0.10f * along) : g_ui_vw * (0.98f - 0.10f * along);
+            y = (k & 2) ? g_ui_vh * (0.03f + 0.12f * jit) : g_ui_vh * (0.97f - 0.12f * jit);
+          } else if (side < 0.25f) { x = g_ui_vw * along; y = g_ui_vh * (0.01f + 0.05f * jit); }
+          else if (side < 0.50f) { x = g_ui_vw * along; y = g_ui_vh * (0.99f - 0.05f * jit); }
+          else if (side < 0.75f) { x = g_ui_vw * (0.01f + 0.04f * jit); y = g_ui_vh * along; }
+          else                   { x = g_ui_vw * (0.99f - 0.04f * jit); y = g_ui_vh * along; }
+          // keep the readouts clear: the health panel bottom-left, ammo bottom-right
+          if (y > g_ui_vh - 52.0f && (x < 130.0f || x > g_ui_vw - 150.0f)) y = g_ui_vh - 70.0f - 40.0f * jit;
+          float r = (14.0f + 30.0f * sz) * (0.45f + 0.55f * grow) * (0.9f + 0.5f * miss);
+          blood_blot(x, y, r * beat, (0.42f + 0.40f * miss) * (0.5f + 0.5f * grow), sseed,
+                     0.35f + 0.65f * grow, 0.55f);
+        }
+      }
+    }
+    // THE HIT SPLATS: each lands along the edge of the screen on the side the
+    // round came from — a blot, flung droplets, a spatter streak pointing back
+    // at the shooter and drips that run down while it fades.
+    for (int si = 0; si < SPLAT_N && p->alive; si++) {
+      typeof(g_splat[0]) *sp = &g_splat[si];
+      if (sp->life <= 0) continue;
+      uint32_t h = sp->seed;
+      if (!sp->placed) {
+        float ddx = sp->from.x - feet.x, ddz = sp->from.z - feet.z;
+        float rel = atan2f(ddx, -ddz) - yaw + (splat_rand(&h) - 0.5f) * 1.6f;
+        float dx = sinf(rel), dy = -cosf(rel);
+        float m = fmaxf(fabsf(dx) / (g_ui_vw * 0.5f), fabsf(dy) / (g_ui_vh * 0.5f));
+        float edge = 0.62f + 0.34f * splat_rand(&h);
+        sp->x = g_ui_vw * 0.5f + dx / m * edge;
+        sp->y = g_ui_vh * 0.5f + dy / m * edge;
+        sp->placed = 1;
+      }
+      float life01 = (float)sp->life / (float)sp->max, age = 1.0f - life01;
+      float a = fminf(1.0f, life01 * 2.5f) * 0.85f;
+      float r = sp->r * (0.70f + 0.30f * fminf(1.0f, age * 14.0f));
+      // the streak: droplets thrown inward, away from the edge it hit
+      float ix = g_ui_vw * 0.5f - sp->x, iy = g_ui_vh * 0.5f - sp->y, il = sqrtf(ix * ix + iy * iy);
+      if (il > 1.0f) {
+        ix /= il; iy /= il;
+        for (int k = 0; k < 7; k++) {
+          float d = r * (1.0f + 0.55f * (float)k) * (0.9f + 0.3f * splat_rand(&h));
+          float lat = (splat_rand(&h) - 0.5f) * r * 0.5f;
+          bdisk(sp->x + ix * d - iy * lat, sp->y + iy * d + ix * lat,
+                  r * (0.16f - 0.018f * (float)k) * (0.7f + 0.6f * splat_rand(&h)),
+                  0.34f, 0.02f, 0.025f, a * 0.8f);
+        }
+      }
+      blood_blot(sp->x, sp->y, r, a, sp->seed, age, 1.0f);
+    }
+    ui_flush(); g_ui_nverts = 0;
+
+  }
   if (g_cfg.show_fps) {
     char text[16];
     snprintf(text, sizeof text, "%d FPS", fps);
@@ -768,6 +1114,56 @@ static void render_frame(const player_t *p, float alpha, int fps,
     g_ui_vh = (float)R.height / g_uis;
     float ccx = g_ui_vw * 0.5f, ccy = g_ui_vh * 0.5f;
     int in_play = p->alive && !g_match.over;
+    // SHOULDER CAM: the crosshair rides the projection of the round's own
+    // trace (see tp_aim above), glided at ~30/s so sweeping across an edge,
+    // where the trace depth jumps, slides the mark instead of teleporting it.
+    // The screen-centre position is kept for what is centre-anchored (text).
+    float scx = ccx, scy = ccy, ch_blk = 0.0f;
+    {
+      static float tox, toy, tblk;
+      float wx = 0.0f, wy = 0.0f;
+      if (tp_aim && in_play) {
+        const float *m = R.cur_vp.m;
+        v3 q = tp_aim_at;
+        float cw = m[3] * q.x + m[7] * q.y + m[11] * q.z + m[15];
+        if (cw > 0.05f) {
+          wx = (m[0] * q.x + m[4] * q.y + m[8] * q.z + m[12]) / cw * g_ui_vw * 0.5f;
+          wy = -(m[1] * q.x + m[5] * q.y + m[9] * q.z + m[13]) / cw * g_ui_vh * 0.5f;
+          wx = f_clamp(wx, -g_ui_vw * 0.25f, g_ui_vw * 0.25f);
+          wy = f_clamp(wy, -g_ui_vh * 0.25f, g_ui_vh * 0.25f);
+        }
+      }
+      float k = 1.0f - expf(-30.0f * f_clamp(g_ui_dt, 0.0f, 0.1f));
+      if (!tp_aim || cam_cut) k = 1.0f;   // a cut snaps, never glides
+      tox += (wx - tox) * k;
+      toy += (wy - toy) * k;
+      tblk += ((tp_blocked && in_play ? 1.0f : 0.0f) - tblk) *
+              (1.0f - expf(-18.0f * f_clamp(g_ui_dt, 0.0f, 0.1f)));
+      if (!tp_aim) tblk = 0.0f;
+      ch_blk = tblk;
+      ccx += tox;
+      ccy += toy;
+      if (tblk > 0.02f) {
+        // BLOCKED: a faint ring where the camera is looking, so the eye has
+        // the line it expected, and a red cross on the crosshair, which sits
+        // on the cover that will eat the round.
+        float ba = tblk;
+        for (int i = 0; i < 16; i++) {
+          float t0 = (float)i / 16.0f * 6.2831853f, t1 = (float)(i + 1) / 16.0f * 6.2831853f;
+          float x0 = scx + cosf(t0) * 3.4f, y0 = scy + sinf(t0) * 3.4f;
+          float x1 = scx + cosf(t1) * 3.4f, y1 = scy + sinf(t1) * 3.4f;
+          ui_capsule(x0, y0, x1, y1, 0.85f, 0.02f, 0.03f, 0.04f, 0.40f * ba);
+          ui_capsule(x0, y0, x1, y1, 0.42f, 0.94f, 0.96f, 0.97f, 0.75f * ba);
+        }
+        float d = 2.2f;
+        for (int sx = -1; sx <= 1; sx += 2) {
+          ui_capsule(ccx - d, ccy - d * sx, ccx + d, ccy + d * sx, 1.10f,
+                     0.10f, 0.02f, 0.02f, 0.60f * ba);
+          ui_capsule(ccx - d, ccy - d * sx, ccx + d, ccy + d * sx, 0.60f,
+                     1.0f, 0.29f, 0.23f, 0.97f * ba);
+        }
+      }
+    }
     // Crosshair: the gap mirrors the live spread cone, so bloom/motion
     // penalties are visible before the first shot. Hidden while aiming.
     // A scoped rifle has no business showing a hip crosshair: the reticle in the
@@ -789,7 +1185,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
       // shipped mark exactly: same arms, same outline, same alpha. The gap
       // still follows the spread in every style that has one.
       int cst = armory_idx(g_cfg.ch_style, CH_STYLE_COUNT);
-      const float *cc = CH_COLORS[armory_idx(g_cfg.ch_color, CH_COLOR_COUNT)];
+      const float *cc0 = CH_COLORS[armory_idx(g_cfg.ch_color, CH_COLOR_COUNT)];
+      // Blocked shoulder-cam line: the mark itself goes THREAT red.
+      const float ccb[3] = {cc0[0] + (1.0f - cc0[0]) * ch_blk,
+                            cc0[1] + (0.29f - cc0[1]) * ch_blk,
+                            cc0[2] + (0.23f - cc0[2]) * ch_blk};
+      const float *cc = ccb;
       float cs = f_clamp(g_cfg.ch_size, 0.5f, 2.0f);
       const float armlen = 4.6f * cs;
       if (cst != 1 && cst != 3) {
@@ -830,8 +1231,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
       char fs[16];
       snprintf(fs, sizeof fs, "%.1f", (double)left);
       float fw_ = ui_text_width(fs, 1.1f);
-      if (left < 1.0f) ui_text_sh(fs, ccx - fw_ * 0.5f, ccy + 12, 1.1f, TXT_BOLD, 0, C4(1.0f, 0.29f, 0.23f, 1.0f));
-      else ui_text_sh(fs, ccx - fw_ * 0.5f, ccy + 12, 1.1f, TXT_BOLD, 0, C4(C_BONE, 0.95f));
+      if (left < 1.0f) ui_text_sh(fs, scx - fw_ * 0.5f, scy + 12, 1.1f, TXT_BOLD, 0, C4(1.0f, 0.29f, 0.23f, 1.0f));
+      else ui_text_sh(fs, scx - fw_ * 0.5f, scy + 12, 1.1f, TXT_BOLD, 0, C4(C_BONE, 0.95f));
     }
     float dot_a = f_clamp((ads - 0.78f) / 0.17f, 0.0f, 1.0f);
     float glass_a = f_clamp((ads - 0.35f) / 0.40f, 0.0f, 1.0f);
@@ -874,7 +1275,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
         if (cw > 0.05f) {
           float nx = (m[0] * q.x + m[4] * q.y + m[8] * q.z + m[12]) / cw;
           float ny = (m[1] * q.x + m[5] * q.y + m[9] * q.z + m[13]) / cw;
-          float ox = nx * g_ui_vw * 0.5f, oy = -ny * g_ui_vh * 0.5f;
+          float ox = nx * g_ui_vw * 0.5f - (ccx - scx);   // from the crosshair,
+          float oy = -ny * g_ui_vh * 0.5f - (ccy - scy);  // which 3rd person moves
           float ol = sqrtf(ox * ox + oy * oy);
           if (ol > 10.0f) { ox *= 10.0f / ol; oy *= 10.0f / ol; }
           hcx += ox; hcy += oy;
@@ -901,11 +1303,20 @@ static void render_frame(const player_t *p, float alpha, int fps,
           }
       }
     }
+    ccx = scx;   // everything below is screen-centre anchored
+    ccy = scy;
     if (in_play) {
       // Ammo and health mirror each other in the bottom corners: a large figure
       // over a thin meter. Both bleed toward THREAT as they run out, and an ink
       // shadow keeps them readable on open sky and sand.
       const float hud_mw = 92.0f, hud_bot = g_ui_vh - 13.0f;
+      // SOFT INK ANCHORS behind the two corner clusters: one radial soft sprite
+      // each, not a panel. The figures sat on whatever the world put there,
+      // and inside a smoke or against sunlit sand a white 100 held by its
+      // drop shadow alone (35_smoke_inside). Wide and faint, so on a dark
+      // frame it vanishes into it and on a pale one it is the plate.
+      ui_glow(16.0f + hud_mw * 0.42f, hud_bot - 9.0f, 74.0f, 0.012f, 0.016f, 0.024f, 0.30f);
+      ui_glow(g_ui_vw - 16.0f - hud_mw * 0.42f, hud_bot - 13.0f, 80.0f, 0.012f, 0.016f, 0.024f, 0.30f);
       if (p->wp.cur == WPN_KN) {         // a blade has no magazine to count
         float rxe = g_ui_vw - 16;
         ui_text_sh("KNIFE", rxe - ui_text_width("KNIFE", 1.25f), hud_bot - 15.0f, 1.25f,
@@ -913,6 +1324,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
       } else {
         float rxe = g_ui_vw - 16;
         int mag = wdef(&p->wp, p->wp.cur)->mag, cur = p->wp.ammo[p->wp.cur];
+        if (p->wp.cur == WPN_GR && p->wp.gr_kind == NADE_SMOKE) mag = SMOKE_CARRY;   // the canister's own count
+        if (p->wp.cur == WPN_GR && p->wp.gr_kind == NADE_INC) mag = INC_CARRY;
         float a01 = f_clamp((float)cur / (0.25f * (float)mag), 0.0f, 1.0f);
         char am[16], mg[16];
         snprintf(am, sizeof am, "%d", cur);
@@ -934,6 +1347,80 @@ static void render_frame(const player_t *p, float alpha, int fps,
         ui_rect(rxe - hud_mw * f01, hud_bot, hud_mw * f01, 2.4f, cr, cg, cb2, aa);
       }
       {
+        // WHAT IS IN THE HANDS, AND HOW MANY FRAGS ARE LEFT, over the count:
+        // the loadout's own name (M4A4, AK-47, ...) in quiet HAZE, and
+        // the grenades as pips — a full one per frag carried — because the
+        // count of a weapon you are not holding was nowhere on the HUD at all.
+        float rxe = g_ui_vw - 16, ly = hud_bot - 30.0f;
+        int cw = p->wp.cur;
+        const char *wn = cw == WPN_AR || cw == WPN_PT || cw == WPN_SR ? wvar_name(cw, wvar(&p->wp, cw))
+                       : cw == WPN_GR ? (p->wp.gr_kind == NADE_SMOKE ? "SMOKE"
+                                       : p->wp.gr_kind == NADE_INC ? "INCENDIARY" : "FRAG") : "";
+        // ...and its FIRE MODE where it has one: "FAMAS  BURST", "R8 REVOLVER  FAN".
+        char wnb[48];
+        {
+          const wpn_var_t *hv = wvrow(&p->wp, cw);
+          if (hv && hv->alt) {
+            snprintf(wnb, sizeof wnb, "%s  %s", wn,
+                     hv->alt == ALT_BURST ? (p->wp.alt[cw] ? "BURST" : wdef(&p->wp, cw)->full_auto ? "AUTO" : "SEMI")
+                                          : (p->wp.alt[cw] ? "FAN" : "HAMMER"));
+            wn = wnb;
+          }
+        }
+        float x = rxe;
+        if (mode_allowed(g_local_ent, WPN_GR)) {
+          // The smoke and the fire first (rightmost): a rounded SQUARE, the canister's
+          // outline, lit when carried — and ringed in BLAZE when it is the
+          // grenade the slot will draw.
+          int nsm = nade_smokes(&p->wp);
+          int sm_mode = game_mode() != GM_GUN && game_mode() != GM_BLADES;
+          if (sm_mode) {
+            // The incendiary rightmost: a tall narrow bar (its short fat can
+            // reads as a block at this size, so it is coloured, not shaped),
+            // EMBER when carried. Then the smoke's square.
+            int nin = nade_count(&p->wp, NADE_INC);
+            float px2 = x - 3.0f, cy2 = ly + 3.4f;
+            if (p->wp.gr_kind == NADE_INC && nin > 0)
+              ui_rrect_line(px2 - 3.0f, cy2 - 3.8f, 6.0f, 7.6f, 1.2f, 0.6f, C_BLAZE, 0.9f);
+            ui_rect(px2 - 1.6f, cy2 - 2.4f, 3.2f, 4.8f, nin > 0 ? 0.95f : 0.02f,
+                    nin > 0 ? 0.42f : 0.03f, nin > 0 ? 0.12f : 0.04f, nin > 0 ? 0.90f : 0.45f);
+            // how many: three of each at spawn, more from a supply crate
+            if (nin > 1) {
+              char cn[4]; snprintf(cn, sizeof cn, "%d", nin);
+              ui_text_sh(cn, px2 + 2.6f, cy2 - 3.6f, 0.5f, TXT_BOLD, 0.6f, C4(C_BONE, 0.85f));
+            }
+            x -= 11.0f;
+            px2 = x - 3.0f;
+            if (p->wp.gr_kind == NADE_SMOKE && nsm > 0)
+              ui_rrect_line(px2 - 3.6f, cy2 - 3.6f, 7.2f, 7.2f, 1.2f, 0.6f, C_BLAZE, 0.9f);
+            ui_rect(px2 - 2.2f, cy2 - 2.2f, 4.4f, 4.4f, nsm > 0 ? 0.80f : 0.02f,
+                    nsm > 0 ? 0.82f : 0.03f, nsm > 0 ? 0.85f : 0.04f, nsm > 0 ? 0.85f : 0.45f);
+            if (nsm > 1) {
+              char cn[4]; snprintf(cn, sizeof cn, "%d", nsm);
+              ui_text_sh(cn, px2 + 3.0f, cy2 - 3.6f, 0.5f, TXT_BOLD, 0.6f, C4(C_BONE, 0.85f));
+            }
+            x -= 12.0f;
+          }
+          int ng = nade_frags(&p->wp), cap = WPN_DEF[WPN_GR].mag;
+          if (cap > 4) cap = 4;
+          for (int q = cap - 1; q >= 0; q--) {
+            float px2 = x - 3.0f;
+            if (q < ng) ui_disk(px2, ly + 3.4f, 2.2f, C_BONE, 0.85f);
+            else {
+              ui_disk(px2, ly + 3.4f, 2.2f, 0.02f, 0.03f, 0.04f, 0.45f);
+              ui_disk(px2, ly + 3.4f, 1.2f, C_HAZE, 0.35f);
+            }
+            x -= 7.0f;
+          }
+          x -= 4.0f;
+        }
+        if (wn[0] && cw != WPN_KN) {
+          float ww = ui_text_width_tr(wn, 0.6f, 1.2f);
+          ui_text_sh(wn, x - ww, ly + 1.0f, 0.6f, TXT_REG, 1.2f, C4(C_BONE, 0.72f));
+        }
+        hud_carousel(p, rxe, ly - 4.0f);
+      }
+      {
         float hp01 = f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f);
         float tt = 1.0f - hp01;
         float cr = 0.941f + (1.000f - 0.941f) * tt;
@@ -942,7 +1429,22 @@ static void render_frame(const player_t *p, float alpha, int fps,
         char hps[8];
         snprintf(hps, sizeof hps, "%d", p->hp);
         float pulse = p->hp <= 25 ? 0.65f + 0.30f * sinf(g_ui_time * 7.0f) : 0.96f;
-        ui_text_sh(hps, 16, hud_bot - 19.5f, 1.9f, TXT_BOLD, 0, C4(cr, cg, cb2, pulse));
+        // THE CROSS names the figure: the two corners mirror each other in
+        // size and weight, so health was told from ammo by position alone.
+        // A square-armed cross centred on the numeral's cap height, set apart
+        // by a gap so it reads as a glyph and never as a "+100" gain.
+        {
+          float cx = 20.5f, cy = hud_bot - 12.9f, ga = 0.85f * pulse, L = 4.6f, T = 1.6f;
+          for (int sh = 1; sh >= 0; sh--) {
+            float ox = sh ? 0.8f : 0.0f, oy = sh ? 0.9f : 0.0f;
+            float rr = sh ? 0.02f : cr, gg = sh ? 0.03f : cg, bb = sh ? 0.04f : cb2;
+            float aa = sh ? 0.55f * ga : ga;
+            ui_rect(cx - T + ox, cy - L + oy, 2 * T, 2 * L, rr, gg, bb, aa);
+            ui_rect(cx - L + ox, cy - T + oy, L - T, 2 * T, rr, gg, bb, aa);
+            ui_rect(cx + T + ox, cy - T + oy, L - T, 2 * T, rr, gg, bb, aa);
+          }
+        }
+        ui_text_sh(hps, 31, hud_bot - 19.5f, 1.9f, TXT_BOLD, 0, C4(cr, cg, cb2, pulse));
         ui_rect(16, hud_bot, hud_mw, 2.4f, 0, 0, 0, 0.42f);
         ui_rect(16, hud_bot, hud_mw * hp01, 2.4f, cr, cg, cb2, pulse);
       }
@@ -988,6 +1490,18 @@ static void render_frame(const player_t *p, float alpha, int fps,
       }
     }
 
+    // A SUPPLY PICKUP: what you just took, for two seconds under the crosshair.
+    {
+      long age = g_tick - g_supply_msg_t;
+      if (age >= 0 && age < 2 * TICK_HZ && p->alive) {
+        float a = age < TICK_HZ ? 1.0f : 1.0f - (float)(age - TICK_HZ) / (float)TICK_HZ;
+        const char *msg = g_supply_msg_kind == SUP_HEALTH ? "+50 HEALTH" : "GRENADES RESTOCKED";
+        float tw = ui_text_width_tr(msg, 0.8f, 1.0f);
+        float r_ = g_supply_msg_kind == SUP_HEALTH ? 0.35f : 1.00f, g_ = g_supply_msg_kind == SUP_HEALTH ? 0.95f : 0.78f,
+              b_ = g_supply_msg_kind == SUP_HEALTH ? 0.55f : 0.20f;
+        ui_text_sh(msg, ccx - tw * 0.5f, ccy + 34.0f, 0.8f, TXT_BOLD, 1.0f, C4(r_, g_, b_, a * 0.95f));
+      }
+    }
     // Just joined a team game: offer the side choice once.
     if (g_ui_team_prompt && g_online && teams_on()) {
       g_ui_team_prompt = 0;
@@ -1011,9 +1525,18 @@ static void render_frame(const player_t *p, float alpha, int fps,
         float a = 0.95f - 0.45f * f_clamp((dd - 10.0f) / 40.0f, 0.0f, 1.0f);
         int tc = team_of(e);
         float mc[3] = {TEAM_RGB(tc)};
-        if (rescue_view()) { mc[0] = 0.45f; mc[1] = 0.95f; mc[2] = 0.60f; }
-        ui_line(sx - 4.0f, sy - 3.0f, sx, sy + 1.5f, 1.3f, mc[0], mc[1], mc[2], a);
-        ui_line(sx, sy + 1.5f, sx + 4.0f, sy - 3.0f, 1.3f, mc[0], mc[1], mc[2], a);
+        // The squad wears the friendly SIGNAL — the colour of every operator's
+        // armband and helmet strobe — rather than a green of its own.
+        if (rescue_view()) { mc[0] = 0.310f; mc[1] = 0.765f; mc[2] = 0.910f; }
+        // A DIAMOND, not a chevron: the optional enemy marker is a downward
+        // chevron, so friend and foe differ in SHAPE as well as in colour, and
+        // a colour-blind player reads the two without the hue.
+        ui_line(sx - 3.6f, sy - 2.0f, sx, sy + 1.6f, 1.2f, 0.02f, 0.03f, 0.04f, 0.5f * a);
+        ui_line(sx, sy + 1.6f, sx + 3.6f, sy - 2.0f, 1.2f, 0.02f, 0.03f, 0.04f, 0.5f * a);
+        ui_line(sx - 3.6f, sy - 2.0f, sx, sy + 1.6f, 0.9f, mc[0], mc[1], mc[2], a);
+        ui_line(sx, sy + 1.6f, sx + 3.6f, sy - 2.0f, 0.9f, mc[0], mc[1], mc[2], a);
+        ui_line(sx - 3.6f, sy - 2.0f, sx, sy - 5.6f, 0.9f, mc[0], mc[1], mc[2], a);
+        ui_line(sx, sy - 5.6f, sx + 3.6f, sy - 2.0f, 0.9f, mc[0], mc[1], mc[2], a);
         if (dd < 22.0f) {
           const char *nm = ent_name(e);
           ui_text_sh(nm, sx - ui_text_width_tr(nm, 0.6f, 1.2f) * 0.5f, sy - 12.0f, 0.6f,
@@ -1050,12 +1573,41 @@ static void render_frame(const player_t *p, float alpha, int fps,
       float pk = g_score_pop > 0 ? (float)g_score_pop / SCORE_POP_TICKS : 0.0f;
       char sc2[16];
       snprintf(sc2, sizeof sc2, "%s:%s", msc, lsc);
-      float ms = 0.9f + 0.25f * pk * pk;
-      int ahead = me >= lead && me > 0;
-      ui_text_sh(sc2, ccx - ui_text_width_tr(sc2, ms, 0.8f) * 0.5f, 8, ms,
-                 TXT_REG, 0.8f,
-                 ahead ? C4(C_BLAZE, 0.8f)
-                 : lead > me ? C4(C_HAZE, 0.85f) : C4(C_HAZE, 0.8f));
+      (void)sc2;
+      // THE SCORE PLATE. "0:1" in grey at 0.9 scale was the quietest thing on
+      // the HUD and it is the match state. Now a chamfered INK plate (the menu's
+      // own surface, 55%), split in two: MY side on the left with a SIGNAL bar
+      // (my team's colour in a team game), the side I am chasing on the right
+      // with a THREAT bar (their team's colour) — the same friend/foe colours
+      // the world uses, so the plate and the figures agree. My number pops on my
+      // own kill, growing DOWN from the fixed cap line as before; when I lead,
+      // my number takes the BLAZE accent.
+      {
+        float ms = 1.15f + 0.30f * pk * pk;
+        int ahead = me >= lead && me > 0;
+        const char *ll = hgm == GM_TDM ? TEAM_NAMES[mt] : "YOU";
+        const char *rl = hgm == GM_TDM ? TEAM_NAMES[!mt] : "LEAD";
+        float pw = 132.0f, ph = 17.0f, px = ccx - pw * 0.5f, py = 4.0f;
+        ui_panel(px, py, pw, ph, 0, 0.62f);
+        float lc[3] = {C_SIGNAL}, rc[3] = {C_THREAT};
+        if (hgm == GM_TDM) {
+          float a3[3] = {TEAM_RGB(mt)}, b3[3] = {TEAM_RGB(!mt)};
+          memcpy(lc, a3, sizeof lc);
+          memcpy(rc, b3, sizeof rc);
+        }
+        ui_rect(px + 6, py + ph - 2.6f, pw * 0.5f - 12, 1.4f, lc[0], lc[1], lc[2], 0.85f);
+        ui_rect(ccx + 6, py + ph - 2.6f, pw * 0.5f - 12, 1.4f, rc[0], rc[1], rc[2], 0.85f);
+        ui_line(ccx, py + 3, ccx, py + ph - 4, 0.4f, C_BONE, 0.18f);
+        float ty = py + 3.6f;
+        ui_text_ex(ll, px + 8, ty + 1.6f, 0.6f, TXT_REG, 1.4f, C4(C_HAZE, 0.9f));
+        float mw = ui_text_width_tr(msc, ms, 0.6f);
+        ui_text_ex(msc, ccx - 7 - mw, ty, ms, TXT_BOLD, 0.6f,
+                   ahead ? C4(C_BLAZE, 1.0f) : C4(C_BONE, 0.95f));
+        ui_text_ex(lsc, ccx + 7, ty, 1.15f, TXT_BOLD, 0.6f,
+                   lead > me ? C4(rc[0], rc[1], rc[2], 1.0f) : C4(C_BONE, 0.85f));
+        float rw2 = ui_text_width_tr(rl, 0.6f, 1.4f);
+        ui_text_ex(rl, px + pw - 8 - rw2, ty + 1.6f, 0.6f, TXT_REG, 1.4f, C4(C_HAZE, 0.9f));
+      }
       // ...and the one line of mode state a player needs under it.
       char cap[40];
       cap[0] = '\0';
@@ -1080,10 +1632,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  g_online && g_net_fraglimit ? g_net_fraglimit : g_cfg.sp_frag);
       }
       if (cap[0] && hgm == GM_TDM)
-        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 22, 0.7f,
+        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 25, 0.7f,
                    TXT_REG, 1.2f, C4(TEAM_RGB(mt), 0.9f));
       else if (cap[0])
-        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 22, 0.7f,
+        ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 25, 0.7f,
                    TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
       // LAST MAN STANDING intermission: who took the round, and when the next.
       if (hgm == GM_LMS && g_match.round_t > 0) {
@@ -1137,13 +1689,29 @@ static void render_frame(const player_t *p, float alpha, int fps,
         int src_h = human_of_ent(g_feed[i].src) > 0;   // >0: a remote human
         int dst_h = human_of_ent(g_feed[i].dst) > 0;
         float knw = ui_text_width(kn, 0.8f), vnw = ui_text_width(vn, 0.8f);
-        float chev = ui_text_width("\x01", 0.8f);
+        // THE WEAPON between the names, where the chevron was: the AR and SR
+        // glyphs the atlas has always carried for this, and a short word for
+        // the three that have none. The chevron survives only as a fallback.
+        int fw = g_feed[i].wpn;
+        const char *wg = fw == WPN_AR ? "\x02" : fw == WPN_SR ? "\x03" : fw == WPN_PT ? "PISTOL"
+                       : fw == WPN_KN ? "KNIFE" : fw == WPN_GR ? "FRAG" : "\x01";
+        float wsc = (fw == WPN_AR || fw == WPN_SR) ? 0.8f : 0.55f;
+        float chev = ui_text_width(wg, wsc);
         float hsw = g_feed[i].hs ? ui_text_width("\x04", 0.8f) + 3 : 0;
         const float rowh = 9;
-        // Pure quiet text at the ONE small HUD size — no plates, no shadows;
-        // color alone carries who did what to whom.
+        // Quiet text at the ONE small HUD size; colour carries who did what to
+        // whom — friend SIGNAL, foe THREAT, me BLAZE, a team its own colour.
         float rw = knw + 4 + chev + 3 + hsw + vnw;
         float tx = g_ui_vw - 10 - rw + slide, ty2 = fy;
+        // MY OWN KILL gets the one plate in the feed: an INK wash with a BLAZE
+        // edge on the left, so the row that matters to me is found without
+        // reading a name.
+        if (meK && !meD) {
+          ui_rect(tx - 5, ty2 - 2.2f, rw + 9, rowh + 1.6f, 0.012f, 0.016f, 0.024f, 0.55f * fa);
+          ui_rect(tx - 5, ty2 - 2.2f, 1.6f, rowh + 1.6f, C_BLAZE, 0.95f * fa);
+        }
+        int kfoe = !meK && g_feed[i].src >= 0 && fig_ins_of(g_feed[i].src);
+        int dfoe = !meD && g_feed[i].dst >= 0 && fig_ins_of(g_feed[i].dst);
         // TEAM DEATHMATCH: every name in its side's colour, so a row reads
         // as red-on-blue or blue-on-red at a glance (a team kill, with
         // friendly fire on, is one colour twice).
@@ -1151,10 +1719,11 @@ static void render_frame(const player_t *p, float alpha, int fps,
         int td = teams_on() ? team_of(g_feed[i].dst) : -1;
         if (tk >= 0)    ui_text_sh(kn, tx, ty2, 0.8f, meK ? TXT_BOLD : TXT_REG, 0, C4(TEAM_RGB(tk), 0.95f * fa));
         else if (meK)   ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BLAZE, 0.9f * fa));
-        else if (src_h) ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
+        else if (kfoe)  ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.85f * fa));
+        else if (src_h || g_feed[i].src >= 0) ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
         else            ui_text_sh(kn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BONE, 0.85f * fa));
         tx += knw + 4;
-        ui_text_sh("\x01", tx, ty2, 0.8f, TXT_REG, 0, C4(C_HAZE, 0.8f * fa));
+        ui_text_sh(wg, tx, ty2 + (wsc < 0.8f ? 1.1f : 0.0f), wsc, TXT_REG, 0, C4(C_HAZE, 0.85f * fa));
         tx += chev + 3;
         if (g_feed[i].hs) {
           ui_text_sh("\x04", tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.9f * fa));
@@ -1162,7 +1731,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
         }
         if (td >= 0)    ui_text_sh(vn, tx, ty2, 0.8f, meD ? TXT_BOLD : TXT_REG, 0, C4(TEAM_RGB(td), 0.95f * fa));
         else if (meD)   ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.9f * fa));
-        else if (dst_h) ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
+        else if (dfoe)  ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_THREAT, 0.85f * fa));
+        else if (dst_h || g_feed[i].dst >= 0) ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_SIGNAL, 0.9f * fa));
         else            ui_text_sh(vn, tx, ty2, 0.8f, TXT_REG, 0, C4(C_BONE, 0.8f * fa));
         fy += rowh + 2;
       }
@@ -1207,24 +1777,44 @@ static void render_frame(const player_t *p, float alpha, int fps,
                  C4(0.05f, 0.01f, 0.01f, 0.85f));
       ui_text_ex(d1, ccx - w1 * 0.5f, dy0, 2.6f, TXT_BLACK, 2.0f, C4(C_THREAT, 1));
       char d2[40];
-      snprintf(d2, sizeof d2, "BY %s", ent_name(g_match.last_killer));
-      ui_text(d2, ccx - ui_text_width(d2, 1) * 0.5f, dy0 + 30, 1, C_BONE, 0.92f);
+      int lk = g_match.last_killer;
+      snprintf(d2, sizeof d2, "BY %s", ent_name(lk));
+      int lfoe = lk >= 0 && lk != g_local_ent && fig_ins_of(lk);
+      ui_text(d2, ccx - ui_text_width(d2, 1) * 0.5f, dy0 + 30, 1,
+              lfoe ? 1.000f : 0.941f, lfoe ? 0.420f : 0.957f, lfoe ? 0.360f : 0.973f, 0.95f);
+      // ...and WHAT got you: the killer's archetype (an insurgent's outline is
+      // a type — the gunner, the scout — and learning which one keeps killing
+      // you is learning the enemy), the weapon, and a headshot if it was one.
+      // Sits in the gap the respawn bar leaves, quiet HAZE.
+      if (lk >= 0 && lk != g_local_ent) {
+        static const char *const KN[4] = {"RIFLEMAN", "GUNNER", "SCOUT", "LEADER"};
+        int dw = g_death_wpn;
+        const char *wn2 = dw == WPN_SR ? "SNIPER RIFLE" : dw == WPN_PT ? "SIDEARM"
+                        : dw == WPN_KN ? "KNIFE" : dw == WPN_GR ? "FRAG" : "RIFLE";
+        if (dw == WPN_AR) wn2 = lfoe ? "AK-47" : wvar_name(WPN_AR, ent_wvar(lk, WPN_AR));
+        else if (!lfoe && (dw == WPN_SR || dw == WPN_PT)) wn2 = wvar_name(dw, ent_wvar(lk, dw));
+        char d5[72];
+        snprintf(d5, sizeof d5, "%s%s \x05 %s%s", lfoe ? "INSURGENT " : "OPERATOR",
+                 lfoe ? KN[ent_kind(lk)] : "", wn2, g_death_hs ? " \x05 HEADSHOT" : "");
+        ui_text_ex(d5, ccx - ui_text_width_tr(d5, 0.65f, 1.3f) * 0.5f, dy0 + 43, 0.65f,
+                   TXT_REG, 1.3f, C4(C_HAZE, 0.92f));
+      }
       if (!mode_respawns()) {
         // No redeploy in LAST MAN STANDING: the wait is for the round, not a
         // timer (and once the camera starts following someone, the branch
         // above takes over).
         const char *d3 = "OUT FOR THIS ROUND";
-        ui_text_ex(d3, ccx - ui_text_width_tr(d3, 0.8f, 1.5f) * 0.5f, dy0 + 48, 0.8f,
+        ui_text_ex(d3, ccx - ui_text_width_tr(d3, 0.8f, 1.5f) * 0.5f, dy0 + 57, 0.8f,
                    TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
         const char *d4 = "BACK IN NEXT ROUND";
-        ui_text_ex(d4, ccx - ui_text_width_tr(d4, 0.7f, 1.2f) * 0.5f, dy0 + 60, 0.7f,
+        ui_text_ex(d4, ccx - ui_text_width_tr(d4, 0.7f, 1.2f) * 0.5f, dy0 + 69, 0.7f,
                    TXT_REG, 1.2f, C4(C_HAZE, 0.7f));
       } else {
         float rp = 1.0f - f_clamp((float)p->respawn_t / PLAYER_RESPAWN_TICKS, 0.0f, 1.0f);
-        ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1, 3, C_BONE, 0.14f);
-        ui_rect(ccx - w1 * 0.5f, dy0 + 46, w1 * rp, 3, C_BLAZE, 0.95f);
+        ui_rect(ccx - w1 * 0.5f, dy0 + 55, w1, 3, C_BONE, 0.14f);
+        ui_rect(ccx - w1 * 0.5f, dy0 + 55, w1 * rp, 3, C_BLAZE, 0.95f);
         ui_text_ex("REDEPLOY", ccx - ui_text_width_tr("REDEPLOY", 0.8f, 1.5f) * 0.5f,
-                   dy0 + 53, 0.8f, TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
+                   dy0 + 62, 0.8f, TXT_REG, 1.5f, C4(C_HAZE, 0.9f));
       }
     }
 
@@ -1277,6 +1867,23 @@ static void render_frame(const player_t *p, float alpha, int fps,
   if (g_menu_open && session_pauses() && !g_home) ui_menu_backdrop();
   if (g_menu_open) ui_menu();
   ui_flush();
+  // ...and the preview's picture, into the frame the Armory page just drew.
+  if (g_prev_req && g_menu_open && R.prev_fbo) {
+    ui_begin();
+    const float wc[4] = {1, 1, 1, 1};
+    float x0 = g_prev_x, y0 = g_prev_y, x1 = x0 + g_prev_w, y1 = y0 + g_prev_h;
+    ui_push(x0, y0, 0, 1, wc); ui_push(x1, y0, 1, 1, wc); ui_push(x1, y1, 1, 0, wc);
+    ui_push(x0, y0, 0, 1, wc); ui_push(x1, y1, 1, 0, wc); ui_push(x0, y1, 0, 0, wc);
+    glUniform1i(R.u_img, 3);
+    grade_uniforms(R.prog_hud, g_cfg.post_fx);
+    glUniform1i(uloc(R.prog_hud, "uAdapt"), 1);
+    tex_on(1, R.ad_tex[R.ad_i]);
+    glBindTexture(GL_TEXTURE_2D, R.prev_tex);
+    ui_flush();
+    tex_on(1, 0);
+    glUniform1i(R.u_img, 0);
+    glBindTexture(GL_TEXTURE_2D, R.font_tex);
+  }
 
   // Leave the present FBO bound on both targets so glReadPixels/SwapBuffers
   // see it. (The HUD already drew into it: the post chain resolved the scene.)

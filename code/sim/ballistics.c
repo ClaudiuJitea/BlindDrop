@@ -83,91 +83,13 @@ static void proj_tick(void) {
   }
 }
 
-static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
-                      float pitch, v3 vel, int grounded, uint64_t *rng,
-                      anim_t *anim) {
-  const wpn_def_t *def = wdef(w, w->cur);
-  float fb[WP_COUNT];
-  const float *wp = gun_feel(w, w->cur, fb);
-  w->ammo[w->cur]--;
-  w->fresh = 0;
-  g_match.shots[ent]++;
-  // HOSTAGE RESCUE: the squad's rifle and pistol are suppressed, and a human
-  // of the squad firing frees the squad bots to fire with him.
-  bot_noise_emit(ent, BOT_NOISE_SHOT, o,
-                 rescue_on() && resc_is_squad(ent) ? (w->cur == WPN_SR ? 15.0f : 11.0f) : 34.0f);
-  if (rescue_on() && human_of_ent(ent) >= 0) g_resc.fire_free_t = 4 * TICK_HZ;
-  w->cool[w->cur] = (int)((float)TICK_HZ * 60.0f / wp[WP_RPM] + 0.5f);
-  if (w->cool[w->cur] < 1) w->cool[w->cur] = 1;
-
-  // Spread is sampled BEFORE this shot's bloom is added: the first shot of a
-  // burst fires at base accuracy, the penalty always trails by one shot.
-  float spread = gun_spread(w, vel, grounded);
-  w->bloom += wp[WP_BLOOM];
-  if (w->bloom > GUN_BLOOM_CAP) w->bloom = GUN_BLOOM_CAP;
-
-  float ya = yaw + w->rec_y * DEG2RAD;
-  // The view punch counts too. The camera is pitched by rec_p + punch, so during
-  // a spray a shot that ignored the punch left 0.1-0.17 deg BELOW the crosshair:
-  // 6 cm at 20 m, every round after the first. This is the crosshair's own line.
-  float pa = f_clamp(pitch + (w->rec_p + w->punch) * DEG2RAD, -PITCH_MAX, PITCH_MAX);
-  v3 dir = {{cosf(pa) * sinf(ya), sinf(pa), -cosf(pa) * cosf(ya)}};
-  float r = spread * DEG2RAD * sqrtf(rng_rangef(rng, 0.0f, 1.0f));
-  float phi = rng_rangef(rng, 0.0f, F_TAU);
-  v3 right = v3_norm(v3_cross(dir, (v3){{0, 1, 0}}));
-  v3 upv = v3_cross(right, dir);
-  dir = v3_norm(v3_add(dir, v3_add(v3_scale(right, r * cosf(phi)),
-                                   v3_scale(upv, r * sinf(phi)))));
-
-  // The kick lands AFTER the shot left the barrel.
-  w->rec_p += wp[WP_KICK_UP] * rng_rangef(rng, 0.9f, 1.1f);
-  w->rec_y += wp[WP_KICK_SIDE] *
-              (GUN_PATTERN[w->idx & 31] + rng_rangef(rng, -0.2f, 0.2f));
-  w->rec_p = f_clamp(w->rec_p, -GUN_REC_CAP, GUN_REC_CAP);
-  w->rec_y = f_clamp(w->rec_y, -GUN_REC_CAP, GUN_REC_CAP);
-  w->punch_v += GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V;
-  // The roll's SIGN comes from the pattern step this shot just took, so the
-  // view rolls into the direction the muzzle is being pulled. Zero steps (the
-  // pattern legitimately has them) fall back to the shot index's parity, or the
-  // roll would silently vanish on those rounds.
-  {
-    float s = GUN_PATTERN[w->idx & 31];
-    w->punch_roll_v = (s > 0.001f ? 1.0f : s < -0.001f ? -1.0f
-                                   : (w->idx & 1) ? 1.0f : -1.0f) *
-                      GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V * GUN_ROLL_K
-                      // automatic fire rocked the picture side to side at the
-                      // fire rate; the single-shot sniper keeps its full roll
-                      * (w->cur == WPN_SR ? 1.0f : 0.4f);
-  }
-  // SPLIT, not converted (the one line that fused both meanings): shots++ is
-  // INDEX — every human's lifetime counter, the trace contract — while the
-  // viewmodel kick is LOKAL, per-client. As one LOKAL block the client
-  // prediction loses the gun kick; as one INDEX block foreign fire kicks
-  // human 0's viewmodel.
-  int sh = human_of_ent(ent);
-  if (sh >= 0) g_players[sh].shots++;
-  if (ent == g_local_ent && sh >= 0) {
-    g_players[sh].vm.kick_v += w->cur == WPN_SR ? 0.8f + 0.5f * wp[WP_PUNCH]  // gun slams back
-                                                : 0.42f + 0.26f * wp[WP_PUNCH];
-    // (The AR and pistol had 0.8 + 0.5 p before 0.7: at the AR's 12.5 rounds a second the gun jumped
-    // a full 8 mm and 4 deg every round and read as shaking, not recoiling.)
-    // ...and TWISTS: the bore is above the grip, so the recoil impulse is a
-    // torque as well as a push. Its sign and size come from the shot index
-    // (a hash, no rng draw: the gun stream stays exactly what it was).
-    uint32_t th = (uint32_t)w->idx * 2654435761u ^ 0x9E37u;
-    float tw = ((float)(th >> 8 & 0xFFFF) / 65535.0f - 0.35f);
-    g_players[sh].vm.twist_v += tw * (w->cur == WPN_SR ? 1.0f + 0.7f * wp[WP_PUNCH]
-                                                      : 0.45f + 0.3f * wp[WP_PUNCH])
-                                 * (1.0f - 0.6f * w->ads_s);
-  }
-  if (anim) {
-    anim->fire_k = 1.0f;                          // third-person body: gun kick
-    // ...and the weapon is ON the line when the round leaves. A figure caught at
-    // the low ready used to fire from a barrel pointing 34 degrees off the shot,
-    // with the tracer leaving it sideways. The same tick's pose solve sees this.
-    anim->ready_s = 1.0f;
-  }
-
+// THE ROUND'S FLIGHT from `o` along `dir`: the trace through the world and its
+// cover, the events, the damage. One call per round, or per PELLET (`pel` 1):
+// a shotgun's shell is several of these sharing one trigger pull, one idx and
+// so one report and one muzzle star (audio and vfx drop the repeats of an idx).
+#define PELLET_NEAR  9.0f
+#define PELLET_FAR  26.0f
+static void gun_round(int ent, weapon_t *w, const wpn_def_t *def, v3 o, v3 dir, int dmg, int pel) {
   // THE ROUND'S FLIGHT, one segment per piece of material it crosses. A shot
   // that meets nothing runs this loop exactly once and does exactly what it did
   // before: one trace_world, one ent_trace. Everything below only happens on a
@@ -182,7 +104,6 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
     ev_push((event_t){.type = EV_FIRE, .a = v3_add(o, v3_scale(dir, GUN_RANGE)), .b = dir,
                       .f = GUN_RANGE, .g = w->ads_s, .i = w->idx, .k = 0,
                       .wpn = w->cur, .src = ent, .dst = -1});
-    w->idx++;
     return;
   }
   v3 nrm = {{0, 1, 0}};                 // the face the round finally stopped on
@@ -290,18 +211,124 @@ static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
   ev_push((event_t){.type = EV_FIRE, .a = at, .b = dir, .f = dist,
                     .g = w->ads_s, .pen = used, .i = w->idx, .k = kind,
                     .wpn = w->cur, .src = ent, .dst = hit});
+  // A PELLET LOSES ITS PUNCH WITH RANGE (`pel` > 0): full to PELLET_NEAR,
+  // a quarter by PELLET_FAR — the shotgun is a room weapon, as in CS2. A rifle
+  // round keeps the old rule: it arrives whole.
+  float fall = pel ? f_clamp(1.0f - (dist - PELLET_NEAR) / (PELLET_FAR - PELLET_NEAR), 0.25f, 1.0f) : 1.0f;
   if (hit >= 0 && !g_predicting) {   // damage is authoritative — server only
     // A ROUND THAT ARRIVES ARRIVES WHOLE. `used` is not read here at all any
     // more — the wall was already paid for by the round either fitting inside
     // PEN_PATH or being left in the material, and there is nothing between
     // those two states. The event still carries `used` because scripts assert
     // on it and it is the only thing that tells a wallbang from a clean hit.
-    ent_damage(hit, def->dmg * (part == 3 ? def->head_x : 1), part, ent, o, at);
+    ent_damage(hit, (int)((float)dmg * (part == 3 ? def->head_x : 1) * fall + 0.5f), part, ent, o, at);
   } else if (kind == 1) {
     // `i` carries the solid the round entered — EV_IMPACT leaves it unused, so
     // the mark's clip window costs nothing in the event ring.
     ev_push((event_t){.type = EV_IMPACT, .a = at, .b = nrm, .i = wsol,
                       .f = dist, .src = ent});
+  }
+}
+
+static void gun_shoot(int ent, weapon_t *w, v3 o, float yaw,
+                      float pitch, v3 vel, int grounded, uint64_t *rng,
+                      anim_t *anim) {
+  const wpn_def_t *def = wdef(w, w->cur);
+  float fb[WP_COUNT];
+  const float *wp = gun_feel(w, w->cur, fb);
+  w->ammo[w->cur]--;
+  w->fresh = 0;
+  g_match.shots[ent]++;
+  { const wpn_var_t *dv = wvrow(w, w->cur); if (dv && dv->dual) w->dual_side ^= 1; }
+  // HOSTAGE RESCUE: the squad's rifle and pistol are suppressed, and a human
+  // of the squad firing frees the squad bots to fire with him.
+  bot_noise_emit(ent, BOT_NOISE_SHOT, o,
+                 rescue_on() && resc_is_squad(ent) ? (w->cur == WPN_SR ? 15.0f : 11.0f) : 34.0f);
+  if (rescue_on() && human_of_ent(ent) >= 0) g_resc.fire_free_t = 4 * TICK_HZ;
+  w->cool[w->cur] = (int)((float)TICK_HZ * 60.0f / wp[WP_RPM] + 0.5f);
+  if (w->cool[w->cur] < 1) w->cool[w->cur] = 1;
+
+  // Spread is sampled BEFORE this shot's bloom is added: the first shot of a
+  // burst fires at base accuracy, the penalty always trails by one shot.
+  float spread = gun_spread(w, vel, grounded);
+  w->bloom += wp[WP_BLOOM];
+  if (w->bloom > GUN_BLOOM_CAP) w->bloom = GUN_BLOOM_CAP;
+
+  float ya = yaw + w->rec_y * DEG2RAD;
+  // The view punch counts too. The camera is pitched by rec_p + punch, so during
+  // a spray a shot that ignored the punch left 0.1-0.17 deg BELOW the crosshair:
+  // 6 cm at 20 m, every round after the first. This is the crosshair's own line.
+  float pa = f_clamp(pitch + (w->rec_p + w->punch) * DEG2RAD, -PITCH_MAX, PITCH_MAX);
+  v3 dir = {{cosf(pa) * sinf(ya), sinf(pa), -cosf(pa) * cosf(ya)}};
+  float r = spread * DEG2RAD * sqrtf(rng_rangef(rng, 0.0f, 1.0f));
+  float phi = rng_rangef(rng, 0.0f, F_TAU);
+  v3 right = v3_norm(v3_cross(dir, (v3){{0, 1, 0}}));
+  v3 upv = v3_cross(right, dir);
+  dir = v3_norm(v3_add(dir, v3_add(v3_scale(right, r * cosf(phi)),
+                                   v3_scale(upv, r * sinf(phi)))));
+
+  // The kick lands AFTER the shot left the barrel.
+  w->rec_p += wp[WP_KICK_UP] * rng_rangef(rng, 0.9f, 1.1f);
+  w->rec_y += wp[WP_KICK_SIDE] *
+              (GUN_PATTERN[w->idx & 31] + rng_rangef(rng, -0.2f, 0.2f));
+  w->rec_p = f_clamp(w->rec_p, -GUN_REC_CAP, GUN_REC_CAP);
+  w->rec_y = f_clamp(w->rec_y, -GUN_REC_CAP, GUN_REC_CAP);
+  w->punch_v += GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V;
+  // The roll's SIGN comes from the pattern step this shot just took, so the
+  // view rolls into the direction the muzzle is being pulled. Zero steps (the
+  // pattern legitimately has them) fall back to the shot index's parity, or the
+  // roll would silently vanish on those rounds.
+  {
+    float s = GUN_PATTERN[w->idx & 31];
+    w->punch_roll_v = (s > 0.001f ? 1.0f : s < -0.001f ? -1.0f
+                                   : (w->idx & 1) ? 1.0f : -1.0f) *
+                      GUN_PUNCH_SHOT * wp[WP_PUNCH] * GUN_PUNCH_V * GUN_ROLL_K
+                      // automatic fire rocked the picture side to side at the
+                      // fire rate; the single-shot sniper keeps its full roll
+                      * (w->cur == WPN_SR ? 1.0f : 0.4f);
+  }
+  // SPLIT, not converted (the one line that fused both meanings): shots++ is
+  // INDEX — every human's lifetime counter, the trace contract — while the
+  // viewmodel kick is LOKAL, per-client. As one LOKAL block the client
+  // prediction loses the gun kick; as one INDEX block foreign fire kicks
+  // human 0's viewmodel.
+  int sh = human_of_ent(ent);
+  if (sh >= 0) g_players[sh].shots++;
+  if (ent == g_local_ent && sh >= 0) {
+    g_players[sh].vm.kick_v += w->cur == WPN_SR ? 0.8f + 0.5f * wp[WP_PUNCH]  // gun slams back
+                                                : 0.42f + 0.26f * wp[WP_PUNCH];
+    // (The AR and pistol had 0.8 + 0.5 p before 0.7: at the AR's 12.5 rounds a second the gun jumped
+    // a full 8 mm and 4 deg every round and read as shaking, not recoiling.)
+    // ...and TWISTS: the bore is above the grip, so the recoil impulse is a
+    // torque as well as a push. Its sign and size come from the shot index
+    // (a hash, no rng draw: the gun stream stays exactly what it was).
+    uint32_t th = (uint32_t)w->idx * 2654435761u ^ 0x9E37u;
+    float tw = ((float)(th >> 8 & 0xFFFF) / 65535.0f - 0.35f);
+    g_players[sh].vm.twist_v += tw * (w->cur == WPN_SR ? 1.0f + 0.7f * wp[WP_PUNCH]
+                                                      : 0.45f + 0.3f * wp[WP_PUNCH])
+                                 * (1.0f - 0.6f * w->ads_s);
+  }
+  if (anim) {
+    anim->fire_k = 1.0f;                          // third-person body: gun kick
+    // ...and the weapon is ON the line when the round leaves. A figure caught at
+    // the low ready used to fire from a barrel pointing 34 degrees off the shot,
+    // with the tracer leaving it sideways. The same tick's pose solve sees this.
+    anim->ready_s = 1.0f;
+  }
+
+  // ...and its flight: once for a round, once per pellet for a shell.
+  const wpn_var_t *vr = wvrow(w, w->cur);
+  if (vr && vr->pellets > 1) {
+    v3 rt = v3_norm(v3_cross(dir, (v3){{0, 1, 0}})), up = v3_cross(rt, dir);
+    for (int k = 0; k < vr->pellets; k++) {
+      // A fixed ring plus a little scatter: the pattern is the gun's, not luck's.
+      float a = F_TAU * (float)k / (float)vr->pellets + rng_rangef(rng, -0.3f, 0.3f);
+      float rr = vr->pel_spread * DEG2RAD * (k == 0 ? 0.15f : sqrtf(rng_rangef(rng, 0.35f, 1.0f)));
+      v3 d = v3_norm(v3_add(dir, v3_add(v3_scale(rt, rr * cosf(a)), v3_scale(up, rr * sinf(a)))));
+      gun_round(ent, w, def, o, d, def->dmg, 1);
+    }
+  } else {
+    gun_round(ent, w, def, o, dir, def->dmg, 0);
   }
   w->idx++;
 }
@@ -329,11 +356,40 @@ static void gun_cool(weapon_t *w) {
   w->punch_roll += w->punch_roll_v * TICK_DT;
 }
 
-static void gun_reload_tick(weapon_t *w) {
-  if (w->reload_t > 0 && --w->reload_t == 0) {
-    w->ammo[w->cur] = wdef(w, w->cur)->mag;
-    w->idx = 0;
+// STARTS a reload of the weapon in the hands: sets reload_t / reload_tac and
+// returns the `k` its EV_RELOAD carries. A TUBE (the shotguns but the MAG-7)
+// loads one shell per vr->shell_t, and is a "tactical" reload by construction
+// (nothing is dropped). The player's key, the auto-reload and the bot all come here.
+static int gun_reload_start(weapon_t *w) {
+  const wpn_var_t *vr = wvrow(w, w->cur);
+  const wpn_def_t *def = wdef(w, w->cur);
+  if (vr && vr->shell_t > 0) {
+    w->reload_tac = 1;
+    w->reload_t = vr->shell_t;
+    return 2;                               // k 2: a shell going in
   }
+  w->reload_tac = w->ammo[w->cur] > 0;
+  w->reload_t = w->reload_tac ? def->reload_tac_ticks : def->reload_ticks;
+  return w->reload_tac;
+}
+static int gun_tube(const weapon_t *w) {
+  const wpn_var_t *vr = wvrow(w, w->cur);
+  return vr && vr->shell_t > 0;
+}
+// Returns 1 on the tick a TUBE takes a shell and goes on to the next one, so the
+// caller can announce it (EV_RELOAD k 2: the shell's click).
+static int gun_reload_tick(weapon_t *w) {
+  if (w->reload_t > 0 && --w->reload_t == 0) {
+    const wpn_var_t *vr = wvrow(w, w->cur);
+    int mag = wdef(w, w->cur)->mag;
+    w->idx = 0;
+    if (vr && vr->shell_t > 0) {
+      if (++w->ammo[w->cur] < mag) { w->reload_t = vr->shell_t; return 1; }
+      return 0;
+    }
+    w->ammo[w->cur] = mag;
+  }
+  return 0;
 }
 
 // ADS ramps linearly over the weapon's own ADS TIME; presentation reads the
@@ -399,11 +455,11 @@ static void gun_recover(weapon_t *w, int trigger_held) {
 // local copy started by EV_NADE and run on the same physics for the eye; it deals
 // nothing, because EV_BLAST and the damage that follows come from the server.
 #define MAX_NADES 24
-typedef struct { v3 pos, prev_pos, vel, axis; float spin, prev_spin, spin_v; int fuse, src, rest; } nade_t;
+typedef struct { v3 pos, prev_pos, vel, axis; float spin, prev_spin, spin_v; int fuse, src, rest, kind, age, still; } nade_t;
 static nade_t g_nades_all[SRV_LOBBIES][MAX_NADES];
 #define g_nades (g_nades_all[g_lobby])
 
-static void nade_add(v3 at, v3 vel, int fuse, int src) {
+static void nade_add(v3 at, v3 vel, int fuse, int src, int kind) {
   int slot = 0, low = 1 << 30;
   for (int i = 0; i < MAX_NADES; i++) {
     if (g_nades[i].fuse <= 0) { slot = i; low = -1; break; }
@@ -413,14 +469,17 @@ static void nade_add(v3 at, v3 vel, int fuse, int src) {
   float l = v3_len(ax);
   g_nades[slot] = (nade_t){.pos = at, .prev_pos = at, .vel = vel,
                            .axis = l > 1e-3f ? v3_scale(ax, 1.0f / l) : (v3){{1, 0, 0}},
-                           .spin_v = 0.32f, .fuse = fuse, .src = src};
+                           .spin_v = 0.32f, .fuse = fuse, .src = src, .kind = kind};
 }
 
 // A throw leaving a hand, authoritative: spawned here and announced to clients.
-static void nade_throw(v3 at, v3 vel, int fuse, int src) {
+// `kind` NADE_SMOKE: same flight, but it pops at rest; NADE_INC: it goes off on
+// the first floor it strikes (nade_tick). EV_NADE carries the kind as g = kind/2.
+static void nade_throw(v3 at, v3 vel, int fuse, int src, int kind) {
   if (g_predicting) return;
-  nade_add(at, vel, fuse, src);
-  ev_push((event_t){.type = EV_NADE, .a = at, .b = vel, .i = fuse, .src = src, .dst = -1});
+  nade_add(at, vel, fuse, src, kind);
+  ev_push((event_t){.type = EV_NADE, .a = at, .b = vel, .i = fuse, .src = src, .dst = -1,
+                    .g = (float)kind * 0.5f});
 }
 
 // THE DETONATION: who it reaches, how hard, and which way it throws them.
@@ -470,11 +529,46 @@ static void nade_tick(int auth) {
     if (n->fuse <= 0) continue;
     n->prev_pos = n->pos;
     n->prev_spin = n->spin;
+    n->age++;
+    if (n->kind == NADE_INC) {
+      // THE INCENDIARY: it goes off on a floor (below, after the move). Still
+      // in the air when its flight time runs out, it bursts there and is wasted.
+      if (--n->fuse <= 0) {
+        if (auth) ev_push((event_t){.type = EV_FLAME, .k = 0, .a = n->pos, .src = n->src, .dst = -1});
+        n->fuse = 0;
+        continue;
+      }
+      if (n->rest) {
+        if (auth && n->age >= INC_ARM_T) {
+          n->fuse = 0;
+          ev_push((event_t){.type = EV_FLAME, .k = 1, .a = n->pos, .src = n->src, .dst = -1});
+        }
+        continue;
+      }
+    } else if (n->kind) {
+      // THE SMOKE POPS WHERE IT STOPS: once it has lain still (at rest, or
+      // barely moving) for a tenth of a second and is past its arming time — or
+      // when its flight time runs out, wherever it is. The client's copy waits
+      // for the server's EV_SMOKE to remove it.
+      n->still = (n->rest || v3_len(n->vel) < 0.35f) ? n->still + 1 : 0;
+      if ((n->age >= SMOKE_ARM_T && n->still >= TICK_HZ / 10) || n->fuse <= 1) {
+        if (auth) {
+          n->fuse = 0;
+          ev_push((event_t){.type = EV_SMOKE, .a = n->pos, .src = n->src, .dst = -1});
+          continue;
+        }
+        if (n->fuse <= 1) { n->fuse = 0; continue; }
+      } else {
+        n->fuse--;
+      }
+      if (n->rest) continue;
+    } else {
     if (--n->fuse <= 0) {
       if (auth) nade_blast(n->pos, n->src);
       continue;
     }
     if (n->rest) continue;
+    }
     n->vel.y -= NADE_GRAVITY * TICK_DT;
     n->vel = v3_scale(n->vel, 1.0f - NADE_DRAG);
     n->spin += n->spin_v;
@@ -482,7 +576,7 @@ static void nade_tick(int auth) {
     float step = sp * TICK_DT;
     if (step < 1e-5f) continue;
     v3 d = v3_scale(n->vel, 1.0f / sp), wn = {{0, 1, 0}};
-    int ws = -1;
+    int ws = -1, struck_floor = 0;
     float hit = trace_world(n->pos, d, &wn, &ws);
     if (hit >= step + NADE_R) {
       n->pos = v3_add(n->pos, v3_scale(n->vel, TICK_DT));
@@ -496,13 +590,75 @@ static void nade_tick(int auth) {
         ev_push((event_t){.type = EV_NADE, .k = 1, .a = n->pos, .f = -vn, .src = n->src, .dst = -1});
       n->vel = v3_add(v3_scale(vt, NADE_FRICTION), v3_scale(wn, -vn * NADE_BOUNCE));
       n->spin_v *= 0.6f;
+      if (wn.y > 0.7f) struck_floor = 1;
       if (wn.y > 0.7f && fabsf(vn) < 1.3f) {   // on a floor and not bouncing: rolling
         n->vel.y = 0.0f;
         n->vel = v3_scale(n->vel, NADE_ROLL);
         if (v3_len(n->vel) < 0.12f) { n->rest = 1; n->vel = (v3){{0, 0, 0}}; }
       }
     }
-    if (n->pos.y < NADE_R) { n->pos.y = NADE_R; if (n->vel.y < 0) n->vel.y = 0; }
+    // THE GROUND IS A FLOOR TOO. The arena floor is a plane, not a solid, so
+    // the trace above never meets it, and this clamp used to only zero the fall:
+    // a grenade landing in the open then SKATED on at its throw speed until it
+    // met a wall (measured: 15 m/s across 10 m of Bazaar sand and back off the
+    // far wall). It now gets exactly the solid floor's contact: the bounce,
+    // the scrape, the roll and the rest.
+    if (n->pos.y < NADE_R) {
+      n->pos.y = NADE_R;
+      if (n->vel.y < 0.0f) {
+        float vn = -n->vel.y;
+        struck_floor = 1;
+        if (vn > 1.1f && auth)
+          ev_push((event_t){.type = EV_NADE, .k = 1, .a = n->pos, .f = vn, .src = n->src, .dst = -1});
+        n->vel.x *= NADE_FRICTION;
+        n->vel.z *= NADE_FRICTION;
+        n->vel.y = vn * NADE_BOUNCE;
+        n->spin_v *= 0.6f;
+        if (vn < 1.3f) {                         // not bouncing: rolling
+          n->vel.y = 0.0f;
+          n->vel = v3_scale(n->vel, NADE_ROLL);
+          if (v3_len(n->vel) < 0.12f) { n->rest = 1; n->vel = (v3){{0, 0, 0}}; }
+        }
+      } else if (n->vel.y == 0.0f) {             // sliding on it: rolling friction
+        n->vel = v3_scale(n->vel, NADE_ROLL);
+        if (v3_len(n->vel) < 0.12f) { n->rest = 1; n->vel = (v3){{0, 0, 0}}; }
+      }
+    }
+    // THE INCENDIARY BREAKS ON THE FLOOR it strikes (a wall only bounces it).
+    if (n->kind == NADE_INC && struck_floor && n->age >= INC_ARM_T && auth) {
+      n->fuse = 0;
+      ev_push((event_t){.type = EV_FLAME, .k = 1, .a = n->pos, .src = n->src, .dst = -1});
+    }
+  }
+}
+
+// THE FIRE BURNS whoever stands in it (sim/inferno.c holds the pools). Four bites a
+// second, each scaled by how hard the ground under the feet burns; the hottest
+// pool decides, and its thrower is the attacker — the thrower included.
+static void inferno_burn(void) {
+  if (g_tick % FIRE_DMG_T) return;
+  int any = 0;
+  for (int i = 0; i < MAX_INFERNOS; i++) any |= inferno_alive(&g_infernos[i]);
+  if (!any) return;
+  ENT_FOREACH(e) {
+    if (!ent_alive(e)) continue;
+    v3 p = ent_pos(e);
+    float best = 0.0f;
+    int src = -1;
+    v3 from = p;
+    for (int i = 0; i < MAX_INFERNOS; i++) {
+      const inferno_t *f = &g_infernos[i];
+      if (!inferno_alive(f)) continue;
+      int c = inferno_cell_at(f, v3_add(p, (v3){{0, 0.05f, 0}}));
+      if (c < 0) continue;
+      float k = inferno_cell_heat(f, c, inferno_age(f));
+      if (k > best) { best = k; src = f->src; from = f->at; }
+    }
+    if (best < 0.12f) continue;
+    int dmg = (int)((float)FIRE_DMG * (0.35f + 0.65f * best) + 0.5f);
+    g_kill_wpn = WPN_GR;
+    ent_damage(e, dmg, 2, src >= 0 ? src : e, from, v3_add(p, (v3){{0, 0.30f, 0}}));
+    g_kill_wpn = -1;
   }
 }
 

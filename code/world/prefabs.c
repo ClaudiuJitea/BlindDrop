@@ -164,14 +164,19 @@ static void facade(int ax, float plane, int inw, float a0, float a1, float H, in
       float t0 = f == 0 ? 0.0f : 0.12f;
       fbox(ax, plane, inw, o0, o1, t0, D, sill, head, is_door ? s->door : s->glass);
       top = head;
-      if (is_door) {   // a lintel band over the door, above head height
-        fbox(ax, plane, inw, o0 - 0.15f, o1 + 0.15f, -0.08f, 0.0f, 2.3f, 2.5f, s->trim);
-        if (s->awnings)
-          fbox(ax, plane, inw, o0 - 0.5f, o1 + 0.5f, -1.3f, -0.08f, 2.62f, 2.72f,
+      if (is_door) {   // lintel band + framed canopy with end support brackets
+        fbox(ax, plane, inw, o0 - 0.18f, o1 + 0.18f, -0.08f, 0.0f, 2.30f, 2.50f, s->trim);
+        if (s->awnings) {
+          fbox(ax, plane, inw, o0 - 0.35f, o1 + 0.35f, -1.05f, 0.0f, 2.60f, 2.70f,
                s->awning[rng_u32() % 4]);
+          fbox(ax, plane, inw, o0 - 0.32f, o0 - 0.25f, -0.75f, 0.0f, 2.34f, 2.60f, s->trim);
+          fbox(ax, plane, inw, o1 + 0.25f, o1 + 0.32f, -0.75f, 0.0f, 2.34f, 2.60f, s->trim);
+        }
       } else if (f == 0 && s->awnings && (rng_u32() % 4) == 0) {
-        fbox(ax, plane, inw, o0 - 0.4f, o1 + 0.4f, -1.1f, 0.0f, 2.62f, 2.72f,
+        fbox(ax, plane, inw, o0 - 0.30f, o1 + 0.30f, -0.95f, 0.0f, 2.60f, 2.70f,
              s->awning[rng_u32() % 4]);
+        fbox(ax, plane, inw, o0 - 0.27f, o0 - 0.20f, -0.68f, 0.0f, 2.34f, 2.60f, s->trim);
+        fbox(ax, plane, inw, o1 + 0.20f, o1 + 0.27f, -0.68f, 0.0f, 2.34f, 2.60f, s->trim);
       }
       if (f >= 1) {
         fbox(ax, plane, inw, o0 - 0.08f, o1 + 0.08f, -0.12f, 0.0f, sill - 0.08f, sill,
@@ -268,57 +273,135 @@ static void house(float x0, float z0, float x1, float z1, int floors, int win, i
       else                bx(par[k].p0, H, segs[q][0], par[k].p1, H + PH, segs[q][1], s->trim);
     }
   }
-  // Roof furniture, one item per quadrant at most, clear of the parapet.
+  // Roof furniture, one item per quadrant at most, clear of the parapet and stair entry.
   if (roof_props) {
     float w = x1 - x0, d = z1 - z0;
     if (w > 5.0f && d > 5.0f) {
       uint32_t r = rng_u32();
+      float gx0 = 1e9f, gz0 = 1e9f, gx1 = -1e9f, gz1 = -1e9f;
+      if (gap_side == SIDE_N) { gx0 = gap_a0 - 0.9f; gx1 = gap_a1 + 0.9f; gz0 = z0; gz1 = z0 + 1.85f; }
+      if (gap_side == SIDE_S) { gx0 = gap_a0 - 0.9f; gx1 = gap_a1 + 0.9f; gz0 = z1 - 1.85f; gz1 = z1; }
+      if (gap_side == SIDE_W) { gx0 = x0; gx1 = x0 + 1.85f; gz0 = gap_a0 - 0.9f; gz1 = gap_a1 + 0.9f; }
+      if (gap_side == SIDE_E) { gx0 = x1 - 1.85f; gx1 = x1; gz0 = gap_a0 - 0.9f; gz1 = gap_a1 + 0.9f; }
+      #define RP_FREE(rx0, rz0, rx1, rz1) \
+        (!(gap_side && (rx0) < gx1 && (rx1) > gx0 && (rz0) < gz1 && (rz1) > gz0))
       if (r & 1) {   // water tank on a plinth
         float tx = x0 + 1.0f, tz = z0 + 1.0f;
-        bx(tx, H, tz, tx + 1.6f, H + 0.3f, tz + 1.6f, s->stone);
-        bx(tx + 0.1f, H + 0.3f, tz + 0.1f, tx + 1.5f, H + 1.6f, tz + 1.5f,
-           rgb(0.25f, 0.27f, 0.30f));
+        if (RP_FREE(tx, tz, tx + 1.6f, tz + 1.6f)) {
+          bx(tx, H, tz, tx + 1.6f, H + 0.3f, tz + 1.6f, s->stone);
+          bx(tx + 0.1f, H + 0.3f, tz + 0.1f, tx + 1.5f, H + 1.6f, tz + 1.5f,
+             rgb(0.25f, 0.27f, 0.30f));
+        }
       }
       if (r & 2) {   // chimney / vent stack
         float tx = x1 - 1.6f, tz = z1 - 1.6f;
-        bx(tx, H, tz, tx + 0.7f, H + 1.9f, tz + 0.7f, tint(wall, 0.8f, 0.9f));
+        if (RP_FREE(tx, tz, tx + 0.7f, tz + 0.7f))
+          bx(tx, H, tz, tx + 0.7f, H + 1.9f, tz + 0.7f, tint(wall, 0.8f, 0.9f));
       }
       if (r & 4) {   // stair hut
         float tx = x1 - 3.2f, tz = z0 + 1.0f;
-        if (tx > x0 + 3.0f) bx(tx, H, tz, tx + 2.0f, H + 2.3f, tz + 1.8f, wall);
+        if (tx > x0 + 3.0f && RP_FREE(tx, tz, tx + 2.0f, tz + 1.8f))
+          bx(tx, H, tz, tx + 2.0f, H + 2.3f, tz + 1.8f, wall);
       }
+      #undef RP_FREE
     }
   }
 }
 
-// A straight stair from the ground up `rise` metres, along a wall: steps run
-// from (a, t) in direction `dir` (+1/-1 along the wall), `w` wide outward from
-// the wall plane. Solid to the ground — it reads as a masonry stair.
-static void stair_up(int ax, float plane, int inw, float a, int dir, float w, float rise, v3 c) {
-  int n = (int)(rise / PF_RISE + 0.5f);
-  for (int k = 0; k < n; k++) {
-    float s0 = a + (float)dir * (float)k * PF_RUN, s1 = s0 + (float)dir * PF_RUN;
-    fbox(ax, plane, inw, fminf(s0, s1), fmaxf(s0, s1), -w, 0.0f, 0.0f,
-         (float)(k + 1) * PF_RISE, tint(c, 0.97f, 1.03f));
+// A RAILING along one open edge of a stair flight or a raised floor: a curb
+// on the tread, posts at both ends and every ~1.2 m between, a mid rail and a
+// handrail at 0.98 m. ax 0 runs along x with its depth band at z = d0..d0+0.14
+// (ax 1: along z, x = d0..). Everything sits ON the floor at `y`, so it adds
+// nothing a body walking the flight can catch on; the posts start on the curb
+// and the rails pass between them, so no two same-facing faces meet.
+static void edge_rail(int ax, float d0, float a0, float a1, float y, v3 curb, v3 iron) {
+  if (a1 - a0 < 0.30f) return;
+#define ER(u0, u1, y0, y1, e0, e1, c) \
+  (ax == 0 ? bx(u0, y0, e0, u1, y1, e1, c) : bx(e0, y0, u0, e1, y1, u1, c))
+  int mf = g_mat_force;
+  ER(a0, a1, y, y + 0.16f, d0, d0 + 0.14f, curb);
+  g_mat_force = SMAT_STEEL;
+  float L = a1 - a0;
+  int n = (int)(L / 1.2f) + 1;
+  for (int i = 0; i <= n; i++) {
+    float u = a0 + 0.05f + (L - 0.16f) * (float)i / (float)n;
+    ER(u, u + 0.06f, y + 0.16f, y + 0.93f, d0 + 0.04f, d0 + 0.10f, iron);
   }
+  ER(a0 + 0.02f, a1 - 0.02f, y + 0.93f, y + 0.98f, d0 + 0.03f, d0 + 0.11f, iron);
+  ER(a0 + 0.03f, a1 - 0.03f, y + 0.52f, y + 0.55f, d0 + 0.055f, d0 + 0.085f, iron);
+  g_mat_force = mf;
+#undef ER
+}
+
+// A straight stair from the ground up `rise` metres, along a wall: `n - 1` steps
+// of depth `run`, a flat `land` top landing at height `rise`, plus a stepped stone
+// stringer curb with dark-steel posts, a mid rail and a handrail at ~0.97 m.
+static void stair_up(int ax, float plane, int inw, float a, int dir, float w, float rise,
+                     float run, float land, v3 c, v3 rail) {
+  int n = (int)(rise / PF_RISE + 0.5f);
+  if (n < 2) n = 2;
+  const float SW = 0.14f, SH = 0.18f;
+  v3 cap = v3_scale(rail, 1.06f);
+  v3 iron = rgb(0.16f, 0.16f, 0.18f);
+  for (int k = 0; k < n - 1; k++) {
+    float s0 = a + (float)dir * (float)k * run, s1 = s0 + (float)dir * run;
+    float u0 = fminf(s0, s1), u1 = fmaxf(s0, s1), top = (float)(k + 1) * PF_RISE;
+    fbox(ax, plane, inw, u0, u1, -w, 0.0f, 0.0f, top, tint(c, 0.97f, 1.03f));
+    fbox(ax, plane, inw, u0, u1, -(w + SW), -w, 0.0f, top + SH, rail);
+    fbox(ax, plane, inw, u0 + 0.01f, u1 - 0.01f, -(w + SW + 0.01f), -(w - 0.01f),
+         top + SH, top + SH + 0.04f, cap);
+    fbox(ax, plane, inw, u0 + 0.04f, u0 + 0.10f, -(w + 0.10f), -(w + 0.04f),
+         top + 0.22f, top + 0.92f, iron);
+    fbox(ax, plane, inw, u0 + 0.01f, u1 - 0.01f, -(w + 0.11f), -(w + 0.03f),
+         top + 0.92f, top + 0.97f, iron);
+    fbox(ax, plane, inw, u0 + 0.01f, u1 - 0.01f, -(w + 0.09f), -(w + 0.05f),
+         top + 0.55f, top + 0.58f, iron);
+  }
+  float ls0 = a + (float)dir * (float)(n - 1) * run, ls1 = ls0 + (float)dir * land;
+  float lu0 = fminf(ls0, ls1), lu1 = fmaxf(ls0, ls1);
+  fbox(ax, plane, inw, lu0, lu1, -w, 0.0f, 0.0f, rise, tint(c, 0.97f, 1.03f));
+  fbox(ax, plane, inw, lu0, lu1, -(w + SW), -w, 0.0f, rise + SH, rail);
+  fbox(ax, plane, inw, lu0 + 0.01f, lu1 - 0.01f, -(w + SW + 0.01f), -(w - 0.01f),
+       rise + SH, rise + SH + 0.04f, cap);
+  fbox(ax, plane, inw, lu0 + 0.05f, lu0 + 0.11f, -(w + 0.10f), -(w + 0.04f),
+       rise + 0.22f, rise + 0.92f, iron);
+  fbox(ax, plane, inw, lu1 - 0.11f, lu1 - 0.05f, -(w + 0.10f), -(w + 0.04f),
+       rise + 0.22f, rise + 0.92f, iron);
+  fbox(ax, plane, inw, lu0 + 0.01f, lu1 - 0.01f, -(w + 0.11f), -(w + 0.03f),
+       rise + 0.92f, rise + 0.97f, iron);
+  fbox(ax, plane, inw, lu0 + 0.01f, lu1 - 0.01f, -(w + 0.09f), -(w + 0.05f),
+       rise + 0.55f, rise + 0.58f, iron);
+  // End parapet at the far end of the top landing (guides climber into the roof gap).
+  float es0 = ls1 - (float)dir * 0.20f, es1 = ls1;
+  fbox(ax, plane, inw, fminf(es0, es1), fmaxf(es0, es1), -w, 0.0f, rise, rise + 0.65f, rail);
+  fbox(ax, plane, inw, fminf(es0, es1) + 0.01f, fmaxf(es0, es1) - 0.01f, -w + 0.01f, -0.02f,
+       rise + 0.65f, rise + 0.70f, cap);
 }
 
 // A house you can stand on top of: a stair along its `stair_side` wall
-// (which is left windowless) up to a gap in the parapet. Returns nothing; the
-// roof is the reward.
+// (which is left windowless) up to a flat top landing aligned with a gap in
+// the parapet. Returns nothing; the roof is the reward.
 static void house_climb(float x0, float z0, float x1, float z1, int floors, int win,
                         int doors, int stair_side, int dir, float start) {
   float H = (float)floors * PF_FLOOR;
-  float len = H / PF_RISE * PF_RUN;
+  int n = (int)(H / PF_RISE + 0.5f);
+  if (n < 2) n = 2;
   int ax = (stair_side == SIDE_N || stair_side == SIDE_S) ? 0 : 1;
-  float end = start + (float)dir * len;
+  float wa0 = ax == 0 ? x0 : z0, wa1 = ax == 0 ? x1 : z1;
+  float avail = (dir > 0 ? (wa1 - start) : (start - wa0)) - 0.25f;
+  float land = 1.45f;
+  float run = fminf(PF_RUN, fmaxf(0.38f, (avail - land) / (float)(n - 1)));
+  if ((float)(n - 1) * run + land > avail && avail > 1.8f)
+    land = fmaxf(0.95f, avail - (float)(n - 1) * run);
+  float ls0 = start + (float)dir * (float)(n - 1) * run;
+  float clear_end = ls0 + (float)dir * (land - 0.20f);
   float plane = stair_side == SIDE_N ? z0 : stair_side == SIDE_S ? z1
               : stair_side == SIDE_W ? x0 : x1;
   int inw = (stair_side == SIDE_N || stair_side == SIDE_W) ? +1 : -1;
-  float g0 = fminf(end, end - (float)dir * 1.4f), g1 = fmaxf(end, end - (float)dir * 1.4f);
+  float g0 = fminf(ls0, clear_end), g1 = fmaxf(ls0, clear_end);
   house(x0, z0, x1, z1, floors, win & ~stair_side, doors & ~stair_side,
         stair_side, g0, g1, 1);
-  stair_up(ax, plane, inw, start, dir, 1.3f, H, g_town.stone);
+  stair_up(ax, plane, inw, start, dir, 1.20f, H, run, land, g_town.stone, g_town.trim);
 }
 
 // THE CLIMBING TOWER: a square core with a stair spiralling round it, one step
@@ -327,36 +410,73 @@ static void house_climb(float x0, float z0, float x1, float z1, int floors, int 
 // `cap` builds the crown (a lantern and spire, or nothing).
 static void tower(float cx, float cz, float hc, float H, v3 core, v3 step, int cap,
                   int open_side) {
-  const float W = 1.2f;
+  const float W = 1.08f, SW = 0.10f, SH = 0.84f;
+  v3 rc = g_town.trim;
   bx(cx - hc, 0.0f, cz - hc, cx + hc, H, cz + hc, core);
   int nside = (int)((2.0f * hc) / PF_RUN);
   float run = 2.0f * hc / (float)nside;
   int total = (int)(H / PF_RISE + 0.5f);
   int k = 0;
   // Sides in order: south (running east), east (running north), north
-  // (running west), west (running south); each corner gets a landing.
+  // (running west), west (running south); each corner gets a landing + outer rails.
   for (int side = 0; k < total; side = (side + 1) % 4) {
     for (int i = 0; i < nside && k < total; i++, k++) {
-      float top = (float)(k + 1) * PF_RISE, a = -hc + (float)i * run, b = a + run;
+      float top = (float)(k + 1) * PF_RISE, bot = top - PF_RISE;
+      float a = -hc + (float)i * run, b = a + run;
       switch (side) {
-        case 0: bx(cx + a, top - PF_RISE, cz + hc, cx + b, top, cz + hc + W, step); break;
-        case 1: bx(cx + hc, top - PF_RISE, cz - b, cx + hc + W, top, cz - a, step); break;
-        case 2: bx(cx - b, top - PF_RISE, cz - hc - W, cx - a, top, cz - hc, step); break;
-        default: bx(cx - hc - W, top - PF_RISE, cz + a, cx - hc, top, cz + b, step); break;
+        case 0:
+          bx(cx + a, bot, cz + hc, cx + b, top, cz + hc + W, step);
+          bx(cx + a, bot, cz + hc + W, cx + b, top + SH, cz + hc + W + SW, rc);
+          if (k == total - 1)
+            bx(cx + b, bot, cz + hc, cx + b + SW, top + SH - 0.02f, cz + hc + W, rc);
+          break;
+        case 1:
+          bx(cx + hc, bot, cz - b, cx + hc + W, top, cz - a, step);
+          bx(cx + hc + W, bot, cz - b, cx + hc + W + SW, top + SH, cz - a, rc);
+          if (k == total - 1)
+            bx(cx + hc, bot, cz - b - SW, cx + hc + W, top + SH - 0.02f, cz - b, rc);
+          break;
+        case 2:
+          bx(cx - b, bot, cz - hc - W, cx - a, top, cz - hc, step);
+          bx(cx - b, bot, cz - hc - W - SW, cx - a, top + SH, cz - hc - W, rc);
+          if (k == total - 1)
+            bx(cx - b - SW, bot, cz - hc - W, cx - b, top + SH - 0.02f, cz - hc, rc);
+          break;
+        default:
+          bx(cx - hc - W, bot, cz + a, cx - hc, top, cz + b, step);
+          bx(cx - hc - W - SW, bot, cz + a, cx - hc - W, top + SH, cz + b, rc);
+          if (k == total - 1)
+            bx(cx - hc - W, bot, cz + b, cx - hc, top + SH - 0.02f, cz + b + SW, rc);
+          break;
       }
     }
     if (k >= total) break;
-    float top = (float)k * PF_RISE;   // landing at the last step's height
+    float top = (float)k * PF_RISE, bot = top - PF_RISE;   // corner landing
     switch (side) {
-      case 0: bx(cx + hc, top - PF_RISE, cz + hc, cx + hc + W, top, cz + hc + W, step); break;
-      case 1: bx(cx + hc, top - PF_RISE, cz - hc - W, cx + hc + W, top, cz - hc, step); break;
-      case 2: bx(cx - hc - W, top - PF_RISE, cz - hc - W, cx - hc, top, cz - hc, step); break;
-      default: bx(cx - hc - W, top - PF_RISE, cz + hc, cx - hc, top, cz + hc + W, step); break;
+      case 0:
+        bx(cx + hc, bot, cz + hc, cx + hc + W, top, cz + hc + W, step);
+        bx(cx + hc, bot, cz + hc + W, cx + hc + W, top + SH, cz + hc + W + SW, rc);
+        bx(cx + hc + W, bot, cz + hc, cx + hc + W + SW, top + SH, cz + hc + W + SW, rc);
+        break;
+      case 1:
+        bx(cx + hc, bot, cz - hc - W, cx + hc + W, top, cz - hc, step);
+        bx(cx + hc + W, bot, cz - hc - W, cx + hc + W + SW, top + SH, cz - hc, rc);
+        bx(cx + hc, bot, cz - hc - W - SW, cx + hc + W + SW, top + SH, cz - hc - W, rc);
+        break;
+      case 2:
+        bx(cx - hc - W, bot, cz - hc - W, cx - hc, top, cz - hc, step);
+        bx(cx - hc - W, bot, cz - hc - W - SW, cx - hc, top + SH, cz - hc - W, rc);
+        bx(cx - hc - W - SW, bot, cz - hc - W - SW, cx - hc - W, top + SH, cz - hc, rc);
+        break;
+      default:
+        bx(cx - hc - W, bot, cz + hc, cx - hc, top, cz + hc + W, step);
+        bx(cx - hc - W - SW, bot, cz + hc, cx - hc - W, top + SH, cz + hc + W, rc);
+        bx(cx - hc - W - SW, bot, cz + hc + W, cx - hc, top + SH, cz + hc + W + SW, rc);
+        break;
     }
   }
   // Railing round the lookout, a gap on the side the stair finished on.
   int last = ((total - 1) / nside) % 4;
-  v3 rc = g_town.trim;
   const float RT = 0.12f, RH = 1.0f;
   if (last != 2 && open_side != 2) bx(cx - hc, H, cz - hc, cx + hc, H + RH, cz - hc + RT, rc);
   if (last != 0 && open_side != 0) bx(cx - hc, H, cz + hc - RT, cx + hc, H + RH, cz + hc, rc);
@@ -439,7 +559,251 @@ static void car(float x, float z, int ax) {
   CB(0.85f, W - 0.25f, 1.55f, W + 0.05f, 0.0f, 0.62f, w);
 #undef CB
   solids_hide(first);
-  prop_add(PROP_CAR, x, z, ax, 0, p, w);
+  prop_add(PROP_CAR, x, z, ax, CAR_SEDAN, p, w);
+}
+
+// A single-cab PICKUP in the same 4.2 m footprint, sat higher: a body block to
+// the bed rails and the cab over its front half. `flip` faces it the other way.
+// It draws its paint from g_rng exactly as car() does, so swapping one for the
+// other leaves every later draw — and so the rest of the map — unchanged.
+static void pickup_truck(float x, float z, int ax, int flip) {
+  static const v3 PAINT[5] = {{{0.82f, 0.80f, 0.74f}}, {{0.62f, 0.12f, 0.10f}},
+                              {{0.30f, 0.34f, 0.26f}}, {{0.16f, 0.30f, 0.48f}},
+                              {{0.70f, 0.66f, 0.56f}}};
+  v3 p = PAINT[rng_u32() % 5], w = rgb(0.08f, 0.08f, 0.09f);
+  float L = 2.12f, W = 0.95f, s = flip ? -1.0f : 1.0f;
+  int first = g_num_solids;
+#define CB(a0, b0, a1, b1, y0, y1, c) \
+  (ax ? bx(x + (b0), y0, z + fminf((a0) * s, (a1) * s), x + (b1), y1, z + fmaxf((a0) * s, (a1) * s), c) \
+      : bx(x + fminf((a0) * s, (a1) * s), y0, z + (b0), x + fmaxf((a0) * s, (a1) * s), y1, z + (b1), c))
+  CB(-L, -W, L, W, 0.42f, 1.00f, p);
+  CB(-0.46f, -0.86f, 0.95f, 0.86f, 1.00f, 1.66f, p);
+  CB(-1.60f, -W - 0.05f, -1.00f, -W + 0.25f, 0.0f, 0.72f, w);
+  CB(1.02f, -W - 0.05f, 1.62f, -W + 0.25f, 0.0f, 0.72f, w);
+  CB(-1.60f, W - 0.25f, -1.00f, W + 0.05f, 0.0f, 0.72f, w);
+  CB(1.02f, W - 0.25f, 1.62f, W + 0.05f, 0.0f, 0.72f, w);
+#undef CB
+  solids_hide(first);
+  prop_add(PROP_CAR, x, z, ax, CAR_PICKUP | (flip ? CAR_FLIP : 0), p, w);
+}
+
+// STREET FURNITURE: a Blender-built mesh (PM_*) over hidden collision boxes,
+// `qt` quarter turns about y. Each box is given in the prop's own frame
+// (a along its forward, b across it) and turned with it. No g_rng.
+typedef struct { float a0, a1, b0, b1, y0, y1; } pbox_t;
+static void pbox_world(const pbox_t *b, float x, float z, int qt, float *ox0, float *oz0,
+                       float *ox1, float *oz1) {
+  float c[4][2] = {{b->a0, b->b0}, {b->a1, b->b0}, {b->a0, b->b1}, {b->a1, b->b1}};
+  float x0 = 1e9f, x1 = -1e9f, z0 = 1e9f, z1 = -1e9f;
+  for (int k = 0; k < 4; k++) {
+    float a = c[k][0], bb = c[k][1], wx, wz;
+    switch (qt & 3) {          // F = (1,0,0) turned qt times; L follows it
+      case 0: wx = a;   wz = bb;  break;
+      case 1: wx = -bb; wz = a;   break;
+      case 2: wx = -a;  wz = -bb; break;
+      default: wx = bb; wz = -a;  break;
+    }
+    x0 = fminf(x0, wx); x1 = fmaxf(x1, wx); z0 = fminf(z0, wz); z1 = fmaxf(z1, wz);
+  }
+  *ox0 = x + x0; *oz0 = z + z0; *ox1 = x + x1; *oz1 = z + z1;
+}
+static void street_prop_y(int id, float x, float y, float z, int qt, v3 paint, v3 paint2,
+                          const pbox_t *bxs, int nb) {
+  int first = g_num_solids;
+  for (int i = 0; i < nb; i++) {
+    float x0, z0, x1, z1;
+    pbox_world(&bxs[i], x, z, qt, &x0, &z0, &x1, &z1);
+    bx(x0, y + bxs[i].y0, z0, x1, y + bxs[i].y1, z1, paint);
+  }
+  solids_hide(first);
+  prop_add_y(PROP_MESH, x, y, z, qt & 3, id, paint, paint2);
+}
+static void street_prop(int id, float x, float z, int qt, v3 paint, v3 paint2,
+                        const pbox_t *bxs, int nb) {
+  street_prop_y(id, x, 0.0f, z, qt, paint, paint2, bxs, nb);
+}
+static void genset(float x, float z, int qt, v3 paint, v3 paint2) {
+  static const pbox_t B[] = {{-1.08f, 1.08f, -0.49f, 0.49f, 0.0f, 1.32f}};
+  street_prop(PM_GENSET, x, z, qt, paint, paint2, B, 1);
+}
+static void forklift_prop(float x, float z, int qt, v3 paint, v3 paint2) {
+  static const pbox_t B[] = {{-1.28f, 0.72f, -0.55f, 0.55f, 0.0f, 0.94f},
+                             {-0.96f, 0.38f, -0.42f, 0.42f, 0.94f, 2.06f},
+                             {0.72f, 0.92f, -0.42f, 0.42f, 0.10f, 2.06f},
+                             {0.88f, 1.74f, -0.29f, 0.29f, 0.0f, 0.10f}};
+  street_prop(PM_FORKLIFT, x, z, qt, paint, paint2, B, 4);
+}
+static void dumpster(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.72f, 0.72f, -0.56f, 0.56f, 0.0f, 1.16f}};
+  street_prop(PM_DUMPSTER, x, z, qt, paint, paint, B, 1);
+}
+static void motorbike(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.92f, 0.92f, -0.22f, 0.22f, 0.0f, 1.02f}};
+  street_prop(PM_MOTO, x, z, qt, paint, paint, B, 1);
+}
+static void cafe_set(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.37f, 0.37f, -0.37f, 0.37f, 0.0f, 0.76f},       // table
+                             {0.40f, 0.86f, -0.24f, 0.24f, 0.0f, 0.88f},        // chair, facing it
+                             {-0.34f, 0.14f, 0.40f, 0.86f, 0.0f, 0.88f}};       // the other chair
+  street_prop(PM_CAFE, x, z, qt, rgb(0.9f, 0.9f, 0.87f), rgb(0.9f, 0.9f, 0.87f), B, 3);
+}
+// A position hash for world-gen choices that must not draw from g_rng (which
+// would re-roll the rest of the map after them).
+static float wg_hash(float x, float z, uint32_t salt) {
+  uint32_t h = (uint32_t)(int32_t)lrintf(x * 37.0f) * 73856093u ^
+               (uint32_t)(int32_t)lrintf(z * 37.0f) * 19349663u ^ salt * 83492791u;
+  h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+  return (float)(h & 0xFFFFFFu) / 16777216.0f;
+}
+static int wg_box_free(v3 mn, v3 mx) {
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *s = &g_solids[i];
+    if (mn.x < s->max.x && mx.x > s->min.x && mn.y < s->max.y && mx.y > s->min.y &&
+        mn.z < s->max.z && mx.z > s->min.z) return 0;
+  }
+  return 1;
+}
+// ROOFTOP WATER TANKS: a polyethylene tank on its steel stand, on the flat roofs
+// of the taller houses. They are SOLID — a climbable roof is played on, and a
+// tank a round passes through is cover that lies. Placed by hash, inset from
+// the parapets, only where the whole stand is clear.
+static void roof_tanks(int max_n) {
+  static const v3 TC[3] = {{{0.10f, 0.10f, 0.11f}}, {{0.20f, 0.34f, 0.55f}}, {{0.84f, 0.84f, 0.80f}}};
+  static const pbox_t SB[] = {{-0.62f, 0.68f, -0.84f, 0.84f, 0.0f, 1.56f}};
+  int n0 = g_num_solids, n = 0;
+  for (int i = 0; i < n0 && n < max_n; i++) {
+    const solid_t *s = &g_solids[i];
+    float sx = s->max.x - s->min.x, sz = s->max.z - s->min.z, top = s->max.y;
+    // a house core from the ground, or the roof slab over one
+    if (g_solid_hide[i] || sx < 3.6f || sz < 3.6f || top < 5.5f ||
+        (s->min.y > 0.05f && s->max.y - s->min.y > 0.6f)) continue;
+    float cx = (s->min.x + s->max.x) * 0.5f, cz = (s->min.z + s->max.z) * 0.5f;
+    if (wg_hash(cx, cz, 11u) > 0.50f) continue;
+    int solar = (g_town_kind == 0 || g_town_kind == 3) && sx >= 4.2f && sz >= 4.2f &&
+                wg_hash(cx, cz, 16u) > 0.45f;
+    float margin = solar ? 2.8f : 2.2f;
+    float x = cx + (wg_hash(cx, cz, 12u) - 0.5f) * fmaxf(0.0f, sx - margin);
+    float z = cz + (wg_hash(cx, cz, 13u) - 0.5f) * fmaxf(0.0f, sz - margin);
+    int qt = (int)(wg_hash(cx, cz, 15u) * 4.0f) & 3;
+    if (solar) {
+      float x0, z0, x1, z1;
+      pbox_world(&SB[0], x, z, qt, &x0, &z0, &x1, &z1);
+      if (!wg_box_free((v3){{x0 - 0.04f, top + 0.001f, z0 - 0.04f}},
+                       (v3){{x1 + 0.04f, top + 1.60f, z1 + 0.04f}})) continue;
+      street_prop_y(PM_SOLAR, x, top, z, qt, rgb(0.84f, 0.84f, 0.80f),
+                    rgb(0.18f, 0.34f, 0.52f), SB, 1);
+    } else {
+      v3 mn = {{x - 0.53f, top + 0.001f, z - 0.53f}}, mx = {{x + 0.53f, top + 1.80f, z + 0.53f}};
+      if (!wg_box_free(mn, mx)) continue;
+      v3 c = TC[(int)(wg_hash(cx, cz, 14u) * 3.0f) % 3];
+      int first = g_num_solids;
+      bx(x - 0.50f, top, z - 0.50f, x + 0.50f, top + 1.77f, z + 0.50f, c);
+      solids_hide(first);
+      prop_add_y(PROP_MESH, x, top, z, qt, PM_WTANK, c, c);
+    }
+    n++;
+  }
+}
+// WALL UNITS: split-system AC condensers on brackets above head height on the
+// street walls, and satellite dishes on the parapets. Render-only (above the
+// 1.8 m gameplay band, on walls nobody stands in), so props without solids.
+// Each needs bare wall behind it — never a window — and open air where it sits.
+static int wg_inside(v3 p, v3 *col) {
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *s = &g_solids[i];
+    if (p.x > s->min.x && p.x < s->max.x && p.y > s->min.y && p.y < s->max.y &&
+        p.z > s->min.z && p.z < s->max.z) { if (col) *col = s->color; return 1; }
+  }
+  return 0;
+}
+static int wg_same(v3 a, v3 b) { return fabsf(a.x - b.x) + fabsf(a.y - b.y) + fabsf(a.z - b.z) < 1e-4f; }
+static void wall_units(float p_ac, float p_dish) {
+  const town_style_t *ts = &g_town;
+  int n0 = g_num_solids;
+  for (int i = 0; i < n0; i++) {
+    const solid_t *s = &g_solids[i];
+    v3 mn = s->min, mx = s->max;
+    float sx = mx.x - mn.x, sy = mx.y - mn.y, sz = mx.z - mn.z;
+    int skin = mn.y < 0.05f && sy > 3.6f && (fabsf(sx - PF_SKIN) < 0.01f || fabsf(sz - PF_SKIN) < 0.01f) &&
+               fmaxf(sx, sz) > 2.2f;
+    int parapet = wg_same(s->color, ts->trim) && fabsf(sy - 0.70f) < 0.02f && mn.y > 2.9f &&
+                  (fabsf(sx - 0.25f) < 0.02f || fabsf(sz - 0.25f) < 0.02f) && fmaxf(sx, sz) > 2.0f;
+    if (!skin && !parapet) continue;
+    int ax = skin ? (fabsf(sx - PF_SKIN) < 0.01f ? 0 : 2) : (fabsf(sx - 0.25f) < 0.02f ? 0 : 2);
+    float cx = (mn.x + mx.x) * 0.5f, cz = (mn.z + mx.z) * 0.5f;
+    if (wg_hash(cx, cz, skin ? 21u : 31u) > (skin ? p_ac : p_dish)) continue;
+    // which face is the street: probe past both
+    float py = skin ? 1.5f : mn.y - 0.6f;
+    v3 pp = ax == 0 ? (v3){{mx.x + 0.45f, py, cz}} : (v3){{cx, py, mx.z + 0.45f}};
+    v3 pn = ax == 0 ? (v3){{mn.x - 0.45f, py, cz}} : (v3){{cx, py, mn.z - 0.45f}};
+    int ip = wg_inside(pp, NULL), in = wg_inside(pn, NULL);
+    if (ip == in) continue;
+    int o = ip ? -1 : 1;
+    float pl = ax == 0 ? (o > 0 ? mx.x : mn.x) : (o > 0 ? mx.z : mn.z);
+    float u0 = ax == 0 ? mn.z : mn.x, u1 = ax == 0 ? mx.z : mx.x;
+    if (u1 - u0 < 1.8f) continue;
+    float u = u0 + 0.8f + wg_hash(cx, cz, 22u) * (u1 - u0 - 1.6f);
+    float yb = skin ? (wg_hash(cx, cz, 23u) < 0.5f || sy < 6.0f ? 2.30f : 5.45f) : mn.y + 0.02f;
+#define WP(t, du, y) (ax == 0 ? (v3){{pl + (float)o * (t), (y), u + (du)}} \
+                              : (v3){{u + (du), (y), pl + (float)o * (t)}})
+    int ok = 1;
+    float hw = skin ? 0.46f : 0.40f, hh = skin ? 0.66f : 0.70f, dd = skin ? 0.46f : 0.95f;
+    for (int a = 0; a < 3 && ok; a++)
+      for (int b = 0; b < 3 && ok; b++)
+        for (int c = 0; c < 3 && ok; c++)
+          if (wg_inside(WP(0.04f + dd * 0.5f * (float)a, hw * (float)(b - 1), yb + 0.03f + hh * 0.5f * (float)c), NULL))
+            ok = 0;
+    for (int b = 0; b < 3 && ok; b++)
+      for (int c = 0; c < 2 && ok; c++) {
+        v3 wc;
+        if (!wg_inside(WP(-0.06f, hw * (float)(b - 1), yb + 0.1f + 0.45f * (float)c), &wc) ||
+            wg_same(wc, ts->glass)) ok = 0;
+      }
+    if (skin && ok && wg_inside(WP(0.08f, 0.43f, yb + 1.15f), NULL)) ok = 0;      // the pipe run
+#undef WP
+    // the outer ring's backs face out of the arena, where nobody looks
+    float ox = ax == 0 ? pl + (float)o : u, oz = ax == 0 ? u : pl + (float)o;
+    if (fabsf(ox) > ARENA_HALF - 0.5f || fabsf(oz) > ARENA_HALF - 0.5f) ok = 0;
+    if (!ok) continue;
+    // F = out of the wall: +x, +z, -x, -z are quarter turns 0..3 (prop_mesh)
+    int qt = ax == 0 ? (o > 0 ? 0 : 2) : (o > 0 ? 1 : 3);
+    float x = ax == 0 ? pl : u, z = ax == 0 ? u : pl;
+    v3 c = rgb(0.86f, 0.84f, 0.78f);
+    prop_add_y(PROP_MESH, x, yb, z, qt, skin ? PM_AC : PM_DISH, c, c);
+  }
+}
+// THE YARD AND STREET KIT (tools/props_models.py): an IBC tote, a pallet of
+// sacks, a bench, an electrical cabinet. Each faces +x (out from a wall) at
+// qt 0, and its collision is the block-out of what a round would hit.
+static void ibc_tote(float x, float z, int qt, v3 paint, v3 cap) {
+  static const pbox_t B[] = {{-0.60f, 0.60f, -0.50f, 0.50f, 0.0f, 1.16f}};
+  int mf = g_mat_force; g_mat_force = SMAT_STEEL;
+  street_prop(PM_IBC, x, z, qt, paint, cap, B, 1);
+  g_mat_force = mf;
+}
+static void sack_pallet(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.60f, 0.60f, -0.50f, 0.50f, 0.0f, 0.80f}};
+  int mf = g_mat_force; g_mat_force = SMAT_STUCCO;
+  street_prop(PM_SACKS, x, z, qt, paint, paint, B, 1);
+  g_mat_force = mf;
+}
+static void bench_prop(float x, float z, int qt, v3 slats) {
+  static const pbox_t B[] = {{-0.28f, 0.32f, -0.82f, 0.82f, 0.0f, 0.49f},
+                             {-0.32f, -0.18f, -0.82f, 0.82f, 0.49f, 0.90f}};
+  int mf = g_mat_force; g_mat_force = SMAT_WOOD;
+  street_prop(PM_BENCH, x, z, qt, slats, slats, B, 2);
+  g_mat_force = mf;
+}
+static void elec_cabinet(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.28f, 0.28f, -0.66f, 0.66f, 0.0f, 1.53f}};
+  int mf = g_mat_force; g_mat_force = SMAT_STEEL;
+  street_prop(PM_ELEC, x, z, qt, paint, v3_scale(paint, 0.9f), B, 1);
+  g_mat_force = mf;
+}
+static void tyre_stack(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.34f, 0.36f, -0.34f, 0.36f, 0.0f, 0.74f},
+                             {0.38f, 0.72f, -0.30f, 0.38f, 0.0f, 0.66f}};
+  street_prop(PM_TYRES, x, z, qt, rgb(0.06f, 0.06f, 0.06f), rgb(0.06f, 0.06f, 0.06f), B, 2);
 }
 
 static void barrel(float x, float z, v3 c) {

@@ -10,8 +10,8 @@
 // order, so the enum IS the menu layout.
 typedef enum {
   IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT, IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R,
-  IN_FIRE, IN_ADS, IN_RELOAD, IN_SWAP, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5,
-  IN_SCORE, IN_VIEW,
+  IN_FIRE, IN_ADS, IN_RELOAD, IN_ALTFIRE, IN_SWAP, IN_SWAP_PREV, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SLOT6, IN_SLOT7,
+  IN_SCORE, IN_VIEW, IN_INSPECT,
   IN_COUNT
 } action_t;
 
@@ -43,14 +43,28 @@ static const action_def_t ACTION_DEF[IN_COUNT] = {
   [IN_FIRE]    = {"bind_fire",       "mouse1", "FIRE",             "fire",       "pad_rt"},
   [IN_ADS]     = {"bind_ads",        "mouse2", "AIM",              "ads",        "pad_lt"},
   [IN_RELOAD]  = {"bind_reload",     "r",      "RELOAD",           "reload",     "pad_x"},
-  [IN_SWAP]    = {"bind_swap",       "x",      "SWAP WPN",         "swap",       "pad_y"},
+  // CS2's secondary fire, on a key of its own because AIM is this game's right
+  // button: the FAMAS's and the Glock's three-round burst, the R8's fanned
+  // hammer. A toggle; the HUD shows the mode beside the gun's name.
+  [IN_ALTFIRE] = {"bind_altfire",    "b",      "FIRE MODE",        "altfire",    "none"},
+  // NEXT and PREVIOUS through the selection list (sim/weapon.c sel_step) — the
+  // mouse wheel is these two: wheel down next, wheel up previous, as in CS2.
+  [IN_SWAP]    = {"bind_swap",       "x",      "NEXT WEAPON",      "swap",       "pad_y"},
+  [IN_SWAP_PREV] = {"bind_swap_prev", "z",     "PREV WEAPON",      "swapprev",   "none"},
   [IN_SLOT1]   = {"bind_slot1",      "1",      "WEAPON 1 AR",      "slot1",      "pad_left"},
   [IN_SLOT2]   = {"bind_slot2",      "2",      "WEAPON 2 SNIPER",  "slot2",      "pad_right"},
   [IN_SLOT3]   = {"bind_slot3",      "3",      "WEAPON 3 PISTOL",  "slot3",      "none"},
   [IN_SLOT4]   = {"bind_slot4",      "4",      "WEAPON 4 KNIFE",   "slot4",      "none"},
-  [IN_SLOT5]   = {"bind_slot5",      "5",      "WEAPON 5 GRENADE", "slot5",      "none"},
+  // ONE KEY PER GRENADE, the way CS2's own grenade keys go to one grenade: 5 the
+  // frag, 6 the smoke, 7 the incendiary. A key for a kind you have none of draws
+  // whichever grenade you do have, so 5 is still "a grenade" in a pinch.
+  [IN_SLOT5]   = {"bind_slot5",      "5",      "WEAPON 5 FRAG",    "slot5",      "none"},
+  [IN_SLOT6]   = {"bind_slot6",      "6",      "WEAPON 6 SMOKE",   "slot6",      "none"},
+  [IN_SLOT7]   = {"bind_slot7",      "7",      "WEAPON 7 FIRE",    "slot7",      "none"},
   [IN_SCORE]   = {"bind_score",      "tab",    "SCOREBOARD",       "score",      "pad_select"},
   [IN_VIEW]    = {"bind_view",       "v",      "VIEW 1ST/3RD",     "view",       "pad_down"},
+  // Presentation only: the viewmodel turns the knife or pistol over for a look.
+  [IN_INSPECT] = {"bind_inspect",    "f",      "INSPECT WEAPON",   "inspect",    "pad_up"},
 };
 
 // Tunable movement parameters — every value the in-game MOVEMENT panel
@@ -194,6 +208,16 @@ typedef struct {
 
 // Sound ids live here so WPN_DEF can reference them; buffers are built in
 // the audio section.
+// The CS2 guns with their own sampled reports (beyond the AK, FAMAS, Glock and
+// Deagle, which have theirs above). Order is the enum's: append only.
+#define GUN_TAKE_LIST(X) \
+  X(M4A1S, "m4a1s") X(GALIL, "galil") X(SG553, "sg553") X(AUG, "aug") \
+  X(MAC10, "mac10") X(MP9, "mp9") X(MP7, "mp7") X(MP5SD, "mp5sd") X(UMP45, "ump45") \
+  X(P90, "p90") X(BIZON, "bizon") X(USPS, "usps") X(P250, "p250") \
+  X(FIVESEVEN, "fiveseven") X(TEC9, "tec9") X(CZ75, "cz75") X(R8, "r8") \
+  X(SSG08, "ssg08") X(G3SG1, "g3sg1") X(SCAR20, "scar20") \
+  X(NOVA, "nova") X(XM1014, "xm1014") X(SAWEDOFF, "sawedoff") X(MAG7, "mag7") \
+  X(M249, "m249") X(NEGEV, "negev") X(ELITES, "elites")
 enum {
   SFX_FIRE_AR, SFX_FIRE_SR,          // the shot as the shooter hears it
   SFX_FAR_AR, SFX_FAR_SR,            // ...and as someone across the arena does
@@ -229,6 +253,8 @@ enum {
   SFX_ALARM,                         // HOSTAGE RESCUE: the compound siren
   SFX_SNIP,                          // a hostage's restraints cut
   SFX_CHIME,                         // an objective completed
+  SFX_SMOKE_POP, SFX_SMOKE_HISS,     // a smoke canister popping, and its gas
+  SFX_FLAME_POP, SFX_FLAME_BURN,     // an incendiary catching, and the fire's crackle
   // SAMPLED ONLY (code/audio/samples.c): no synth recipe, the buffer exists only
   // when the embedded pack carries it, and every caller checks for that.
   SFX_FIRE_AK1, SFX_FIRE_AK2, SFX_FIRE_AK3,             // the loadout guns' own reports
@@ -241,6 +267,13 @@ enum {
   // every kill sounding the same sentence was the complaint, see kill_takes.
   SFX_KILL2, SFX_KILL3, SFX_KILL4, SFX_KILL_HEAD2, SFX_KILL_HEAD3,
   SFX_DIE1, SFX_DIE2,                // the player's OWN death, first person
+  // THE CS2 ARSENAL'S OWN REPORTS, three takes per gun (GUN_TAKE_LIST; the pack
+  // names are fire_<name>1..3, generated by tools/gen_sfx.py). Sampled-only
+  // like the AK's: a gun whose takes are not in the pack borrows its stand-in's
+  // (see VAR_SOUND in code/audio/routing.c), re-pitched.
+  #define GUN_TAKE_ENUM(id, name) SFX_T_##id, SFX_T_##id##_2, SFX_T_##id##_3,
+  GUN_TAKE_LIST(GUN_TAKE_ENUM)
+  #undef GUN_TAKE_ENUM
   SFX_COUNT
 };
 
@@ -260,7 +293,7 @@ static const wpn_def_t WPN_DEF[WPN_COUNT] = {
   // the pistol, so the scope remains the way to place a round.
   [WPN_SR] = {"SNIPER", "sr",  5, 150, 2, 214, 214, 0, 0.60f, SFX_FIRE_SR,
               SFX_RELOAD_SR, 0.130f, 840.0f},
-  [WPN_PT] = {"PISTOL", "pt", 15,  34, 2, 118,  96, 0, 0.32f, SFX_FIRE_PT,
+  [WPN_PT] = {"PISTOL", "pt", 13,  34, 2, 118,  96, 0, 0.32f, SFX_FIRE_PT,   // the P2000: 13 rounds
               SFX_RELOAD_PT, 0.050f, 370.0f},
   // One "round" that is never spent, so a reload can never start and the empty
   // checks every weapon path shares stay true without a knife exception.
@@ -268,40 +301,173 @@ static const wpn_def_t WPN_DEF[WPN_COUNT] = {
   [WPN_KN] = {"KNIFE",  "kn",  1,   0, 2,   1,   1, 1, 0.00f, SFX_KNIFE_SWING,
               SFX_KNIFE_SWING, 0.030f, 0.0f},
   // `mag` is the grenades you spawn with. They never reload.
-  [WPN_GR] = {"GRENADE", "gr", 2,   0, 1,   1,   1, 0, 0.00f, SFX_NADE_PIN,
+  [WPN_GR] = {"GRENADE", "gr", 3,   0, 1,   1,   1, 0, 0.00f, SFX_NADE_PIN,
               SFX_NADE_PIN, 0.030f, 0.0f},
 };
 
-// THE LOADOUT VARIANTS (see WPN_VARS). One row per slot that has them — [0] the
-// rifle, [1] the pistol — and per variant; row 0 of each is never read (variant 0
-// IS WPN_DEF and WP_DEFAULTS, untouched). Structural numbers replace the slot's;
-// `feel` MULTIPLIES the slot's live tuning (WP_* order), so a developer dragging
-// the AR's kick still moves all three rifles together, and each keeps its own
-// character relative to the others. The reload timeline stays the slot's: the
-// synthesized reload sounds and the animation's beats are cut to it.
-//   AK-47     heavier round, slower and harder to hold, 30 rounds
-//   FAMAS     1000 rpm, light kick, lighter round, 25 rounds
-//   GLOCK-18  the full-auto pistol: 33-round stick, weak rounds, wild hip fire
-//   DEAGLE    seven rounds that two-shot to the body and one-shot the head
-#define WPN_VARS 3
+// THE LOADOUT VARIANTS (see WPN_VARS): the Counter-Strike 2 arsenal, every gun a
+// real one. One row per slot that has them — [0] the primary (rifles AND the
+// SMGs: CS2's primary slot holds both), [1] the pistol, [2] the sniper — and per
+// variant; cell 0 of each row is never read (variant 0 IS WPN_DEF and
+// WP_DEFAULTS, untouched). Structural numbers replace the slot's; `feel`
+// MULTIPLIES the slot's live tuning (WP_* order), so a developer dragging the
+// AR's kick still moves every primary together and each keeps its own character
+// relative to the others. The reload timeline stays the slot's: the synthesized
+// reload sounds and the animation's beats are cut to it.
+//
+// THE NUMBERS ARE CS2's, ON THIS GAME'S SCALE. Damage is CS2's base damage times
+// the slot's own ratio (variant 0 against its CS2 namesake: the M4A4's 33 is
+// 26 here, the P2000's 35 is 34), so the guns keep CS2's ORDER and SPACING —
+// the M4A1-S out-hits the M4A4, the UMP-45 out-hits every SMG, the P250 every
+// 9 mm. Fire rate is CS2's RPM over the slot's (750 primary, 353 pistol). The
+// guns that were here first (AK, FAMAS, Deagle, SCAR-20) keep their tuned rows.
+//   primary   0 M4A4  1 AK-47  2 FAMAS  3 M4A1-S  4 GALIL AR  5 SG 553  6 AUG
+//             7 MAC-10  8 MP9  9 MP7  10 MP5-SD  11 UMP-45  12 P90  13 PP-BIZON
+//             14 NOVA  15 XM1014  16 SAWED-OFF  17 MAG-7  18 M249  19 NEGEV
+//   pistol    0 P2000  1 GLOCK-18  2 DESERT EAGLE  3 USP-S  4 P250  5 FIVE-SEVEN
+//             6 TEC-9  7 CZ75-AUTO  8 R8 REVOLVER  9 DUAL BERETTAS
+//   sniper    0 AWP  1 SCAR-20  2 SSG 08  3 G3SG1
+// `supp` marks a suppressed gun (M4A1-S, USP-S, MP5-SD): no muzzle star, a
+// quieter, duller report, and the round still the gun's.
+#define RV_N 20
+#define PV_N 10
+#define SV_N 4
+#define WPN_VARS RV_N          // the widest row: the table's second dimension
+#define SR_VARS  SV_N
+#define SV_SCAR  1    // the sniper slot's SCAR-20 (semi-automatic: no bolt to work)
+#define SV_G3    3    // ...and the G3SG1, its semi-automatic twin
 typedef struct {
   int   mag, dmg, full_auto;
   float hip_spread, v_round;
   float feel[WP_COUNT];   // RPM KICK_UP KICK_SIDE RECOVER SPREAD BLOOM ADS ZOOM PUNCH SWAY
   float pitch, level;     // the report's playback rate and level against the slot's
+  int   supp;             // suppressed
+  // THE HEAVY GUNS' AND THE ODD ONES' MECHANICS (0 everywhere else):
+  int   pellets;          // a shotgun's pellets per shell (dmg is PER PELLET)
+  float pel_spread;       // ...the cone they leave in, degrees
+  int   shell_t;          // ticks (120 Hz) per shell: a TUBE loads one at a time (0 = a magazine)
+  int   pump;             // the fore-end is worked after every shot (mesh group 3)
+  int   alt;              // FIRE MODE: 1 a three-round burst, 2 the R8's hammer
+  int   dual;             // two guns, fired in turn (the Dual Berettas)
 } wpn_var_t;
-static const wpn_var_t WPN_VAR[2][WPN_VARS] = {
+#define ALT_BURST 1
+#define ALT_R8    2
+// Rows: [0] the primary, [1] the pistol, [2] the sniper (see wpn_var_row).
+static const wpn_var_t WPN_VAR[3][WPN_VARS] = {
   { {0},
+    // AK-47
     {30, 33, 1, 0.15f, 715.0f, {0.80f, 1.45f, 1.50f, 1.10f, 1.30f, 1.30f, 1.10f, 1.0f, 1.35f, 1.1f},
-     0.86f, 1.05f},
+     0.86f, 1.05f, 0, 0, 0, 0, 0, 0, 0},
+    // FAMAS
     {25, 23, 1, 0.12f, 960.0f, {1.33f, 0.85f, 0.80f, 0.90f, 0.90f, 1.10f, 1.00f, 1.0f, 0.85f, 1.0f},
-     1.12f, 0.95f} },
+     1.12f, 0.95f, 0, 0, 0, 0, 0, ALT_BURST, 0},
+    // M4A1-S: 20 rounds that hit harder than the A4's, slower, flatter, silenced
+    {20, 30, 1, 0.11f, 880.0f, {0.80f, 0.85f, 0.80f, 1.00f, 0.80f, 0.90f, 1.00f, 1.0f, 0.75f, 1.0f},
+     1.25f, 0.42f, 1, 0, 0, 0, 0, 0, 0},
+    // GALIL AR: 35 rounds, cheap and loose
+    {35, 24, 1, 0.14f, 915.0f, {0.89f, 1.10f, 1.25f, 1.00f, 1.20f, 1.20f, 1.05f, 1.0f, 1.05f, 1.05f},
+     1.06f, 1.00f, 0, 0, 0, 0, 0, 0, 0},
+    // SG 553: the scoped 5.56, slower and tighter in the glass, armour-piercing
+    {30, 25, 1, 0.16f, 940.0f, {0.73f, 1.05f, 0.90f, 1.10f, 0.70f, 1.00f, 1.25f, 0.70f, 1.00f, 1.0f},
+     0.96f, 1.02f, 0, 0, 0, 0, 0, 0, 0},
+    // AUG: the scoped bullpup, lighter round, the steadier of the two
+    {30, 22, 1, 0.15f, 970.0f, {0.80f, 0.90f, 0.80f, 1.00f, 0.65f, 0.95f, 1.25f, 0.72f, 0.90f, 1.0f},
+     1.04f, 0.96f, 0, 0, 0, 0, 0, 0, 0},
+    // MAC-10: a hose. 800 rpm, wild sideways, the best on the move
+    {30, 23, 1, 0.07f, 280.0f, {1.07f, 0.85f, 1.45f, 0.80f, 1.45f, 1.30f, 0.80f, 1.05f, 0.70f, 0.9f},
+     1.20f, 0.88f, 0, 0, 0, 0, 0, 0, 0},
+    // MP9: 857 rpm, light rounds, very steady from the hip
+    {30, 21, 1, 0.06f, 380.0f, {1.14f, 0.80f, 1.20f, 0.85f, 1.25f, 1.20f, 0.80f, 1.05f, 0.65f, 0.9f},
+     1.24f, 0.86f, 0, 0, 0, 0, 0, 0, 0},
+    // MP7: the 4.6 mm PDW, the most rifle-like of the SMGs
+    {30, 24, 1, 0.07f, 735.0f, {1.00f, 0.80f, 1.00f, 0.90f, 1.10f, 1.10f, 0.85f, 1.05f, 0.70f, 0.95f},
+     1.16f, 0.88f, 0, 0, 0, 0, 0, 0, 0},
+    // MP5-SD: integrally suppressed, the softest kick of any gun
+    {30, 22, 1, 0.07f, 300.0f, {1.00f, 0.70f, 0.90f, 0.90f, 1.05f, 1.00f, 0.85f, 1.05f, 0.55f, 0.95f},
+     1.30f, 0.36f, 1, 0, 0, 0, 0, 0, 0},
+    // UMP-45: slow heavy .45, the hardest-hitting SMG
+    {25, 28, 1, 0.08f, 285.0f, {0.89f, 1.00f, 1.10f, 1.00f, 1.25f, 1.20f, 0.90f, 1.05f, 0.95f, 1.0f},
+     0.92f, 0.95f, 0, 0, 0, 0, 0, 0, 0},
+    // P90: 50 rounds on top, 857 rpm
+    {50, 21, 1, 0.07f, 715.0f, {1.14f, 0.70f, 1.10f, 0.90f, 1.25f, 1.10f, 0.90f, 1.05f, 0.65f, 1.0f},
+     1.20f, 0.88f, 0, 0, 0, 0, 0, 0, 0},
+    // PP-BIZON: 64 rounds in the helical drum, weak and sloppy
+    {64, 21, 1, 0.08f, 330.0f, {1.00f, 0.65f, 1.05f, 0.85f, 1.30f, 1.15f, 0.85f, 1.05f, 0.60f, 0.95f},
+     1.10f, 0.86f, 0, 0, 0, 0, 0, 0, 0},
+    // THE SHOTGUNS: damage is per pellet (CS2's x 0.79), rpm CS2's over 750, and
+    // the pellets lose most of it past ~10 m (PELLET_FALL in ballistics.c).
+    // NOVA: pump, 8 in the tube, 9 pellets
+    { 8, 21, 0, 0.30f, 400.0f, {0.09f, 2.40f, 0.80f, 1.80f, 1.20f, 0.20f, 1.10f, 1.0f, 2.20f, 1.1f},
+     0.80f, 1.20f, 0, 9, 3.6f, 60, 1, 0, 0},
+    // XM1014: semi-automatic, 7 in the tube, 6 pellets, as fast as you pull
+    { 7, 16, 1, 0.30f, 400.0f, {0.23f, 1.90f, 0.90f, 1.30f, 1.20f, 0.30f, 1.10f, 1.0f, 1.80f, 1.1f},
+     0.84f, 1.15f, 0, 6, 3.9f, 54, 0, 0, 0},
+    // SAWED-OFF: pump, 7 shells, 8 pellets in a wide cone, brutal up close
+    { 7, 25, 0, 0.36f, 380.0f, {0.095f, 2.60f, 1.00f, 1.80f, 1.40f, 0.20f, 1.00f, 1.0f, 2.40f, 1.1f},
+     0.76f, 1.25f, 0, 8, 5.2f, 60, 1, 0, 0},
+    // MAG-7: pump, a five-shell box in the grip, 8 pellets, a tight cone
+    { 5, 24, 0, 0.30f, 400.0f, {0.095f, 2.50f, 0.80f, 1.80f, 1.10f, 0.20f, 1.10f, 1.0f, 2.30f, 1.1f},
+     0.82f, 1.18f, 0, 8, 3.0f, 0, 1, 0, 0},
+    // M249: a hundred rounds of 5.56 off the belt, heavy and steady
+    {100, 25, 1, 0.20f, 915.0f, {1.00f, 0.90f, 1.30f, 1.20f, 1.40f, 1.10f, 1.40f, 1.0f, 1.00f, 1.3f},
+     0.94f, 1.10f, 0, 0, 0, 0, 0, 0, 0},
+    // NEGEV: 150 rounds at 800 rpm, wild for the first burst, then a laser
+    {150, 28, 1, 0.22f, 915.0f, {1.07f, 0.95f, 1.40f, 1.20f, 1.50f, 0.70f, 1.40f, 1.0f, 1.05f, 1.3f},
+     0.90f, 1.12f, 0, 0, 0, 0, 0, 0, 0} },
   { {0},
-    {33, 21, 1, 0.40f, 375.0f, {2.60f, 0.32f, 1.40f, 0.80f, 1.20f, 0.55f, 0.95f, 1.0f, 0.45f, 1.0f},
-     1.15f, 0.90f},
+    // GLOCK-18: CS2's 20 rounds, semi-automatic, quick and light
+    {20, 29, 0, 0.30f, 375.0f, {1.13f, 0.80f, 0.90f, 0.90f, 1.05f, 0.90f, 0.95f, 1.0f, 0.75f, 1.0f},
+     1.15f, 0.90f, 0, 0, 0, 0, 0, ALT_BURST, 0},
+    // DESERT EAGLE
     { 7, 58, 0, 0.45f, 470.0f, {0.62f, 2.30f, 1.50f, 1.60f, 1.10f, 2.20f, 1.20f, 1.0f, 2.00f, 1.2f},
-     0.72f, 1.15f} },
+     0.72f, 1.15f, 0, 0, 0, 0, 0, 0, 0},
+    // USP-S: 12 rounds, silenced, the most accurate sidearm
+    {12, 34, 0, 0.26f, 290.0f, {1.00f, 0.85f, 0.85f, 1.00f, 0.85f, 0.90f, 1.00f, 1.0f, 0.70f, 1.0f},
+     1.30f, 0.40f, 1, 0, 0, 0, 0, 0, 0},
+    // P250: 13 rounds of hard-hitting 9 mm
+    {13, 37, 0, 0.34f, 360.0f, {1.13f, 1.10f, 1.05f, 1.05f, 1.05f, 1.10f, 1.00f, 1.0f, 1.05f, 1.0f},
+     1.02f, 1.00f, 0, 0, 0, 0, 0, 0, 0},
+    // FIVE-SEVEN: 20 rounds of 5.7 mm, armour-piercing and flat
+    {20, 31, 0, 0.30f, 650.0f, {1.13f, 0.95f, 1.00f, 1.00f, 1.00f, 1.00f, 1.00f, 1.0f, 0.95f, 1.0f},
+     1.18f, 0.92f, 0, 0, 0, 0, 0, 0, 0},
+    // TEC-9: 18 rounds as fast as you can pull, loose
+    {18, 32, 0, 0.42f, 360.0f, {1.42f, 1.15f, 1.30f, 0.95f, 1.35f, 1.30f, 0.95f, 1.0f, 1.00f, 1.05f},
+     1.08f, 1.00f, 0, 0, 0, 0, 0, 0, 0},
+    // CZ75-AUTO: twelve rounds, full-auto, gone in a second
+    {12, 30, 1, 0.38f, 370.0f, {1.70f, 0.60f, 1.30f, 0.80f, 1.30f, 0.80f, 0.95f, 1.0f, 0.60f, 1.0f},
+     1.12f, 0.92f, 0, 0, 0, 0, 0, 0, 0},
+    // R8 REVOLVER: eight .44s, slow, one to the body is nearly a kill
+    { 8, 84, 0, 0.40f, 450.0f, {0.34f, 2.60f, 1.40f, 1.80f, 0.90f, 2.60f, 1.25f, 1.0f, 2.40f, 1.2f},
+     0.78f, 1.12f, 0, 0, 0, 0, 0, ALT_R8, 0},
+    // DUAL BERETTAS: two 92s, thirty rounds, fired left and right in turn
+    {30, 37, 0, 0.40f, 380.0f, {1.42f, 0.90f, 1.20f, 1.00f, 1.30f, 1.10f, 1.10f, 1.0f, 0.85f, 1.1f},
+     1.10f, 0.95f, 0, 0, 0, 0, 0, 0, 1},
+    {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0} },
+  // The SR's rpm 1000 is "as fast as you can click"; x0.24 is the SCAR-20's
+  // 240 rpm, so a held-down clicker cannot turn it into a battle rifle.
+  { {0},
+    // SCAR-20
+    {20, 80, 0, 0.45f, 790.0f, {0.24f, 0.45f, 1.20f, 0.55f, 1.30f, 2.50f, 0.90f, 1.0f, 0.55f, 1.0f},
+     1.10f, 0.90f, 0, 0, 0, 0, 0, 0, 0},
+    // SSG 08: the Scout. Ten rounds, light, quick to the eye, a head kill and
+    // never a body one
+    {10, 90, 0, 0.40f, 870.0f, {1.00f, 0.60f, 0.80f, 0.70f, 1.00f, 0.80f, 0.75f, 1.0f, 0.65f, 0.9f},
+     1.15f, 0.85f, 0, 0, 0, 0, 0, 0, 0},
+    // G3SG1: the SCAR-20's twin, a hair heavier
+    {20, 80, 0, 0.45f, 800.0f, {0.24f, 0.50f, 1.25f, 0.58f, 1.30f, 2.50f, 0.95f, 1.0f, 0.60f, 1.0f},
+     1.02f, 0.95f, 0, 0, 0, 0, 0, 0, 0},
+    {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0} },
 };
+// Which WPN_VAR row slot `id` reads, -1 for a slot without variants...
+static int wpn_var_row(int id) {
+  return id == WPN_AR ? 0 : id == WPN_PT ? 1 : id == WPN_SR ? 2 : -1;
+}
+// ...and how many variants it has (1 = only the shipped weapon).
+static int wpn_var_n(int id) {
+  return id == WPN_AR ? RV_N : id == WPN_PT ? PV_N : id == WPN_SR ? SV_N : 1;
+}
+// The semi-automatic snipers: a charging handle, no bolt to work.
+static int sr_semi(int var) { return var == SV_SCAR || var == SV_G3; }
 
 // THE GRENADE. A fragmentation grenade on a 3.5 s fuse that starts as the pin comes
 // out: hold FIRE to pull it and cook, release to throw, and hold AIM as you release
@@ -312,6 +478,26 @@ static const wpn_var_t WPN_VAR[2][WPN_VARS] = {
 // 60 Hz screen, which no hand does and which read as the pin vanishing. The
 // fuse grew by the same 28 ticks, so spoon-to-blast is unchanged.
 #define NADE_PIN_T     48
+// THE SMOKE GRENADE (sim/smoke.c holds the cloud). Three carried per life
+// (more from a supply crate). It has no cook: the pin and the throw are the frag's, but it pops only
+// once it comes to REST (or SMOKE_FLIGHT_MAX after the throw, wherever it is),
+// never sooner than SMOKE_ARM_T.
+#define SMOKE_CARRY      3
+#define SMOKE_FLIGHT_MAX (6 * TICK_HZ)
+#define SMOKE_ARM_T      (TICK_HZ * 3 / 4)
+// THE INCENDIARY (sim/fire.c holds the fire). Three per life, no cook, like
+// the smoke. It goes off the moment it strikes a FLOOR (anything facing up) after a
+// short arming time, and lays a pool of fire that spreads over the ground. One
+// still in the air INC_FLIGHT_MAX after the throw bursts there and is wasted —
+// CS2's rule, so it cannot be air-burst onto a head.
+#define INC_CARRY        3
+#define INC_FLIGHT_MAX   (2 * TICK_HZ)
+#define INC_ARM_T        (TICK_HZ / 8)
+// The three kinds the one grenade slot holds (weapon_t.gr_kind).
+#define NADE_FRAG  0
+#define NADE_SMOKE 1
+#define NADE_INC   2
+#define NADE_KINDS 3
 // The throw is a real one: the arm draws back beside the head, whips over and
 // lets go at full extension, follows through across the body, and the next
 // grenade comes up from below. At 56/16 the hand went straight from the hold to
@@ -435,7 +621,7 @@ static_assert(sizeof g_rng_gun / sizeof g_rng_gun[0] == MAX_HUMANS,
               "g_rng_gun is PER HUMAN: size it MAX_HUMANS");
 // Each remote human's LOADOUT as their last input carried it (net_input_t), read
 // by the server at that human's next spawn. The local human's comes from g_cfg.
-static uint8_t g_human_loadout_all[SRV_LOBBIES][MAX_HUMANS];
+static uint16_t g_human_loadout_all[SRV_LOBBIES][MAX_HUMANS];
 #define g_human_loadout (g_human_loadout_all[g_lobby])
 
 // Dedicated-server mode. DECLARED ABOVE THE PLATFORM SPLIT —

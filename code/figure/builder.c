@@ -418,6 +418,9 @@ typedef struct {
   v3 gear, belt, pad, pants, dust1;            // carrier, webbing, rubber, trouser
   v3 vest, sleeve, glove, bala;                // derived / balaclava
   v3 gnt;                                      // the glove's cuff / gauntlet
+  v3 wst;                                      // the wrap's second (check) colour
+  v3 arm;                                      // the operator's armband (friendly)
+  int ins;                                     // insurgent build
 } kit_t;
 
 // THE OPPOSING FORCE IS NOT ONE MAN. Every bot wore the identical kit, so a
@@ -454,38 +457,100 @@ static int g_fig_gear = -1;
 // ...and the PIECES that figure wears, the same way: a *_GEAR index, or -1 to
 // follow the side it is on (the insurgent's wrap / rig / no pack, else the
 // operator's helmet / plate carrier / assault pack).
-static int g_fig_head = -1, g_fig_vest = -1, g_fig_pack = -1;
+static int g_fig_head = -1, g_fig_vest = -1, g_fig_pack = -1, g_fig_face = -1;
 // The entity the figure being built belongs to (-1: none — a corpse, a proof).
 // Read only by the sling (fig_sling), which needs the mode's weapon rules.
 static int g_fig_ent = -1;
 static int g_fig_free;   // fig_arms: bit i = hand i closes on nothing (weapon swap)
+// THE DUAL BERETTAS in third person: 1 while the figure holds the pair, and its
+// left hand then closes on the SECOND pistol, DUAL3P to the left of the first.
+static int g_fig_dual;
+#define DUAL3P 0.200f
 // The local player's armory picks onto the figure about to be built (own = 1),
 // or back to "follow the side" (own = 0).
 static void fig_own_pieces(int own) {
   g_fig_head = own ? armory_idx(g_cfg.head_gear, HEAD_GEAR_COUNT) : -1;
   g_fig_vest = own ? armory_idx(g_cfg.vest_gear, VEST_GEAR_COUNT) : -1;
   g_fig_pack = own ? armory_idx(g_cfg.pack_gear, PACK_GEAR_COUNT) : -1;
+  g_fig_face = own ? armory_idx(g_cfg.face_gear, FACE_GEAR_COUNT) : -1;
 }
-#define FIG_HEAD (g_fig_head >= 0 ? g_fig_head : FIG_INS ? HEAD_WRAP : HEAD_HELMET)
-#define FIG_VEST (g_fig_vest >= 0 ? g_fig_vest : FIG_INS ? VEST_RIG : VEST_CARRIER)
-#define FIG_PACK (g_fig_pack >= 0 ? g_fig_pack : FIG_INS ? PACK_NONE : PACK_ASSAULT)
+// THE INSURGENT IS FOUR MEN, AND THEY DIFFER IN SHAPE. g_fig_var picks the
+// archetype (INS_RIFLEMAN .. INS_LEADER), from the entity id like the colour
+// variants always were, so a corpse keeps the kit it fell in and the bot brain
+// (bot_kind) reads the same number: the gunner who suppresses is the one with
+// the belt across his chest. Hue variety alone read as clones at 25 m — a crowd
+// of identical outlines in four shirts — so each type changes the OUTLINE:
+//   RIFLEMAN  chest rig, wrap, AK
+//   GUNNER    no rig, an ammo belt across the chest
+//   SCOUT     no rig, light trainers (the one light value at the feet)
+//   LEADER    chest rig with a radio and its whip antenna
+enum { INS_RIFLEMAN, INS_GUNNER, INS_SCOUT, INS_LEADER };
 #define FIG_INS (g_fig_ins_force >= 0 ? g_fig_ins_force : g_fig_ins)
+// g_fig_var_force (harness `figvar`) pins the archetype, so figcheck can gate
+// every insurgent build and not only the one bot 0 happens to be.
+static int g_fig_var_force = -1;
+static int g_fig_op_ent = -1;   // harness `figop`: this entity drawn as an operator
+static int g_fig_sil;           // harness `figsil`: figures in flat black
+static int g_fig_nade_kind;     // the grenade the figure holds: NADE_FRAG/SMOKE/INC
+#define FIG_INS_KIND ((g_fig_var_force >= 0 ? g_fig_var_force : g_fig_var) & 3)
+// An operator bot's headgear, from the entity id like its mask: two in seven
+// carry the quad NVG flipped UP. Never DOWN on a bot — the tubes stand 50 mm
+// further forward of the head box than the helmet does (`fighead`), so only a
+// player who picks it in the armory wears it.
+// harness `figgear H F`: pin every figure's headgear / face (-1 follows)
+static int g_fig_head_force = -1, g_fig_face_force = -1;
+#define FIG_HEAD (g_fig_head_force >= 0 ? g_fig_head_force : g_fig_head >= 0 ? g_fig_head : FIG_INS ? HEAD_WRAP                   \
+                  : g_fig_ent >= 0 && (g_fig_ent * 5 + 3) % 7 < 2 ? HEAD_NVG_UP : HEAD_HELMET)
+#define FIG_VEST (g_fig_vest >= 0 ? g_fig_vest : !FIG_INS ? VEST_CARRIER       \
+                  : (FIG_INS_KIND == INS_GUNNER || FIG_INS_KIND == INS_SCOUT)   \
+                  ? VEST_NONE : VEST_RIG)
+#define FIG_PACK (g_fig_pack >= 0 ? g_fig_pack : FIG_INS ? PACK_NONE : PACK_ASSAULT)
+// The face: the player's own pick, else picked from the entity id (like the
+// insurgents' archetypes and the carrier colours: a corpse keeps it). v5: every
+// one of the nine faces, one each per nine ids — consecutive ids (a squad) get
+// different masks, so five squadmates are not five clones. The armory pick
+// reaches the local body only; id 0 (the bot every figure proof films) keeps
+// the shipped helmet and balaclava, so the proof baselines measure one kit; a protocol change would be needed to show
+// another player's real one (see art_review/r8/REPORT.md).
+static const int FIG_FACE_BY_ID[9] = {FACE_PLAIN, FACE_GOGGLES, FACE_GAS_TWIN, FACE_SKULL_HALF,
+                                      FACE_SHEMAGH, FACE_RESP, FACE_PLATE, FACE_GAS_PANO, FACE_SKULL};
+#define FIG_FACE (g_fig_face_force >= 0 ? g_fig_face_force : g_fig_face >= 0 ? g_fig_face : FIG_INS || g_fig_ent < 0 ? FACE_PLAIN \
+                  : FIG_FACE_BY_ID[(g_fig_ent * 4) % 9])
+// THE TUNIC IS DARK BECAUSE EVERY FLOOR IS LIGHT. All three world themes put
+// the ground at display 0.55-0.63 and the desert maps' sand at the top of that,
+// and the old shirts (khaki 0.44, brown 0.40, faded olive 0.37) sat one value
+// step under it in the SAME warm hue family — an insurgent on Bazaar sand was
+// camouflage, not a target. These sit at 0.18-0.27: a clear dark mass on any
+// floor, still hue-varied so a crowd is four men, and still above the boots so
+// the value ramp keeps its floor at the feet. The red wrap is the one peak.
 static const float FIG_INS_SHIRT[4][3] = {
-  {0.440f, 0.400f, 0.310f},   // khaki
-  {0.300f, 0.300f, 0.290f},   // charcoal
-  {0.400f, 0.330f, 0.260f},   // brown
-  {0.370f, 0.380f, 0.300f},   // faded olive
+  {0.270f, 0.235f, 0.200f},   // rifleman: dark earth brown
+  {0.200f, 0.210f, 0.260f},   // gunner: indigo
+  {0.255f, 0.265f, 0.190f},   // scout: dark olive
+  {0.180f, 0.178f, 0.185f},   // leader: black
 };
+// EVERY WRAP IS RED. One wrap in four used to be red and the others black,
+// sand and olive — so three insurgents in four carried no hostile cue at all,
+// and the sand one vanished into the sand maps. Red is the hostile colour
+// (THREAT in the HUD, never worn by an operator), so the variety moves into the
+// SECOND colour of the winding: a shemagh check against off-white or black.
 static const float FIG_INS_WRAP[4][3] = {
-  {0.660f, 0.250f, 0.210f},   // dusty red (bot 0: the red head is the old hostile cue)
-  {0.170f, 0.170f, 0.180f},   // black
-  {0.700f, 0.660f, 0.560f},   // sand / off-white
-  {0.420f, 0.430f, 0.320f},   // olive
+  {0.720f, 0.170f, 0.130f},   // crimson
+  {0.640f, 0.140f, 0.120f},   // brick red
+  {0.780f, 0.210f, 0.140f},   // bright red
+  {0.580f, 0.120f, 0.110f},   // maroon
+};
+static const float FIG_INS_WRAP2[4][3] = {
+  {0.820f, 0.790f, 0.720f},   // off-white check
+  {0.150f, 0.140f, 0.140f},   // black check
+  {0.820f, 0.790f, 0.720f},
+  {0.150f, 0.140f, 0.140f},
 };
 static const float FIG_CARRIER_VAR[4][3] = {
   {0.660f, 0.560f, 0.415f},   // sand (shipped)
   {0.520f, 0.600f, 0.440f},   // ranger green
-  {0.720f, 0.550f, 0.360f},   // khaki brown
+  {0.640f, 0.560f, 0.440f},   // khaki (v5: was 0.72/0.55/0.36, which reads ORANGE in a
+                              // warm sun; same luminance 0.57, saturation 0.50 -> 0.31)
   {0.570f, 0.575f, 0.560f},   // urban grey
 };
 static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
@@ -564,26 +629,35 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   // it was designed as. Still far under the old bone-white skin wedge (0.648)
   // that made the face the brightest thing on the figure.
   v3 bala  = {{0.318f, 0.309f, 0.282f}};
-  // OPPOSING FORCE: black fatigues, sand carrier, crimson shell, so a figure pops
-  // off every arena floor at range under all five skies.
-  olive = (v3){{0.335f, 0.335f, 0.365f}};
-  dark  = (v3){{0.365f, 0.345f, 0.350f}};
-  helm  = (v3){{0.760f, 0.205f, 0.150f}};
+  // A BOT OPERATOR IS A FRIEND. Palette 0 used to be the opposing force (black
+  // fatigues, crimson shell, red-lit goggles) from the days when every bot was
+  // an enemy; since 0.7.3 every enemy is drawn as an insurgent and a palette-0
+  // operator is a squadmate in the rescue or a body on the home backdrop — and
+  // he was still wearing the hostile red helmet. Ranger kit now: green-grey
+  // fatigues, the carrier variants, a ranger-green shell and cyan goggles (the
+  // HUD's friendly SIGNAL), so red on a head means one thing only.
+  olive = (v3){{0.330f, 0.350f, 0.330f}};
+  dark  = (v3){{0.300f, 0.315f, 0.300f}};
+  helm  = (v3){{0.430f, 0.455f, 0.360f}};
   { const float *cv = FIG_CARRIER_VAR[g_fig_var & 3];
     nyl = (v3){{cv[0], cv[1], cv[2]}}; }
-  web   = (v3){{0.235f, 0.225f, 0.235f}};
-  rub   = (v3){{0.255f, 0.255f, 0.270f}};
-  gm2   = (v3){{1.900f, 0.420f, 0.180f}};   // lit goggles
-  bala  = (v3){{0.270f, 0.265f, 0.285f}};
+  web   = (v3){{0.200f, 0.200f, 0.185f}};
+  rub   = (v3){{0.230f, 0.235f, 0.225f}};
+  // SMOKED GLASS (v5): near-black, lit only by its own gleam. The cyan lamp
+  // that was here was the brightest thing on the figure, on the face.
+  gm2   = (v3){{0.050f, 0.057f, 0.066f}};
+  bala  = (v3){{0.250f, 0.260f, 0.250f}};
   if (palette == 1) {  // the player: the same kit in slate blue — the SAME
     // value ramp as the olive design (boots darkest, carrier light, helmet
     // peak), only the hue family changes.
     olive = (v3){{0.335f, 0.375f, 0.440f}};
     dark  = (v3){{0.290f, 0.320f, 0.380f}};
-    helm  = (v3){{0.900f, 0.480f, 0.120f}};   // the brand's blaze orange
+    // A light grey composite shell (v5): the value peak over the wolf-grey
+    // carrier, without the blaze orange it used to wear (BODY_KITS SLATE).
+    helm  = (v3){{0.660f, 0.660f, 0.620f}};
     web   = (v3){{0.150f, 0.160f, 0.190f}};
     boot  = (v3){{0.130f, 0.130f, 0.150f}};
-    gm2   = (v3){{0.360f, 1.700f, 2.000f}};   // lit goggles, cyan
+    gm2   = (v3){{0.050f, 0.057f, 0.066f}};   // smoked glass
     // The three tones the palette used to leave behind, and leaving them behind
     // was not neutral — it was a different figure. On the bot the carrier is
     // separated from the uniform by HUE (coyote against olive: chromaticity
@@ -600,16 +674,26 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     rub   = (v3){{0.160f, 0.168f, 0.190f}};
     bala  = (v3){{0.260f, 0.275f, 0.305f}};
   }
-  if (FIG_INS) {   // the insurgent: civilian shirt, drab rig, leather, a head wrap
-    const float *sh = FIG_INS_SHIRT[g_fig_var & 3], *wr = FIG_INS_WRAP[g_fig_var & 3];
+  v3 wst = v3_scale(helm, 0.80f);
+  int ins = FIG_INS;
+  if (ins) {   // the insurgent: dark tunic, drab rig, leather, a red head wrap
+    int kind = FIG_INS_KIND;
+    const float *sh = FIG_INS_SHIRT[kind], *wr = FIG_INS_WRAP[kind],
+                *w2 = FIG_INS_WRAP2[kind];
     olive = (v3){{sh[0], sh[1], sh[2]}};
-    dark  = (v3){{0.300f, 0.280f, 0.255f}};
+    // Loose trousers a shade off the tunic, never the same cloth: the hem of
+    // the tunic is the silhouette's widest line and needs a value edge under it.
+    dark  = v3_scale(olive, 0.86f);
     helm  = (v3){{wr[0], wr[1], wr[2]}};
-    nyl   = (v3){{0.330f, 0.355f, 0.255f}};   // dark olive webbing over the shirt
-    web   = (v3){{0.270f, 0.210f, 0.150f}};
-    boot  = (v3){{0.170f, 0.150f, 0.130f}};
-    rub   = (v3){{0.250f, 0.235f, 0.215f}};
-    bala  = (v3){{0.160f, 0.150f, 0.150f}};   // the eye slit's shadow
+    wst   = (v3){{w2[0], w2[1], w2[2]}};       // blended onto the final wrap below
+    // The rig is the one MID value on the body (the operator's light carrier
+    // plays the same role): faded olive webbing over the dark tunic.
+    nyl   = (v3){{0.400f, 0.405f, 0.300f}};
+    web   = (v3){{0.300f, 0.235f, 0.165f}};   // brown leather belt and bandolier
+    boot  = kind == INS_SCOUT ? (v3){{0.560f, 0.540f, 0.500f}}   // worn trainers
+                              : (v3){{0.170f, 0.150f, 0.130f}};
+    rub   = dark;                             // no pads: the knee is trouser
+    bala  = (v3){{0.090f, 0.085f, 0.085f}};   // the eye slit's shadow
   }
   if (g_fig_team == 0) {        // ALPHA: red
     olive = (v3){{0.335f, 0.320f, 0.330f}};
@@ -618,7 +702,7 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     nyl   = (v3){{0.720f, 0.330f, 0.270f}};
     web   = (v3){{0.235f, 0.200f, 0.200f}};
     rub   = (v3){{0.250f, 0.230f, 0.235f}};
-    gm2   = (v3){{1.900f, 0.420f, 0.180f}};
+    gm2   = (v3){{0.058f, 0.050f, 0.050f}};   // smoked glass: the RED is the masses
     bala  = (v3){{0.270f, 0.255f, 0.260f}};
   } else if (g_fig_team == 1) { // BRAVO: blue
     olive = (v3){{0.320f, 0.370f, 0.460f}};
@@ -628,21 +712,25 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
     web   = (v3){{0.150f, 0.165f, 0.200f}};
     boot  = (v3){{0.130f, 0.130f, 0.150f}};
     rub   = (v3){{0.160f, 0.170f, 0.200f}};
-    gm2   = (v3){{0.360f, 1.700f, 2.000f}};
+    gm2   = (v3){{0.048f, 0.055f, 0.068f}};   // smoked glass: the BLUE is the masses
     bala  = (v3){{0.255f, 0.275f, 0.315f}};
   }
+  // The check is woven INTO whatever the wrap ends up (a team's colour in a team
+  // game), so the winding stays one cloth.
+  if (ins) wst = v3_lerp(helm, wst, 0.55f);
   if (palette == 1 && g_fig_gear >= 0 && g_fig_gear < GEAR_THEME_COUNT) {
-    // The armory's colourway on the whole kit. In a team game the side's
-    // three identity masses (fatigues, carrier, helmet) stay the team's, so a
-    // player still sees which side he is on; everything else is his choice.
+    // The armory's colourway on the whole kit — ALWAYS, team game or not.
+    // This branch only ever runs for the LOCAL player's own body (the armory
+    // pick is a client setting; nobody else's screen draws it), so painting
+    // its three big masses in the team colour told nobody anything and threw
+    // the player's outfit away the moment a team match started. His side is
+    // on his armband instead (kt.arm below).
     const body_kit_t *bk = &BODY_KITS[g_fig_gear];
     #define BK(f) ((v3){{bk->f[0], bk->f[1], bk->f[2]}})
-    if (g_fig_team < 0) {
-      olive = BK(uni);
-      dark  = BK(pants);
-      nyl   = BK(carrier);
-      helm  = BK(helm);
-    }
+    olive = BK(uni);
+    dark  = BK(pants);
+    nyl   = BK(carrier);
+    helm  = BK(helm);
     web  = BK(web);
     boot = BK(boot);
     rub  = BK(rub);
@@ -728,7 +816,71 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
   kt.glove = glove;
   kt.gnt = gnt;
   kt.bala = flash01 > 0 ? v3_lerp(bala, flash_col, flash01) : bala;
+  kt.wst = flash01 > 0 ? v3_lerp(wst, flash_col, flash01) : wst;
+  // The FRIENDLY ARMBAND: a cyan band round each upper arm of every operator,
+  // in every outfit and every team. It is the SIGNAL colour the HUD gives
+  // friends, on the one part of the body visible from every side, and it costs
+  // no geometry (it recolours two bands of the deltoid pad). Insurgents never
+  // wear it, so a figure with a cyan arm is never a target.
+  // v5: DESATURATED BLUE-GREY, not lit-looking cyan (0.20, 0.70, 0.80, sat
+  // 0.75). Saturation 0.19, luminance 0.55: a light cool band on a dark or
+  // mid sleeve and a dark one on ARCTIC's white, never the insurgent's brown
+  // webbing — measured by tools/fig_contrast.py and the 26_lineup capture.
+  kt.arm = ins ? v3_scale(web, 0.92f) : (v3){{0.500f, 0.560f, 0.620f}};
+  // The local body in a team game: the armband carries the side (the outfit
+  // keeps the masses, see above), at the team carrier's colour.
+  if (!ins && palette == 1 && g_fig_gear >= 0 && g_fig_team == 0) kt.arm = (v3){{0.720f, 0.330f, 0.270f}};
+  if (!ins && palette == 1 && g_fig_gear >= 0 && g_fig_team == 1) kt.arm = (v3){{0.450f, 0.580f, 0.780f}};
+  if (flash01 > 0) kt.arm = v3_lerp(kt.arm, flash_col, flash01);
+  kt.ins = ins;
+  if (g_fig_sil) {   // the silhouette test: shape alone must name the side
+    v3 k0 = {{0.02f, 0.02f, 0.02f}};
+    kt.olive = kt.boot = kt.helm = kt.web = kt.rub = kt.gm2 = k0;
+    kt.gear = kt.belt = kt.pad = kt.pants = kt.dust1 = k0;
+    kt.vest = kt.sleeve = kt.glove = kt.bala = kt.gnt = kt.wst = kt.arm = k0;
+  }
   return kt;
+}
+
+// The torso chain's own cross-section at height T up the spine, interpolated
+// exactly as fig_chain sweeps between its nodes: half-width rx, half-depth rz,
+// the fore/aft offset F and the fraction of the spine twist. The table is
+// fig_torso's node list; a piece of kit that has to ride OUTSIDE the shirt
+// (the bandolier, the radio) asks here instead of guessing a radius.
+#define FIG_TORSO_N 9
+static const float FIG_TORSO_ST[FIG_TORSO_N][5] = {   // T, F, rx, rz, twist
+  {-0.120f, -0.008f, 0.112f, 0.096f, 0.00f}, {-0.026f, -0.020f, 0.180f, 0.142f, 0.10f},
+  { 0.020f, -0.014f, 0.172f, 0.131f, 0.19f},
+  { 0.062f, -0.004f, 0.158f, 0.114f, 0.28f}, { 0.128f,  0.004f, 0.146f, 0.106f, 0.45f},
+  { 0.205f,  0.010f, 0.158f, 0.122f, 0.66f}, { 0.285f,  0.016f, 0.172f, 0.136f, 0.86f},
+  { 0.352f,  0.018f, 0.184f, 0.134f, 0.94f}, { 0.472f,  0.006f, 0.156f, 0.108f, 1.00f}};
+static void fig_torso_at(float T, float *F, float *rx, float *rz, float *twf) {
+  int i = 0;
+  while (i < FIG_TORSO_N - 2 && T > FIG_TORSO_ST[i + 1][0]) i++;
+  const float *a = FIG_TORSO_ST[i], *b = FIG_TORSO_ST[i + 1];
+  float k = f_clamp((T - a[0]) / (b[0] - a[0]), 0.0f, 1.0f);
+  *F = a[1] + (b[1] - a[1]) * k;
+  *rx = a[2] + (b[2] - a[2]) * k;
+  *rz = a[3] + (b[3] - a[3]) * k;
+  *twf = a[4] + (b[4] - a[4]) * k;
+}
+// A point standing `off` metres proud of the torso's FRONT surface at height T
+// and `x` across. The torso is a round profile now (an ellipse in rx/rz), so the
+// depth there is rz * sqrt(1 - (x/rx)^2). On the far tiers it falls back to the
+// chamfered octagon, whose depth is never less than the ellipse's, so a part
+// placed off this formula only ever sits a hair deeper there.
+static v3 fig_torso_front(const pose_t *P, v3 spine, v3 prt, v3 Rc, float tw,
+                          float T, float x, float off, v3 *fw_out) {
+  float F, rx, rz, twf;
+  fig_torso_at(T, &F, &rx, &rz, &twf);
+  v3 crt = v3_rot_axis(fig_perp(spine, prt), spine, twf * tw);
+  v3 cfw = v3_norm(v3_cross(spine, crt));
+  v3 cfw0 = v3_norm(v3_cross(spine, Rc));   // the torso's F is along the CHEST's forward
+  float u = f_clamp(fabsf(x) / rx, 0.0f, 1.0f);
+  float d = rz * sqrtf(1.0f - u * u);
+  if (fw_out) *fw_out = cfw;
+  return v3_add(P->pelvis, v3_add(v3_scale(spine, T), v3_add(v3_scale(crt, x),
+                v3_add(v3_scale(cfw, d + off), v3_scale(cfw0, F)))));
 }
 
 // The trunk: torso prism, plate carrier, shoulder straps, assault pack and
@@ -750,7 +902,13 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // from the pelvis frame into the chest frame on the way up, so the spine twist
   // becomes a smooth twist of the MESH instead of two boxes shearing apart.
   float tw = atan2f(v3_dot(v3_cross(prt, Rc), spine), v3_dot(prt, Rc));
-  // FACETED, k=8: the redesign's stated art direction is a chunky flat-faceted
+  // ROUND, k=16, smooth-shaded (was k=8 faceted — see below for the history).
+  // The faceted torso read as a stack of planks against the sky: every band edge
+  // was a crease, and the octagon's four diagonal arrises ran the whole height of
+  // the body. A round profile with averaged normals turns the same node list into
+  // a V-taper the light rolls over. Distance tiers below 16 still drop it to the
+  // 12-gon / octagon, so the far-figure cost is what it was.
+  // WAS FACETED, k=8: the redesign's stated art direction is a chunky flat-faceted
   // operator that rhymes with the arena's chamfered crates, and the torso is
   // where that decision is most visible. The chamfered octagon puts a real flat
   // plate on the chest and back where the 16-gon read as a vinyl tube; the
@@ -768,9 +926,67 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   #define TN(T, F, RX, RZ, COL, TW_, AO_) \
     {v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), v3_scale(cfw0, (F)))), \
      COL, COL, (RX), (RZ), (TW_) * tw, (AO_)}
-  fnode_t t[8] = {
-    TN(-0.120f, -0.008f, 0.112f, 0.096f, kt->pants, 0.00f, 0.70f),  // crotch
-    TN(-0.026f, -0.020f, 0.180f, 0.142f, kt->pants, 0.10f, 0.0f),   // glutes: mass BACK
+  // THE CROTCH HANGS BETWEEN THE THIGHS, NOT DOWN THE SPINE. 12 cm "down the
+  // spine" from the pelvis is between the legs only while the body is upright.
+  // In a crouch, a forward-leaning run or a kneel the thighs swing forward and
+  // up while the spine stays near vertical, and that node stayed where it was:
+  // 17 cm below the hip joints and 6 cm under the (now level) thighs — a
+  // sagging lump under the seat that read, from behind, as something in the
+  // trousers. `figm` measured it (torso y0 349 mm against hips at 515).
+  // The node is now anchored to the HIP JOINTS: the same distance below the
+  // hip line as before, but measured ALONG THE THIGHS. Standing, the thighs
+  // run down the spine and the node is where it always was; as the legs come
+  // forward it rides forward between them and never drops beneath them.
+  v3 crotch_p;
+  {
+    v3 old = v3_add(P->pelvis, v3_add(v3_scale(spine, -0.120f), v3_scale(cfw0, -0.008f)));
+    v3 hm = v3_scale(v3_add(P->hip[0], P->hip[1]), 0.5f);
+    float k = v3_dot(v3_sub(hm, old), spine);              // how far below the hip line
+    v3 th0 = v3_sub(P->knee[0], P->hip[0]), th1 = v3_sub(P->knee[1], P->hip[1]);
+    float l0 = v3_len(th0), l1 = v3_len(th1);
+    crotch_p = old;
+    if (k > 0.0f && l0 > 1e-4f && l1 > 1e-4f) {
+      v3 td = v3_add(v3_scale(th0, 1.0f / l0), v3_scale(th1, 1.0f / l1));
+      float tl = v3_len(td);
+      if (tl > 1e-3f) {
+        td = v3_scale(td, 1.0f / tl);
+        // keep the old point's fore/aft and lateral offset from the hip line,
+        // replace only its drop
+        v3 rel = v3_sub(old, hm);
+        v3 flat = v3_sub(rel, v3_scale(spine, v3_dot(rel, spine)));
+        crotch_p = v3_add(v3_add(hm, flat), v3_scale(td, k));
+      }
+    }
+  }
+  // THE SEAT FOLLOWS THE HIP FLEXION. Upright, the thighs hang beside the
+  // glutes ring and the three read together as hips. Flex the hips (crouch,
+  // crouch-walk, a forward-leaning run) and the thighs swing forward out of
+  // the rear view while the ring, square to a spine that now leans, tips its
+  // back edge 9 cm DOWN: from behind, a 36 x 28 cm bowl hanging alone under
+  // the belt. So as the hips flex the seat rings slim, rise and come forward
+  // over the thighs; at zero flex every number is the one it always was.
+  float hflex = 0.0f;
+  {
+    v3 th0 = v3_sub(P->knee[0], P->hip[0]), th1 = v3_sub(P->knee[1], P->hip[1]);
+    float l0 = v3_len(th0), l1 = v3_len(th1);
+    if (l0 > 1e-4f && l1 > 1e-4f) {
+      v3 td = v3_add(v3_scale(th0, 1.0f / l0), v3_scale(th1, 1.0f / l1));
+      float tl = v3_len(td);
+      if (tl > 1e-3f) hflex = f_clamp(1.0f + v3_dot(spine, v3_scale(td, 1.0f / tl)), 0.0f, 1.0f);
+    }
+    hflex = f_clamp((hflex - 0.08f) / 0.80f, 0.0f, 1.0f);   // standing sway stays at 0
+  }
+  fnode_t t[FIG_TORSO_N] = {
+    {crotch_p, kt->pants, kt->pants, 0.112f - 0.016f * hflex, 0.096f - 0.022f * hflex, 0.0f,
+     0.70f - 0.25f * hflex},                                              // crotch
+    TN(-0.026f + 0.034f * hflex, -0.020f + 0.024f * hflex, 0.180f - 0.016f * hflex,
+       0.142f - 0.036f * hflex, kt->pants, 0.10f, 0.0f),                  // glutes: mass BACK
+    // The seat-to-belt roll. Glutes to belt line lost 28 mm of depth in 88 mm,
+    // which on a ring sweep is one steep band — the horizontal shelf across the
+    // lower back and the seat. A node a touch FULLER than the straight line
+    // between them makes that a curve.
+    TN( 0.020f + 0.012f * hflex, -0.014f + 0.012f * hflex, 0.172f - 0.008f * hflex,
+        0.131f - 0.016f * hflex, kt->pants, 0.19f, 0.0f),
     TN( 0.062f, -0.004f, 0.158f, 0.114f, kt->belt,  0.28f, 0.0f),   // belt line
     TN( 0.128f,  0.004f, 0.146f, 0.106f, kt->olive, 0.45f, 0.0f),   // waist, pulled in
     TN( 0.205f,  0.010f, 0.158f, 0.122f, kt->olive, 0.66f, 0.0f),   // lower ribcage
@@ -783,7 +999,64 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // (adjacent bands of ONE cloth suit), which reads as chain construction,
   // not as designed planes. The facet columns carry the low-poly read.
   g_fig_jit = 0.40f;
-  fig_chain(t, 8, 8, 1, 1, prt);
+  fig_chain(t, FIG_TORSO_N, 16, 1, 1, prt);
+  // THE TUNIC: the insurgent's biggest outline change, and the one an operator
+  // can never have. A long shirt worn OUTSIDE the trousers, split at the sides
+  // (as a perahan is), so it is two panels — front and back — hanging from
+  // under the belt to three quarters down the thigh. That flare below the belt
+  // is the line a plate carrier and a fitted uniform never make, and it reads
+  // in pure silhouette at 50 m where the head is four pixels.
+  // Each panel hangs in front of (behind) whichever thigh is further forward
+  // (back) at its hem, so a striding leg pushes the cloth instead of passing
+  // through it; the panel's top node is buried in the torso below the belt and
+  // leaves it on a steep line, so the join is a decisive crossing, never a
+  // grazing one. Panels are 12 mm cloth: rx across the hips, rz the thickness.
+  if (kt->ins) {
+    v3 pfw0 = v3_norm(v3_cross(spine, prt));
+    v3 hem[2], mid = {{0}};
+    float fmax = -1.0f, fmin = 1.0f, umax = -1.0f, umin = 1.0f;
+    for (int i = 0; i < 2; i++) {
+      v3 th = v3_sub(P->knee[i], P->hip[i]);
+      hem[i] = v3_add(P->hip[i], v3_scale(th, 0.30f));
+      mid = v3_add(mid, v3_scale(hem[i], 0.5f));
+      float f = v3_dot(v3_sub(hem[i], P->pelvis), pfw0);
+      fmax = fmaxf(fmax, f);
+      fmin = fminf(fmin, f);
+      // ...and where the thigh is at the crotch line, for the middle node.
+      float u = v3_dot(v3_sub(v3_add(P->hip[i], v3_scale(th, 0.30f)), P->pelvis), pfw0);
+      umax = fmaxf(umax, u);
+      umin = fminf(umin, u);
+    }
+    float drop = v3_dot(v3_sub(P->pelvis, mid), spine);   // pelvis -> hem, along the spine
+    if (drop < 0.13f) drop = 0.13f;                       // a crouch folds it, never inverts it
+    v3 tun = v3_scale(kt->olive, 0.96f), tdk = v3_scale(kt->olive, 0.84f);
+    // ONE CLOSED SKIRT, not two panels. Split front/back panels read as a
+    // plate and a scabbard from the side (edge-on, 12 mm of cloth hanging off a
+    // hip is a blade). A closed hem that follows the legs reads as cloth from
+    // every side: each station's fore/aft centre and depth are re-solved from
+    // where the two thighs are, so a stride widens the skirt instead of a knee
+    // passing through it. The thighs reach 0.185 across, the skirt 0.20-0.21.
+    float cu = 0.5f * (umax + umin), du = 0.5f * (umax - umin);
+    float ch = 0.5f * (fmax + fmin), dh = 0.5f * (fmax - fmin);
+    #define TU(T, F, RX, RZ, COL, AO_) {v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
+                                     v3_scale(pfw0, (F)))), COL, COL, (RX), (RZ), 0, (AO_)}
+    // A SHIRT-TAIL, NOT A SACK. The hem used to hang three quarters down the
+    // thigh with a CLOSED end cap whose depth was stretched to span both legs
+    // in a stride: in every walk, run and crouch that was a capped bag between
+    // the knees, which from behind read as something in the trousers. The
+    // tunic now ends just below the crotch (30% down the thigh), where the
+    // thighs swallow its cap, and its depth never reaches past the hips.
+    (void)cu; (void)du;
+    fnode_t tu[4] = {
+      TU(0.058f, 0.000f, 0.138f, 0.090f, tun, 0.0f),               // buried under the belt
+      TU(0.004f, -0.006f, 0.190f, 0.156f, tun, 0.0f),
+      TU(-0.060f, 0.5f * ch, 0.192f, fminf(fmaxf(dh + 0.080f, 0.150f), 0.172f), tun, 0.0f),
+      TU(-drop, ch, 0.186f, fminf(fmaxf(dh + 0.050f, 0.122f), 0.148f), tdk, 0.60f)};   // the hem
+    #undef TU
+    probe("tunic");
+    g_fig_jit = 0.40f;
+    fig_chain(tu, 4, 16, 1, 1, prt);
+  }
   g_fig_jit = 1.0f;
   mat_set(MAT_GEAR_R, 0.0f);
   // Plate carrier: STANDOFF, not paint. The old wrap hugged the torso within
@@ -815,10 +1088,47 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     memcpy(pc, rg, sizeof pc);
   }
   #undef CN
+  // v5: THE CUMMERBUND AND THE MOLLE ROWS, as nodes OF the carrier rather
+  // than straps laid on it: the plate carrier is one surface, and a webbing row
+  // is that surface's own band in the webbing colour, so it wraps the sides and
+  // the back and can never stand off or seam. Interpolated on the carrier's own
+  // radii and twist so the outline is unchanged. Two rows low (the cummerbund,
+  // which is what a side view reads), one high under the arms.
+  fnode_t pcm[10];
+  int npc = 4;
+  if (vest == VEST_CARRIER && g_fig_k > 8) {
+    static const float RT[6] = {0.212f, 0.226f, 0.244f, 0.258f, 0.300f, 0.312f};
+    v3 row = v3_scale(kt->web, 1.25f);
+    int n = 0;
+    pcm[n++] = pc[0];
+    for (int q = 0; q < 6; q++) {
+      float T = RT[q];
+      int j = T < 0.278f ? 0 : 1;
+      static const float CT[4] = {0.190f, 0.278f, 0.352f, 0.415f};
+      float k = (T - CT[j]) / (CT[j + 1] - CT[j]);
+      fnode_t nd = pc[j];
+      nd.p = v3_lerp(pc[j].p, pc[j + 1].p, k);
+      nd.rx = pc[j].rx + (pc[j + 1].rx - pc[j].rx) * k;
+      nd.rz = pc[j].rz + (pc[j + 1].rz - pc[j].rz) * k;
+      nd.roll = pc[j].roll + (pc[j + 1].roll - pc[j].roll) * k;
+      nd.ao = 0.0f;
+      // the band ARRIVING at an odd node is the webbing row
+      nd.col = nd.bcol = (q & 1) ? row : kt->gear;
+      if (q == 4) pcm[n++] = pc[1];   // the original chest node, in order
+      pcm[n++] = nd;
+    }
+    pcm[n++] = pc[2]; pcm[n++] = pc[3];
+    npc = n;
+  } else memcpy(pcm, pc, sizeof pc);
   if (vest != VEST_NONE) {
   probe("carrier");
+  // SOFT BOX, k=16: the carrier keeps its flat plate faces and loses the razor
+  // arrises (see FIG_PROF_SOFT). Every gear chain from here to the end of the
+  // trunk is molded nylon and is built the same way; g_fig_soft is cleared
+  // before anything that is not.
+  g_fig_soft = 1;
   g_fig_jit = 0.45f;
-  fig_chain(pc, 4, 8, 1, 1, prt);
+  fig_chain(pcm, npc, 16, 1, 1, prt);
   g_fig_jit = 1.0f;
   // Front carrier placard: three compact rifle mag pouches on the lower plate
   // and a low-profile admin panel above them, rotated to the carrier's own
@@ -842,8 +1152,30 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       #undef MP_P
       probe("placard");
       g_fig_jit = 0.35f;
-      fig_chain(fmp, 4, 8, 1, 1, crt);
+      fig_chain(fmp, 4, 16, 1, 1, crt);
       g_fig_jit = 1.0f;
+      // v5: THE MAGAZINES, standing 14 mm out of each pouch's open top — the
+      // thing that makes three bumps read as a triple mag placard. Narrower
+      // than the pouch's top ring in both axes (15 x 9 against 19 x 17 mm), so
+      // each one leaves the pouch through its cap, a decisive crossing. Dark
+      // polymer. Not on the coarsest tiers, where they are under a pixel.
+      if (g_fig_k > 8) {
+        #define MG_P(T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
+                           v3_add(v3_scale(crt, mx), v3_scale(cfw_p, (D) + rig_in))))
+        v3 mgc = {{0.105f, 0.105f, 0.112f}};
+        // Forward of the carrier face and LEANING OUT of it (15 mm forward over
+        // 26 mm of rise): the pouches are two-thirds sunk in the carrier, so a
+        // magazine at their depth lay along the plate and grazed it.
+        fnode_t mg[3] = {
+          {MG_P(0.284f, 0.184f), mgc, mgc, 0.0150f, 0.0100f, 0, 0.0f},
+          {MG_P(0.302f, 0.192f), mgc, mgc, 0.0150f, 0.0100f, 0, 0.0f},
+          {MG_P(0.310f, 0.196f), mgc, mgc, 0.0130f, 0.0085f, 0, 0.0f}};
+        #undef MG_P
+        probe("placardmag");
+        mat_set(MAT_RUBBER_R, 0.0f);
+        fig_chain(mg, 3, 8, 1, 1, crt);
+        mat_set(MAT_GEAR_R, 0.0f);
+      }
     }
     if (vest == VEST_RIG) goto no_admin;   // a rig has no admin panel up on a plate
     {
@@ -858,12 +1190,121 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     #undef AP_P
     probe("placard");
     g_fig_jit = 0.30f;
-    fig_chain(adm, 3, 8, 1, 1, urt);
+    fig_chain(adm, 3, 16, 1, 1, urt);
     g_fig_jit = 1.0f;
     }
   no_admin:;
+    // THE CARRIER'S WORKING KIT (operators: a plate carrier only). Two frag
+    // pouches stacked on its left front edge, their olive grenade tops showing;
+    // a TOURNIQUET rolled on the upper right corner, black with its red tag; a
+    // green chemlight taped on the upper left — lit (albedo over 1, the IR
+    // strobe's emissive trick). Each rides the carrier's own twist station
+    // (crt / cfw_p) at the depth of the carrier's face at that offset, so it
+    // sits on the plate at every aim angle.
+    // Close tiers only (g_fig_k > 12, inside ~6 m): at range a 14 mm tourniquet
+    // is a pixel, and on the coarse carrier profile it would graze the plate.
+    if (vest == VEST_CARRIER && !kt->ins && g_fig_k > 12) {
+      v3 pch = v3_scale(kt->gear, 0.82f), frag = {{0.300f, 0.330f, 0.220f}};
+      #define CF(X, T, D) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
+                          v3_add(v3_scale(crt, (X)), v3_scale(cfw_p, (D)))))
+      for (int g = 0; g < 2; g++) {
+        float T = 0.214f + 0.054f * (float)g, X = -0.118f, D = 0.166f;
+        fnode_t fp[3] = {
+          {CF(X, T - 0.022f, D), pch, pch, 0.0170f, 0.0170f, 0, 0.55f},
+          {CF(X, T + 0.012f, D), pch, pch, 0.0200f, 0.0200f, 0, 0.0f},
+          {CF(X, T + 0.020f, D), pch, pch, 0.0170f, 0.0170f, 0, 0.0f}};
+        probe("fragpouch");
+        g_fig_soft = 1;
+        fig_chain(fp, 3, 12, 1, 1, crt);
+        g_fig_soft = 0;
+        fnode_t ft[2] = {
+          {CF(X, T + 0.018f, D), frag, frag, 0.0150f, 0.0150f, 0, 0.0f},
+          {CF(X, T + 0.038f, D), frag, frag, 0.0070f, 0.0070f, 0, 0.0f}};
+        fig_chain(ft, 2, 10, 1, 1, crt);
+      }
+      // the tourniquet: a black roll across the corner, its red tag hanging
+      // v5: the tag is plain tan webbing, not a red flag on a friendly chest.
+      v3 tq = {{0.060f, 0.060f, 0.065f}}, red = {{0.340f, 0.310f, 0.250f}};
+      fnode_t tqn[2] = {
+        {CF(0.070f, 0.368f, 0.172f), tq, tq, 0.0140f, 0.0140f, 0, 0.0f},
+        {CF(0.134f, 0.368f, 0.150f), tq, tq, 0.0140f, 0.0140f, 0, 0.0f}};
+      probe("tourniquet");
+      fig_chain(tqn, 2, 10, 1, 1, spine);
+      fnode_t tg[2] = {
+        {CF(0.084f, 0.360f, 0.184f), red, red, 0.0080f, 0.0035f, 0, 0.0f},
+        {CF(0.084f, 0.330f, 0.184f), red, red, 0.0075f, 0.0030f, 0, 0.0f}};
+      fig_chain(tg, 2, 8, 1, 1, crt);
+      // the chemlight, UNLIT (v5): a dim olive stick, not a green lamp
+      v3 cl = {{0.240f, 0.290f, 0.215f}};
+      fnode_t cln[2] = {
+        {CF(-0.110f, 0.356f, 0.168f), cl, cl, 0.0060f, 0.0060f, 0, 0.0f},
+        {CF(-0.110f, 0.404f, 0.164f), cl, cl, 0.0060f, 0.0060f, 0, 0.0f}};
+      probe("chemlight");
+      fig_chain(cln, 2, 8, 1, 1, crt);
+      #undef CF
+    }
   }
+  g_fig_soft = 0;
   }   // vest != VEST_NONE
+  // THE GUNNER'S AMMUNITION BELT: a bandolier from the left shoulder to the
+  // right hip across a bare shirt — the diagonal no operator's square carrier
+  // has, readable from the front at any range the figure is more than a dot.
+  // Bands alternate leather and brass, which is what a belt of rounds is.
+  // 28 mm off the torso's own surface (fig_torso_front), so it never runs
+  // parallel to the shirt; its two ends sink into the yoke and the belt line.
+  if (kt->ins && FIG_INS_KIND == INS_GUNNER && vest == VEST_NONE) {
+    v3 brass = {{0.640f, 0.500f, 0.240f}};
+    fnode_t bd[6];
+    for (int q = 0; q < 6; q++) {
+      float u = (float)q / 5.0f;
+      float T = 0.410f - 0.330f * u, x = -0.100f + 0.215f * u;
+      float off = (q == 0 || q == 5) ? 0.004f : 0.026f;   // ends buried
+      v3 fw;
+      v3 p = fig_torso_front(P, spine, prt, Rc, tw, T, x, off, &fw);
+      v3 c = (q & 1) ? brass : kt->web;
+      bd[q] = (fnode_t){p, c, c, 0.011f, 0.030f, 0, 0.0f};
+    }
+    probe("bandolier");
+    g_fig_jit = 0.30f;
+    g_fig_soft = 1;
+    fig_chain(bd, 6, 16, 1, 1, cfw0);
+    g_fig_soft = 0;
+    g_fig_jit = 1.0f;
+  }
+  // THE LEADER'S RADIO: a handset pouch on the left of his rig and a whip
+  // antenna standing up past the shoulder. The only insurgent with an aerial,
+  // so the one giving orders is the one a shooter should find first.
+  if (kt->ins && FIG_INS_KIND == INS_LEADER && vest == VEST_RIG) {
+    v3 rad = v3_scale(kt->web, 0.80f), fw;
+    v3 r0 = fig_torso_front(P, spine, prt, Rc, tw, 0.215f, -0.090f, 0.010f, &fw);
+    v3 r1 = fig_torso_front(P, spine, prt, Rc, tw, 0.255f, -0.090f, 0.034f, NULL);
+    v3 r2 = fig_torso_front(P, spine, prt, Rc, tw, 0.305f, -0.090f, 0.034f, NULL);
+    v3 r3 = fig_torso_front(P, spine, prt, Rc, tw, 0.322f, -0.090f, 0.016f, NULL);
+    fnode_t rp[4] = {
+      {r0, rad, rad, 0.024f, 0.016f, 0, 0.55f},
+      {r1, rad, rad, 0.032f, 0.022f, 0, 0.0f},
+      {r2, rad, rad, 0.032f, 0.022f, 0, 0.0f},
+      {r3, rad, rad, 0.026f, 0.016f, 0, 0.0f}};
+    v3 crt = v3_norm(v3_cross(fw, spine));
+    probe("radio");
+    g_fig_jit = 0.30f;
+    g_fig_soft = 1;
+    fig_chain(rp, 4, 16, 1, 1, crt);
+    g_fig_soft = 0;
+    g_fig_jit = 1.0f;
+    v3 ab = v3_add(r2, v3_scale(fw, -0.006f));
+    v3 out = v3_scale(crt, -1.0f);   // outboard, away from the face
+    fnode_t an[4] = {
+      {ab, kt->rub, kt->rub, 0.0090f, 0.0090f, 0, 0.0f},
+      {v3_add(ab, v3_scale(spine, 0.060f)), kt->rub, kt->rub, 0.0070f, 0.0070f, 0, 0.0f},
+      {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.220f), v3_scale(out, 0.040f))),
+              v3_scale(P->ant_sway, 0.40f)), kt->rub, kt->rub, 0.0050f, 0.0040f, 0, 0.0f},
+      {v3_add(v3_add(ab, v3_add(v3_scale(spine, 0.420f), v3_add(v3_scale(out, 0.090f),
+              v3_scale(fw, -0.050f)))), P->ant_sway),
+       kt->rub, kt->rub, 0.0030f, 0.0024f, 0, 0.0f}};
+    probe("antenna");
+    fig_chain(an, 4, 6, 1, 1, crt);
+  }
   // Shoulder straps: the carrier is otherwise one black slab across the chest
   // with a hard top edge and nothing holding it up. Two short runs over each
   // trapezius break that mass and give the torso a visible harness.
@@ -887,17 +1328,21 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         // the deltoid's inner edge is narrow enough that a 38 mm strap has to
         // cross ONE of them, and a harness lying on a shoulder cap is what a
         // harness does — a harness through a throat is not.
+        // v5: PADDED over the shoulder — the two top nodes are the strap's
+        // foam pad, 6 mm thicker and a value step darker than the plate bags.
         {v3_add(P->chest, v3_add(v3_scale(Rc, es * 0.106f),
            v3_add(v3_scale(spine, 0.082f), v3_scale(cf2, 0.086f)))),
-         kt->gear, kt->gear, 0.033f, 0.021f, 0, 0.0f},
+         kt->gear, v3_scale(kt->gear, 0.86f), 0.034f, 0.026f, 0, 0.0f},
         {v3_add(P->chest, v3_add(v3_scale(Rc, es * 0.112f),
            v3_add(v3_scale(spine, 0.092f), v3_scale(cf2, -0.010f)))),
-         kt->gear, kt->gear, 0.033f, 0.021f, 0, 0.0f},
+         v3_scale(kt->gear, 0.86f), kt->gear, 0.034f, 0.027f, 0, 0.0f},
         {v3_add(P->chest, v3_add(v3_scale(Rc, es * 0.072f),
            v3_add(v3_scale(spine, 0.030f), v3_scale(cf2, -0.104f)))),
          kt->gear, kt->gear, 0.034f, 0.019f, 0, 0.0f}};
       probe("strap");
-      fig_chain(st, 4, 8, 1, 1, spine);
+      g_fig_soft = 1;
+      fig_chain(st, 4, 16, 1, 1, spine);
+      g_fig_soft = 0;
     }
   }
   // Trapezius wedges: the head used to float on a long bare neck over a flat
@@ -913,7 +1358,9 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       {v3_add(P->chest, v3_add(v3_scale(spine, 0.042f), v3_scale(Rc, es * 0.172f))),
        kt->olive, kt->olive, 0.026f, 0.036f, 0, 0.0f}};
     probe("trap");
-    fig_chain(tp, 3, 8, 1, 1, spine);
+    // Round, so the neck-to-shoulder line is a slope the light rolls down rather
+    // than three planks meeting the collar.
+    fig_chain(tp, 3, 16, 1, 1, spine);
   }
   // Unified tactical assault pack on the carrier's back — EVERY element (main
   // compartment, top comms/bedroll housing, external rear pocket, twin side
@@ -936,8 +1383,9 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       {PP(0.0f,  0.024f, -0.168f), pack_col, pack_col, 0.116f, 0.062f, 0, 0.0f},
       {PP(0.0f,  0.048f, -0.166f), pack_col, pack_col, 0.096f, 0.048f, 0, 0.0f}};
     probe("pack");
+    g_fig_soft = 1;   // molded nylon: every pack chain is a soft box
     g_fig_jit = 0.35f;
-    fig_chain(up, 5, 8, 1, 1, Rc);
+    fig_chain(up, 5, 16, 1, 1, Rc);
     // Horizontal top comms / bedroll housing crowning the main compartment,
     // kept clear below the helmet nape in crouch and slide poses.
     fnode_t pt[4] = {
@@ -947,7 +1395,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       {PP( 0.106f, 0.064f, -0.172f), top_col, top_col, 0.022f, 0.040f, 0, 0.0f}};
     probe("pack");
     g_fig_jit = 0.30f;
-    fig_chain(pt, 4, 8, 1, 1, spine);
+    fig_chain(pt, 4, 16, 1, 1, spine);
     // Deliberate external lower utility pouch in carrier coyote, seated cleanly
     // into the main pack's rear face and standing 18 mm proud.
     fnode_t rp[4] = {
@@ -957,7 +1405,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       {PP(0.0f, -0.012f, -0.220f), kt->gear, kt->gear, 0.068f, 0.018f, 0, 0.0f}};
     probe("pack");
     g_fig_jit = 0.30f;
-    fig_chain(rp, 4, 8, 1, 1, Rc);
+    fig_chain(rp, 4, 16, 1, 1, Rc);
     // Twin side sustainment pouches on the pack's flanks (clear behind the
     // carrier's rear bevel, buried inboard into the main compartment).
     for (int sp_i = 0; sp_i < 2; sp_i++) {
@@ -969,7 +1417,7 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         {PP(sx * 0.118f, -0.006f, -0.188f), side_col, side_col, 0.018f, 0.022f, 0, 0.0f}};
       probe("pack");
       g_fig_jit = 0.30f;
-      fig_chain(sp2, 4, 8, 1, 1, Rc);
+      fig_chain(sp2, 4, 16, 1, 1, Rc);
     }
     g_fig_jit = 1.0f;
     // Two vertical compression straps hugging the external pouch and upper pack.
@@ -982,8 +1430,9 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         {PP(ss * 0.044f, -0.030f, -0.244f), kt->web, kt->web, 0.015f, 0.014f, 0, 0.0f},
         {PP(ss * 0.044f,  0.038f, -0.226f), kt->web, kt->web, 0.014f, 0.014f, 0, 0.0f}};
       probe("packstrap");
-      fig_chain(vb, 4, 8, 1, 1, Rc);
+      fig_chain(vb, 4, 16, 1, 1, Rc);
     }
+    g_fig_soft = 0;
     // Whip antenna seated in the strong-side top comms housing.
     {
       v3 ab = PP(0.076f, 0.088f, -0.172f);
@@ -1012,7 +1461,64 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       {v3_add(hipc, v3_scale(pfw, 0.086f)), kt->belt, kt->belt, 0.056f, 0.038f, 0, 0.0f},
       {v3_add(hipc, v3_scale(pfw, 0.112f)), kt->belt, kt->belt, 0.042f, 0.028f, 0, 0.0f}};
     probe("magpouch");
-    fig_chain(mp, 3, 12, 1, 1, spine);
+    g_fig_soft = 1;
+    fig_chain(mp, 3, 16, 1, 1, spine);
+    g_fig_soft = 0;
+  }
+  // THE BATTLE BELT'S KIT (operators): the IFAK at the back of the weak-side hip
+  // with its red cross printed on the outer face, a DUMP POUCH sagging at the
+  // back of the strong side, and a pistol magazine pouch ahead of the left
+  // rifle pouch. Hung off the pelvis like the mag pouches, on the hips' own
+  // forward (pfw), so they turn with the hips and not with the chest.
+  if (!kt->ins && g_fig_k > 8) {
+    v3 pk = v3_scale(kt->gear, 0.82f);   // coyote kit on the dark belt
+    // IFAK: a horizontal block, back-left
+    v3 ic = v3_add(P->pelvis, v3_add(v3_scale(prt, -0.104f), v3_add(v3_scale(pfw, -0.128f),
+                                                                   v3_scale(spine, 0.024f))));
+    v3 iout = v3_norm(v3_add(v3_scale(prt, -0.45f), v3_scale(pfw, -0.89f)));
+    v3 iac = v3_norm(v3_cross(spine, iout));          // along the belt
+    fnode_t ik[3] = {
+      {v3_add(ic, v3_scale(iac, -0.046f)), pk, pk, 0.028f, 0.024f, 0, 0.55f},
+      {ic, pk, pk, 0.032f, 0.028f, 0, 0.0f},
+      {v3_add(ic, v3_scale(iac, 0.046f)), pk, pk, 0.028f, 0.024f, 0, 0.0f}};
+    probe("ifak");
+    g_fig_soft = 1;
+    fig_chain(ik, 3, 12, 1, 1, iout);
+    g_fig_soft = 0;
+    // v5: a SUBDUED cross, a value step under the pouch — red is the hostile
+    // hue in this game and it sat at hip height on every operator.
+    v3 red = v3_scale(pk, 0.55f);
+    v3 cface = v3_add(ic, v3_scale(iout, 0.0275f));
+    for (int b = 0; b < 2; b++) {   // the cross: a bar along the belt, a bar up it
+      v3 ax = b ? spine : iac;
+      fnode_t cr[2] = {
+        // the bars' caps at DIFFERENT depths: where they cross, coplanar caps z-fight
+        {v3_sub(cface, v3_scale(iout, b ? 0.0040f : 0.0012f)), red, red, 0.0180f, 0.0060f, 0, 0.0f},
+        {v3_add(cface, v3_scale(iout, b ? 0.0045f : 0.0018f)), red, red, 0.0180f, 0.0060f, 0, 0.0f}};
+      fig_chain(cr, 2, 8, 1, 1, ax);
+    }
+    // the dump pouch: a soft sack, back-right, sagging below the belt
+    v3 dc = v3_add(P->pelvis, v3_add(v3_scale(prt, 0.104f), v3_scale(pfw, -0.124f)));
+    v3 dcol = v3_scale(kt->gear, 0.70f);
+    // v5: the sack SWINGS — its lower half rides the same 2nd-order follower
+    // the antenna whips on (P->ant_sway), so it lags a stop and settles.
+    fnode_t dp[3] = {
+      {v3_add(dc, v3_scale(spine, 0.026f)), dcol, dcol, 0.034f, 0.024f, 0, 0.55f},
+      {v3_add(v3_add(dc, v3_scale(spine, -0.020f)), v3_scale(P->ant_sway, 0.10f)), dcol, dcol, 0.042f, 0.032f, 0, 0.0f},
+      {v3_add(v3_add(dc, v3_scale(spine, -0.066f)), v3_scale(P->ant_sway, 0.24f)), dcol, dcol, 0.030f, 0.024f, 0, 0.0f}};
+    probe("dumppouch");
+    g_fig_soft = 1;
+    fig_chain(dp, 3, 12, 1, 1, prt);
+    // the pistol magazine pouch, front-left beside the rifle pouch
+    v3 pc2 = v3_add(P->pelvis, v3_add(v3_scale(prt, -0.140f), v3_add(v3_scale(pfw, 0.040f),
+                                                                    v3_scale(spine, 0.026f))));
+    fnode_t ppm[3] = {
+      {v3_add(pc2, v3_scale(pfw, 0.012f)), pk, pk, 0.016f, 0.026f, 0, 0.0f},
+      {v3_add(pc2, v3_scale(pfw, 0.030f)), pk, pk, 0.018f, 0.030f, 0, 0.0f},
+      {v3_add(pc2, v3_scale(pfw, 0.042f)), pk, pk, 0.014f, 0.024f, 0, 0.0f}};
+    probe("pistolpouch");
+    fig_chain(ppm, 3, 12, 1, 1, spine);
+    g_fig_soft = 0;
   }
 }
 
@@ -1037,20 +1543,26 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     // Split at the elbow for the same reason as the knee: a single chain through a
     // joint that flexes past 90 degrees has to pay for the fillet out of bone
     // length it does not have, and fig_chain pays by thinning the cross-section.
-    fnode_t ar[3] = {
+    fnode_t ar[4] = {
       // The upper arm starts AT the shoulder and runs straight to the elbow. It
       // used to begin 15 cm inboard inside the chest, which put a ~90 degree corner
       // at P->sho — and fig_chain pays for a corner it cannot fillet by thinning the
       // cross-section and opening one big flat bevel facet. Seen from outside THAT
       // facet is the square shoulder: a hard-edged plate where a deltoid should be
       // round. The ball below covers this chain's end cap, as at the knee and elbow.
+      // v5: FOUR rings, a biceps belly. Three put the taper in one straight
+      // line from shoulder to elbow — a cone, which is the constant tube the
+      // review called out. The belly sits 30% down and swells in DEPTH (rz,
+      // fore/aft of the arm), then the arm narrows hard into the elbow.
       {P->sho[i], kt->sleeve, kt->sleeve, 0.058f, 0.060f, 0, 0.74f},
-      {v3_add(P->sho[i], v3_scale(ua, 0.42f)), kt->sleeve, kt->sleeve, 0.054f, 0.056f, 0, 0.0f},
+      {v3_add(P->sho[i], v3_scale(ua, 0.30f)), kt->sleeve, kt->sleeve, 0.056f, 0.062f, 0, 0.0f},
+      {v3_add(P->sho[i], v3_scale(ua, 0.68f)), kt->sleeve, kt->sleeve, 0.049f, 0.052f, 0, 0.0f},
       {P->elb[i], kt->sleeve, kt->sleeve, 0.044f, 0.046f, 0, 0.0f}};   // elbow
     // First bone runs chest-outward, so `spine` is the stable roll reference.
-    // k=8 faceted: the sleeve family joins the crate language of the torso.
+    // Round, k=16, smooth: the sleeve follows the torso out of the crate
+    // language. The node radii already taper deltoid -> bicep -> elbow.
     probe("uarm");
-    fig_chain(ar, 3, 8, 1, 1, spine);
+    fig_chain(ar, 4, 16, 1, 1, spine);
     // The FOREARM is built after the hand, further down, because it needs the
     // palm's own axis — see fig_forearm. It used to be three plain nodes of
     // tapered sleeve here while the viewmodel had nine with a gauntlet; the
@@ -1065,8 +1577,38 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // its host than the knee is from its own: measured, elbow/uarm 0.332 of
       // mean linear luminance against knee/thigh 0.464. Derive it from the arm
       // it is worn on instead, at the knee's own ratio.
+      // v5: the joint is the SLEEVE's elbow (0.92, the crease in its own
+      // shadow), not a 0.68 rubber ball — that dark sphere on the roundest
+      // point of the arm was the action-figure joint the review saw. The PAD is
+      // a separate moulded shell on the point of the elbow, below.
       fig_joint(P->elb[i], ua, v3_sub(P->wri[i], P->elb[i]),
-                0.051f, 0.060f, 0.16f, 8, v3_scale(kt->sleeve, 0.68f));
+                0.051f, 0.060f, 0.16f, 16, v3_scale(kt->sleeve, 0.92f));
+      // THE ELBOW PAD (operators, close tiers): a soft-box shell 30 x 12 mm on
+      // the OUTSIDE of the bend, its long axis along the bisector, rooted 6 mm
+      // into the joint so it crosses decisively. Away from the fold; a straight
+      // arm uses the IK pole's direction (down and out), which is where an
+      // elbow points when it is not bent.
+      if (!kt->ins && g_fig_k > 12) {
+        v3 dua = v3_norm(ua), dfa = v3_norm(fa);
+        v3 bis = v3_add(dua, dfa);
+        bis = v3_dot(bis, bis) > 1e-6f ? v3_norm(bis) : dua;
+        v3 out = v3_sub(dua, dfa);
+        if (v3_dot(out, out) < 4e-3f) out = v3_add(v3_scale(Rc, s * 0.7f), v3_scale(spine, -0.8f));
+        out = v3_sub(out, v3_scale(bis, v3_dot(out, bis)));
+        out = v3_dot(out, out) > 1e-8f ? v3_norm(out) : v3_scale(spine, -1.0f);
+        v3 lat = v3_norm(v3_cross(bis, out));
+        v3 epc = v3_scale(kt->pad, 1.10f);
+        v3 eb = v3_add(P->elb[i], v3_scale(out, 0.051f));
+        fnode_t ep[3] = {
+          {v3_add(eb, v3_scale(bis, -0.034f)), epc, epc, 0.024f, 0.010f, 0, 0.0f},
+          {eb, epc, epc, 0.031f, 0.013f, 0, 0.0f},
+          {v3_add(eb, v3_scale(bis, 0.034f)), epc, epc, 0.024f, 0.010f, 0, 0.0f}};
+        probe("elbowpad");
+        mat_set(MAT_RUBBER_R, 0.0f);
+        g_fig_soft = 1;
+        fig_chain(ep, 3, 16, 1, 1, lat);
+        g_fig_soft = 0;
+      }
       mat_set(MAT_CLOTH_R, 0.0f);
     }
     {  // The deltoid: a BALL, not a capped tube along the arm. As a chain its first
@@ -1098,8 +1640,21 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // and the collar above it, so the eye landed on a pale sphere crowning a
       // brown pad — an action-figure ball joint. A shoulder is the top of a limb
       // and sits in its own occlusion: same cloth, 12% down in value.
-      fig_joint(P->sho[i], v3_sub(P->sho[i], P->chest), ua,
-                0.066f, 0.078f, 0.12f, 8, v3_scale(kt->sleeve, 0.88f));
+      // TUCKED: the ball's centre sits 6 mm in toward the chest and 3 mm up the
+      // spine from the joint (the joint itself does not move — this is where the
+      // MESH is centred, not where the arm pivots), so the cap reads as the top
+      // of the arm growing out of the clavicle line instead of a sphere bolted on
+      // its side. The arm's first ring is a 16-gon now (circumradius 0.060
+      // against the octagon's 0.065), which is exactly the margin the tuck
+      // spends: the arm's end cap stays buried by the same >= 6 mm as before.
+      v3 tuck = v3_sub(P->chest, P->sho[i]);
+      tuck = v3_sub(tuck, v3_scale(spine, v3_dot(tuck, spine)));
+      tuck = v3_dot(tuck, tuck) > 1e-8f ? v3_norm(tuck) : v3_scale(Rc, -s);
+      v3 sc = v3_add(P->sho[i], v3_add(v3_scale(tuck, 0.006f), v3_scale(spine, 0.003f)));
+      // v5: 70 mm along the limb (was 78) and the sleeve's own value — the
+      // 0.88 step put a darker sphere at the top of every arm.
+      fig_joint(sc, v3_sub(P->sho[i], P->chest), ua,
+                0.066f, 0.070f, 0.12f, 16, kt->sleeve);
     }
     {  // Deltoid armour: a short pad riding the outside of the upper arm, strictly
       // outside it at every station (the arm runs 0.067 -> 0.057 there, this runs
@@ -1116,7 +1671,11 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // (vest over a T-shirt), and a hue break on a curved mass's equator reads
       // as a ball-joint seam. Colour boundaries belong on geometric lines.
       v3 dcol = v3_scale(kt->sleeve, 0.94f);
-      v3 strap_col = v3_scale(kt->web, 0.92f);
+      v3 strap_col = kt->arm;   // the friendly armband (insurgent: plain webbing)
+      // Past 22 m the arm is a 6-gon whose corners stand out to its
+      // circumradius: the pad goes 7% wider there or the arm's corners poke
+      // through its flats along the whole band.
+      float dk = g_fig_k <= 6 ? 1.07f : 1.0f;
       fnode_t sp[5] = {
         // Re-spaced for the elongated joint below: -0.035/+0.015 was authored
         // against a SPHERE, and against a mass that runs 84 mm down the arm the
@@ -1124,40 +1683,20 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         // decisive crossing — six grazing pairs on this join alone. Buried
         // deeper and emerging further out is the same rule the comment above
         // states, applied to the shape that is actually there now.
-        {v3_add(P->sho[i], v3_scale(uad, -0.058f)), dcol, dcol, 0.044f, 0.046f, 0, 0.66f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.034f)), dcol, dcol, 0.076f, 0.078f, 0, 0.0f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.055f)), dcol, strap_col, 0.073f, 0.075f, 0, 0.0f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.092f)), strap_col, dcol, 0.068f, 0.070f, 0, 0.0f},
-        {v3_add(P->sho[i], v3_scale(uad,  0.122f)), dcol, dcol, 0.055f, 0.057f, 0, 0.0f}};
+        // v5: the pad lies ON the arm (68-70 mm against the sleeve's 58-62,
+        // was 76-78: it stood 16 mm off the deltoid and read as a separate
+        // object), and the ARMBAND is 22 mm wide, not 37.
+        {v3_add(P->sho[i], v3_scale(uad, -0.058f)), dcol, dcol, 0.044f * dk, 0.046f * dk, 0, 0.66f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.034f)), dcol, dcol, 0.069f * dk, 0.071f * dk, 0, 0.0f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.066f)), dcol, strap_col, 0.068f * dk, 0.070f * dk, 0, 0.0f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.088f)), strap_col, dcol, 0.066f * dk, 0.069f * dk, 0, 0.0f},
+        {v3_add(P->sho[i], v3_scale(uad,  0.118f)), dcol, dcol, 0.055f * dk, 0.058f * dk, 0, 0.0f}};
       probe("deltoid");
-      fig_chain(sp, 5, 8, 1, 1, spine);
-      // Articulated composite shoulder pauldron: crowns P->sho[i] along the
-      // live bladed clavicle (sdir) and tilts smoothly with upper-arm elevation
-      // without rolling onto the chest or floating off the deltoid.
-      // (Armour: the insurgent wears none — it rides with the plate carrier.)
-      if (FIG_VEST == VEST_CARRIER) {
-        v3 sdir = fig_perp(spine, v3_sub(P->sho[i], P->chest));
-        v3 sfw  = v3_norm(v3_cross(spine, v3_scale(sdir, s)));
-        float arm_up = 0.24f * (v3_dot(uad, spine) + 0.55f);
-        float arm_fw = 0.16f * v3_dot(uad, sfw);
-        v3 pax = v3_norm(v3_add(v3_scale(sdir, 0.78f),
-                         v3_add(v3_scale(spine, -0.62f + arm_up),
-                                v3_scale(sfw, arm_fw))));
-        v3 dout = fig_perp(pax, v3_add(v3_scale(sdir, 0.62f), v3_scale(spine, 0.78f)));
-        v3 dfw  = v3_norm(v3_cross(pax, dout));
-        #define PA_P(A, D) v3_add(P->sho[i], v3_add(v3_scale(pax, (A)), v3_scale(dout, (D))))
-        mat_set(MAT_HELM_R, 0.0f);
-        fnode_t pa[4] = {
-          {PA_P(-0.046f, 0.056f), kt->helm, kt->helm, 0.046f, 0.022f, 0, 0.0f},
-          {PA_P(-0.012f, 0.068f), kt->helm, kt->helm, 0.064f, 0.024f, 0, 0.0f},
-          {PA_P( 0.044f, 0.068f), kt->helm, kt->helm, 0.058f, 0.024f, 0, 0.0f},
-          {PA_P( 0.078f, 0.056f), kt->helm, kt->helm, 0.038f, 0.018f, 0, 0.0f}};
-        #undef PA_P
-        probe("pauldron");
-        g_fig_jit = 0.30f;
-        fig_chain(pa, 4, 8, 1, 1, dfw);
-        g_fig_jit = 1.0f;
-      }
+      fig_chain(sp, 5, 16, 1, 1, spine);
+      // v5: NO PAULDRON. A hard shell in the helmet's colour crowning each
+      // shoulder 68 mm off the joint was what made the shoulders too wide and
+      // read as armour bolted onto a mannequin; a plate carrier has none.
+      // The carrier's shoulder straps carry pads instead (fig_torso).
       mat_set(MAT_CLOTH_R, 0.0f);
     }
     // Hand: the SAME wrap the viewmodel uses, closed round the SAME published
@@ -1169,7 +1708,11 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     probe("hand");
     {
       v3 hc, ha; float hr;
-      gun_hold(wpn, i ? GH_GRIP : GH_FORE3, g_org, g_rt, g_up, g_fw, &hc, &ha, &hr);
+      if (i == 0 && wpn == WPN_PT && g_fig_dual)   // the left Beretta's grip
+        gun_hold(wpn, GH_GRIP, v3_sub(g_org, v3_scale(g_rt, DUAL3P * GUN_GIRTH_3P)),
+                 g_rt, g_up, g_fw, &hc, &ha, &hr);
+      else
+        gun_hold(wpn, i ? GH_GRIP : GH_FORE3, g_org, g_rt, g_up, g_fw, &hc, &ha, &hr);
       if ((i == 0 && (wpn == WPN_KN || wpn == WPN_GR)) || (g_fig_free >> i & 1)) {
         // the free hand closes on nothing
         ha = g_rt;
@@ -1209,7 +1752,7 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
         v3 lat = v3_cross(back, spine);
         lat = v3_dot(lat, lat) > 1e-8f ? v3_norm(lat) : Rc;
         fig_forearm(P->wri[i], back, pd, lat, s, kt->sleeve,
-                    kt->gnt, &P->elb[i], 12);
+                    kt->gnt, &P->elb[i], 16);
       }
     }
     mat_set(MAT_CLOTH_R, 0.0f);

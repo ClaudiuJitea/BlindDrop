@@ -114,6 +114,31 @@ static const tracer_look_t TRACER_LOOK[3] = {
 static const tracer_look_t *tracer_look(int wpn) {
   return &TRACER_LOOK[wpn == WPN_SR ? WPN_SR : wpn == WPN_PT ? WPN_PT : WPN_AR];
 }
+// HOSTILE FIRE BURNS GREEN. The insurgent's AK-pattern rounds carry the green
+// tracer compound real 7.62x39 does, and ours the orange-red of 5.56 — so a
+// line of fire crossing the screen says WHO fired it before the shooter is
+// found, which in a crossfire is the whole question. Same timing, width and
+// wake per weapon as the friendly look (the round is the same round to the
+// sim); only the four colours change, at the same brightness so the VFX
+// hierarchy holds. Hostile = drawn as an insurgent from this seat (fig_ins_of).
+static const tracer_look_t *tracer_look_side(int wpn, int src) {
+  static tracer_look_t hostile[3];
+  static int built;
+  if (!built) {
+    for (int w = 0; w < 3; w++) {
+      hostile[w] = TRACER_LOOK[w];
+      float k = w == WPN_SR ? 1.12f : w == WPN_PT ? 0.92f : 1.0f;
+      hostile[w].hot   = v3_scale((v3){{1.05f, 1.62f, 0.92f}}, k);
+      hostile[w].cool  = v3_scale((v3){{0.28f, 1.00f, 0.24f}}, k);
+      hostile[w].hhot  = v3_scale((v3){{0.20f, 0.44f, 0.14f}}, k);
+      hostile[w].hcool = v3_scale((v3){{0.05f, 0.18f, 0.04f}}, k);
+    }
+    built = 1;
+  }
+  const tracer_look_t *tl = tracer_look(wpn);
+  if (src >= 0 && src != g_local_ent && fig_ins_of(src)) return &hostile[tl - TRACER_LOOK];
+  return tl;
+}
 // How long each gun's muzzle star burns. The brake on the magnum throws a
 // blast that is visibly longer than the rifle's flash hider lets out.
 static int flash_ticks(int wpn) { return wpn == WPN_SR ? 5 : FLASH_TICKS; }
@@ -482,7 +507,7 @@ typedef struct {
 #define MARK_BLOOM_K  3.1f    // x MARK_R at birth...
 #define MARK_BLOOM_T  30      // ...collapsing to 1.0 over a quarter second
 #define MARK_BLOOM_C  1.30f   // ...and the spall rings that much brighter with it
-typedef struct { int src, dst, hs, life; } feed_t;
+typedef struct { int src, dst, hs, life, wpn; } feed_t;
 
 static tracer_t   g_tracers[MAX_TRACERS];
 static flash_t    g_flashes[MAX_FLASHES];      // world-pass muzzle-flash stars
@@ -544,6 +569,7 @@ static int        g_streak_n;    // 2 = double, 3 = triple, ... 0 = nothing
 static int        g_streak_t;    // ticks the banner has left
 static long       g_streak_last_t = -100000;  // VFX-side window latch, see EV_KILL
 static feed_t     g_feed[KILLFEED_N];          // kill feed, newest first
+static int        g_death_wpn, g_death_hs;     // how the local player last died
 static int        g_dmg_t;                     // incoming-damage flash ticks
 // FOUR DIRECTIONS, NOT ONE. `g_dmg_from` was a single vector overwritten by
 // every hit and `g_dmg_t` a single shared timer, so in a 20-bot free-for-all two
@@ -554,6 +580,24 @@ static int        g_dmg_t;                     // incoming-damage flash ticks
 // timer, which is what keeps "I am being hit" a single unmistakable state.
 #define DMG_SLOTS 4
 static struct { v3 from; int life; } g_dmg[DMG_SLOTS];
+// WOUND FEEDBACK beyond the arcs. A hit is a SHOCK (g_hurt_kick, 0..1, scaled
+// by the damage and decaying over ~0.4 s) that the composite turns into a
+// red, desaturated, aberrated edge; and it leaves BLOOD on the lens — a few
+// splats on the side the shot came from, with drips that run while they fade.
+// The splat's screen spot is fixed the first frame it is drawn (placed = 0
+// until then), so blood stays where it landed as the view turns.
+// g_hurt_u is what the composite reads: kick, severity (missing health,
+// shaped), heartbeat (0..1 pulse at low health); render_frame fills it.
+#define SPLAT_N 24
+#define SPLAT_TICKS 330
+static float g_hurt_kick;
+static struct { v3 from; float x, y, r; int life, max, placed; uint32_t seed; } g_splat[SPLAT_N];
+static int g_splat_head;
+static float g_hurt_u[4];
+static float splat_rand(uint32_t *h) {
+  *h ^= *h << 13; *h ^= *h >> 17; *h ^= *h << 5;
+  return (float)(*h & 0xFFFFu) / 65535.0f;
+}
 static uint64_t   g_rng_vfx = 0x5EEDu;         // particle scatter only
 // EV_KILL carries no position — match_on_kill pushes src/dst/k and nothing else
 // — so the kill burst takes the wound from the EV_HIT of the SAME TICK. That is
@@ -980,6 +1024,9 @@ static void vfx_blast(v3 at, int open) {
 
 static void vfx_on_event(const event_t *e) {
   switch (e->type) {
+  case EV_PICKUP:
+    supply_on_event(e);
+    break;
   case EV_FIRE: {
     if (e->src == g_local_ent) g_vfx_wpn = e->wpn;   // the hitmarker's arming delay
     if (e->src == g_local_ent) {
@@ -1061,10 +1108,21 @@ static void vfx_on_event(const event_t *e) {
                                      .anchor = 1, .v = mv, .wake = wake, .smoke = 1};
       }
     }
-    if (e->src == g_local_ent) {
+    // A SUPPRESSED gun (M4A1-S, USP-S, MP5-SD) has no muzzle star, from either
+    // side: the can is there to eat it. The tracer and the round are the gun's.
+    int supp = wpn_var_row(e->wpn) >= 0 && e->src >= 0 &&
+               WPN_VAR[wpn_var_row(e->wpn)][ent_wvar(e->src, e->wpn)].supp;
+    // A shotgun's pellets share the shot's idx: one muzzle star for the shell.
+    int rep = 0;
+    {
+      static int ls = -2, li = -1; static long lt = -1;
+      if (e->src == ls && e->i == li && (long)g_tick - lt < 2) rep = 1;
+      else { ls = e->src; li = e->i; lt = (long)g_tick; }
+    }
+    if (e->src == g_local_ent && !rep) {
       g_wpn_heat = fminf(g_wpn_heat + (e->wpn == WPN_SR ? 0.30f : e->wpn == WPN_PT ? 0.10f : 0.075f), 1.6f);
       g_wpn_heat_tick = (int)g_tick;
-      g_muzzle_t = flash_ticks(e->wpn);
+      g_muzzle_t = supp ? 0 : flash_ticks(e->wpn);
       g_muzzle_fresh = 1;             // one guaranteed bright frame, any fps
       g_muzzle_fire_tick = g_tick;
     }
@@ -1072,7 +1130,7 @@ static void vfx_on_event(const event_t *e) {
     // renderer's per-camera call (fx_build skips the player's while the
     // viewmodel pass owns the flash) — gating the spawn on the third-person
     // CONFIG here left a free-cam film of the player firing with no flash.
-    for (int i = 0; i < MAX_FLASHES; i++)
+    for (int i = 0; i < MAX_FLASHES && !supp && !rep; i++)
       if (g_flashes[i].life <= 0) {
         g_flashes[i] = (flash_t){muz, e->b, flash_ticks(e->wpn), e->src, g_tick,
                                  (uint32_t)(e->i * 61 + e->src * 7), 1, e->wpn};
@@ -1248,8 +1306,29 @@ static void vfx_on_event(const event_t *e) {
                       (uint32_t)(e->dst + 1) * 2246822519u +
                       (uint32_t)(e->src + 1) * 3266489917u;
       impact_free_slot(HITSPARK_N + 1);   // ...+ the contact flare
+      // SPARKS ARE FOR PLATES. Every body hit used to throw the full shower of
+      // hot sparks, which made every man under fire read as a robot. A round
+      // that lands on an operator's carrier (hit_on_plate's chest band, and
+      // only an operator wears plates) still sparks at full strength; anything
+      // else — every insurgent hit, an operator's arm or leg, a head — puts out
+      // a puff of torn cloth and dust in the colour of a dark tunic and keeps
+      // a third of the sparks for the hit confirmation. Not gore: fibre.
+      int armour = e->type == EV_HIT && e->dst >= 0 && e->dst < MAX_ENTS &&
+                   !fig_ins_of(e->dst) && hit_on_plate(e);
+      int nspark = armour ? HITSPARK_N : HITSPARK_N / 3;
+      if (!armour) {
+        uint32_t ch = base ^ 0xC1074u;
+        v3 cloth = {{0.30f, 0.27f, 0.24f}};
+        for (int c = 0; c < 3; c++) {
+          v3 cv = v3_add(v3_scale(d, -skid_r(&ch, 0.4f, 1.1f)),
+                  v3_add(v3_scale(t1, skid_r(&ch, -0.5f, 0.5f)),
+                         v3_scale(t2, skid_r(&ch, -0.3f, 0.6f))));
+          dust_add(v3_add(e->a, v3_scale(d, -0.04f)), cv, v3_scale(cloth, skid_r(&ch, 0.8f, 1.2f)),
+                   0.035f, 0.17f + 0.05f * (float)c, 34 + 6 * c);
+        }
+      }
       int n = 0;
-      for (int i = 0; i < MAX_PARTICLES && n < HITSPARK_N; i++)
+      for (int i = 0; i < MAX_PARTICLES && n < nspark; i++)
         if (g_parts[i].life <= 0) {
           uint32_t h = base + (uint32_t)n * 40503u;
           float sp = HITSPARK_BACK * hot * skid_r(&h, 0.55f, 1.0f);
@@ -1264,7 +1343,7 @@ static void vfx_on_event(const event_t *e) {
           n++;
         }
       fx_flare(v3_add(e->a, v3_scale(d, HITSPARK_IN)),
-               0.052f * hot * fx_range_k(dl), 6);
+               (armour ? 0.052f : 0.030f) * hot * fx_range_k(dl), 6);
       // ...and if this round turns out to have been the killing one, the
       // EV_KILL two pushes later needs the wound it landed on. See g_kill_wound.
       if (e->src == g_local_ent) g_kill_wound = (typeof(g_kill_wound)){e->a, d, dl, g_tick};
@@ -1298,6 +1377,21 @@ static void vfx_on_event(const event_t *e) {
         g_dmg[best].from = e->b;
         g_dmg[best].life = DMG_TICKS;
       }
+      {
+        float dmg = (float)(e->i > 0 ? e->i : 10);
+        g_hurt_kick = fminf(1.0f, g_hurt_kick + 0.35f + dmg / 45.0f);
+        int n = 2 + (e->i >= 20) + (e->i >= 40) + (e->type == EV_HIT_HEAD);
+        for (int q = 0; q < n; q++) {
+          int si = g_splat_head++ % SPLAT_N;
+          uint32_t sd = (uint32_t)g_tick * 2654435761u ^ (uint32_t)(q + 1) * 40503u ^
+                        (uint32_t)e->i * 97u;
+          g_splat[si].from = e->b;
+          g_splat[si].seed = sd ? sd : 1u;
+          g_splat[si].r = (12.0f + fminf(dmg, 80.0f) * 0.30f) * (0.75f + 0.5f * splat_rand(&sd));
+          g_splat[si].max = g_splat[si].life = SPLAT_TICKS + (int)(dmg * 1.5f);
+          g_splat[si].placed = 0;
+        }
+      }
     }
     break;
   }
@@ -1305,6 +1399,8 @@ static void vfx_on_event(const event_t *e) {
     if (!g_home && e->dst == g_local_ent) {
       g_ms.life = 0;
       g_cfg.st_deaths++;
+      g_death_wpn = e->wpn;     // the death screen's "who, with what"
+      g_death_hs = e->k;
     }
     if (!g_home && e->src == g_local_ent && e->dst != g_local_ent) {
       g_ms.life++;
@@ -1386,7 +1482,7 @@ static void vfx_on_event(const event_t *e) {
       }
     }
     memmove(g_feed + 1, g_feed, sizeof g_feed - sizeof g_feed[0]);
-    g_feed[0] = (feed_t){e->src, e->dst, e->k, KILLFEED_TICKS};
+    g_feed[0] = (feed_t){e->src, e->dst, e->k, KILLFEED_TICKS, e->wpn};
     break;
   // Listed, not defaulted — see audio_on_event. A new event type that wants a
   // visual has to be answered here or the build fails.
@@ -1419,7 +1515,7 @@ static void vfx_on_event(const event_t *e) {
     break;
   case EV_MELEE: break;
   case EV_NADE:
-    if (!e->k && g_online) nade_add(e->a, e->b, e->i, e->src);
+    if (!e->k && g_online) nade_add(e->a, e->b, e->i, e->src, (int)(e->g * 2.0f + 0.5f) % NADE_KINDS);
     if (e->k == 2)
       for (int i = 0; i < MAX_SPOONS; i++)
         if (g_spoons[i].life <= 0) {
@@ -1431,9 +1527,54 @@ static void vfx_on_event(const event_t *e) {
     vfx_blast(e->a, e->g > 0.5f);
     if (g_online)                           // the local copy is spent
       for (int i = 0; i < MAX_NADES; i++)
-        if (g_nades[i].fuse > 0 && v3_len(v3_sub(g_nades[i].pos, e->a)) < 2.5f)
+        if (g_nades[i].fuse > 0 && !g_nades[i].kind && v3_len(v3_sub(g_nades[i].pos, e->a)) < 2.5f)
           g_nades[i].fuse = 0;
     break;
+  case EV_FLAME: {
+    // The pool itself was built by inferno_on_event (ev_push). Here: the client's
+    // flying copy is spent, and the CATCH — the fill flashing out of the broken
+    // can in a low wide burst of flame that the pool then takes over. A wasted
+    // air burst is the burst alone, smaller, hanging where it went.
+    if (g_online)
+      for (int i = 0; i < MAX_NADES; i++)
+        if (g_nades[i].fuse > 0 && g_nades[i].kind == NADE_INC && v3_len(v3_sub(g_nades[i].pos, e->a)) < 2.5f)
+          g_nades[i].fuse = 0;
+    #define RV(lo, hi) rng_rangef(&g_rng_vfx, lo, hi)
+    fx_flare(v3_add(e->a, (v3){{0, 0.3f, 0}}), e->k ? 0.85f : 0.6f, 4);
+    for (int i = 0, n = 0; i < MAX_FIRE && n < (e->k ? 12 : 9); i++)
+      if (g_fire[i].life <= 0) {
+        v3 d = e->k ? (v3){{RV(-1, 1), RV(0.05f, 0.45f), RV(-1, 1)}}
+                    : (v3){{RV(-1, 1), RV(-0.6f, 0.8f), RV(-1, 1)}};
+        g_fire[i] = (fire_t){v3_add(e->a, v3_scale(d, 0.35f)), v3_scale(d, RV(0.015f, 0.05f)),
+                             RV(0.45f, 1.05f), (int)RV(14, 34), 0, 0};
+        g_fire[i].life0 = g_fire[i].life;
+        n++;
+      }
+    for (int i = 0; i < 8; i++) {
+      float a = RV(0, F_TAU);
+      puff_add(v3_add(e->a, (v3){{cosf(a) * 0.3f, 0.3f, sinf(a) * 0.3f}}),
+               (v3){{cosf(a) * RV(0.4f, 1.4f), RV(0.6f, 1.6f), sinf(a) * RV(0.4f, 1.4f)}},
+               0.25f, RV(0.9f, 1.6f), 0.10f, -0.5f, 0.985f, (int)RV(240, 520), 0.9f);
+    }
+    #undef RV
+    break;
+  }
+  case EV_SMOKE: {
+    // The cloud itself was built by smoke_on_event (ev_push). Here: the client's
+    // flying copy is spent, and the POP — a fast white jet out of the canister
+    // that the bloom then swallows.
+    if (g_online)
+      for (int i = 0; i < MAX_NADES; i++)
+        if (g_nades[i].fuse > 0 && g_nades[i].kind && v3_len(v3_sub(g_nades[i].pos, e->a)) < 2.5f)
+          g_nades[i].fuse = 0;
+    uint32_t h = fx_hash((uint32_t)g_tick * 2654435761u ^ 0x5307Eu);
+    for (int i = 0; i < 6; i++) {
+      float a = skid_r(&h, 0.0f, F_TAU), sp = skid_r(&h, 1.2f, 2.6f);
+      v3 v = {{cosf(a) * sp, skid_r(&h, 1.0f, 2.4f), sinf(a) * sp}};
+      dust_add(v3_add(e->a, (v3){{0, 0.10f, 0}}), v, (v3){{0.60f, 0.61f, 0.63f}}, 0.06f, 0.55f, 50);
+    }
+    break;
+  }
   case EV_BLOCK: {
     // Steel on steel: a hard white star where the blades met. On a client this
     // is also how the two men learn what the server decided, since the guard's
@@ -1453,9 +1594,35 @@ static void vfx_on_event(const event_t *e) {
       if (won_by_me(e->k)) g_cfg.st_wins++;
     }
     break;
-  case EV_RESPAWN:
   case EV_STEP:
-  case EV_LAND:
+  case EV_LAND: {
+    // DRY GROUND KICKS UP UNDER A RUNNING FOOT. On the sand and grit floors a
+    // running stride lifts a low tan puff that hangs a quarter of a second, and
+    // a landing a bigger ring of it: movement reads at range on open ground
+    // the way it does in a real desert, and an enemy crossing a lane leaves a
+    // trace an eye can catch. Never on the WET theme (standing water does not
+    // dust), never for a walk (f is the step's speed), and only inside 40 m,
+    // where a 14 cm puff is still more than a pixel. Hashed off the tick and
+    // the foot, not g_rng_vfx, like every other emitter in this file.
+    if (g_theme.surf == SURF_WET || g_home) break;
+    int land = e->type == EV_LAND;
+    if (!land && e->f < 3.0f) break;
+    v3 dc = v3_sub(e->a, g_cam_eye);
+    if (v3_dot(dc, dc) > 40.0f * 40.0f) break;
+    uint32_t h = fx_hash((uint32_t)g_tick * 2654435761u ^
+                         (uint32_t)(int)(e->a.x * 50.0f) * 73856093u ^
+                         (uint32_t)(int)(e->a.z * 50.0f) * 19349663u);
+    v3 col = v3_scale(g_theme.ground, 0.62f);
+    int n = land ? 4 : 1 + (e->f > 6.0f);
+    for (int i = 0; i < n; i++) {
+      float a = skid_r(&h, 0.0f, F_TAU), sp = land ? skid_r(&h, 0.6f, 1.2f) : skid_r(&h, 0.2f, 0.5f);
+      v3 v = {{cosf(a) * sp, skid_r(&h, 0.15f, 0.45f), sinf(a) * sp}};
+      dust_add(v3_add(e->a, (v3){{0, 0.03f, 0}}), v, col, 0.03f,
+               land ? 0.24f : 0.13f, land ? 44 : 30);
+    }
+    break;
+  }
+  case EV_RESPAWN:
     break;
   }
 }

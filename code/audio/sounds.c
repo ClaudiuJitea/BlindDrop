@@ -888,6 +888,57 @@ static void sfx_build_all(void) {
   sfx_tail(SFX_BLAST, (int)(0.05f * SFX_HZ), 1.9f, 180.0f, 0.7f, 0.020f, 0.42f, 0.34f);
   sfx_finish(SFX_BLAST, 0.92f, 0.120f, 0.30f);
 
+  // THE SMOKE CANISTER. The pop is a fuse charge, not a detonation: a short
+  // dull thud with a small crack on its front. The hiss is broadband gas
+  // through a nozzle — bright noise with a slow attack and a long even body.
+  sfx_alloc(SFX_SMOKE_POP, 0.50f);
+  n = sfx_click(0.010f, 0.0020f, 900.0f, 0.55f);
+  sfx_lay(SFX_SMOKE_POP, n, 0, 0.0f, 0);
+  n = sfx_burst(0.36f, 140.0f, 0.8f, 0.0008f, 0.070f, 1.2f, 0.85f);
+  sfx_lay(SFX_SMOKE_POP, n, 0, 0.0f, 1);
+  n = sfx_burst(0.20f, 1300.0f, 0.9f, 0.0005f, 0.030f, 1.3f, 0.40f);
+  sfx_lay(SFX_SMOKE_POP, n, 1, 0.0f, 2);
+  sfx_finish(SFX_SMOKE_POP, 0.62f, 0.060f, 0.15f);
+  sfx_alloc(SFX_SMOKE_HISS, 1.95f);
+  n = sfx_burst(1.90f, 4200.0f, 0.5f, 0.090f, 0.900f, 0.9f, 0.70f);
+  sfx_lay(SFX_SMOKE_HISS, n, 0, 0.0f, 2);
+  n = sfx_burst(1.80f, 1500.0f, 0.6f, 0.120f, 0.800f, 0.9f, 0.45f);
+  sfx_lay(SFX_SMOKE_HISS, n, (int)(0.04f * SFX_HZ), 0.0f, 2);
+  sfx_finish(SFX_SMOKE_HISS, 0.40f, 0.050f, 0.30f);
+
+  // THE INCENDIARY CATCHING: the canister's small crack, then the WHOOMP of the
+  // fill taking all at once — a low swell of air with a bright roar riding it.
+  sfx_alloc(SFX_FLAME_POP, 1.10f);
+  n = sfx_click(0.012f, 0.0025f, 1600.0f, 0.60f);
+  sfx_lay(SFX_FLAME_POP, n, 0, 0.0f, 0);
+  n = sfx_burst(0.95f, 95.0f, 0.7f, 0.060f, 0.300f, 1.0f, 1.00f);
+  sfx_lay(SFX_FLAME_POP, n, (int)(0.02f * SFX_HZ), 0.0f, 1);
+  n = sfx_burst(0.90f, 700.0f, 0.6f, 0.050f, 0.320f, 1.0f, 0.60f);
+  sfx_lay(SFX_FLAME_POP, n, (int)(0.03f * SFX_HZ), 0.0f, 2);
+  n = sfx_burst(0.70f, 3200.0f, 0.5f, 0.080f, 0.220f, 1.1f, 0.28f);
+  sfx_lay(SFX_FLAME_POP, n, (int)(0.05f * SFX_HZ), 0.0f, 2);
+  sfx_finish(SFX_FLAME_POP, 0.80f, 0.090f, 0.25f);
+  // ...and THE FIRE: a low steady roar and, over it, the crackle — dozens of
+  // tiny dry snaps at uneven times and pans. 2 s, replayed by the router for
+  // as long as a pool burns.
+  sfx_alloc(SFX_FLAME_BURN, 2.00f);
+  n = sfx_burst(1.98f, 180.0f, 0.5f, 0.200f, 1.400f, 0.8f, 0.55f);
+  sfx_lay(SFX_FLAME_BURN, n, 0, 0.0f, 2);
+  n = sfx_burst(1.95f, 1100.0f, 0.5f, 0.250f, 1.300f, 0.8f, 0.22f);
+  sfx_lay(SFX_FLAME_BURN, n, (int)(0.02f * SFX_HZ), 0.0f, 2);
+  {
+    uint32_t h = 0xF1A3Eu;
+    for (int k = 0; k < 46; k++) {
+      h ^= h << 13; h ^= h >> 17; h ^= h << 5;
+      float at = (float)(h % 1900u) / 1000.0f, pan = (float)((h >> 11) % 200u) / 100.0f - 1.0f;
+      float amp = 0.18f + (float)((h >> 19) % 100u) / 100.0f * 0.42f;
+      n = sfx_click(0.008f, 0.0012f + (float)((h >> 5) % 10u) * 0.0002f,
+                    2200.0f + (float)((h >> 23) % 40u) * 100.0f, amp);
+      sfx_lay(SFX_FLAME_BURN, n, (int)(at * SFX_HZ), pan * 0.5f, 0);
+    }
+  }
+  sfx_finish(SFX_FLAME_BURN, 0.55f, 0.060f, 0.30f);
+
   // Far away the crack is gone and what arrives is the rumble.
   sfx_alloc(SFX_BLAST_FAR, 2.60f);
   n = sfx_burst(0.80f, 72.0f, 0.7f, 0.006f, 0.26f, 1.1f, 1.00f);

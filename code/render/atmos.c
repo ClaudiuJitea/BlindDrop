@@ -99,6 +99,15 @@ static const char *DEPTH_FS =
 // would shimmer on anything that moves through it.
 // uEmis short-circuits the whole rig for the additive FX pass (tracers, sparks,
 // muzzle glow), which wants its vertex color on screen untouched.
+// Sky-visibility weights (render/skyvis.c). SV_OCC: what an occluder sends back
+// in place of the sky it hides, as a fraction of the ground fill. SV_SPEC: the
+// floor of the specular occlusion.
+// The bake's layer heights, shared with render/skyvis.c (SV_LAYERS there).
+#define GLSL_SVY "const float SVY[6] = float[](0.10, 1.00, 2.20, 4.00, 7.00, 12.0);\n"
+#define SV_OCC  "0.50"
+#define SV_SPEC "0.30"
+#define SV_MIN  "0.30"   // the diffuse floor in the open: see the note at its use
+#define SV_MIN_ROOF "0.85"   // ...and under a roof, whose doors and windows the bake cannot see
 static const char *WORLD_FS =
   "#version 330 core\n"
   GLSL_ENV
@@ -470,13 +479,60 @@ static const char *WORLD_FS =
   "  vec3 g = sign(det) * (dFdx(h) * r1 + dFdy(h) * r2);\n"
   "  return normalize(abs(det) * n - g * k);\n"
   "}\n"
+  // SKY VISIBILITY (render/skyvis.c): the baked fraction of the sky a surface
+  // here can see, for a normal facing up and the four horizontal axes. Four
+  // taps: two height layers x two sets, blended by the normal (or by the
+  // reflection vector for the specular half). A down-facing normal sees the
+  // ground, never the sky, so it is never occluded by this term.
+  GLSL_SVY
+  "uniform sampler2D uSv; uniform vec4 uSvXf;\n"
+  "vec4 sv_tap(vec2 t, int L, float set){ return texture(uSv, vec2((float(L) + t.x) * (1.0 / 6.0), (set + t.y) * 0.5)); }\n"
+  "float sv_dir(vec4 h4, float up, vec3 d){\n"
+  "  vec4 w = max(vec4(d.x, -d.x, d.z, -d.z), 0.0); w *= w;\n"
+  "  float hs = w.x + w.y + w.z + w.w;\n"
+  "  float vh = hs > 1e-4 ? dot(w, h4) / hs : up;\n"
+  "  return d.y >= 0.0 ? mix(vh, up, d.y) : mix(vh, 1.0, -d.y);\n"
+  "}\n"
+  "vec3 sky_vis(vec3 p, vec3 n, vec3 r){\n"
+  "  if (uSvXf.z < 0.5) return vec3(1.0, 1.0, 0.0);\n"
+  "  vec3 q = p + n * 0.22;\n"
+  "  vec2 t = clamp(q.xz * uSvXf.x + 0.5, vec2(uSvXf.y * 0.5), vec2(1.0 - uSvXf.y * 0.5));\n"
+  "  float y = q.y;\n"
+  "  int L = y < SVY[1] ? 0 : y < SVY[2] ? 1 : y < SVY[3] ? 2 : y < SVY[4] ? 3 : 4;\n"
+  "  float f = clamp((y - SVY[L]) / (SVY[L + 1] - SVY[L]), 0.0, 1.0);\n"
+  "  vec4 h4 = mix(sv_tap(t, L, 0.0), sv_tap(t, L + 1, 0.0), f);\n"
+  "  vec2 u2 = mix(sv_tap(t, L, 1.0).rg, sv_tap(t, L + 1, 1.0).rg, f);\n"
+  "  float up = u2.x;\n"
+  "  float ab = smoothstep(12.0, 18.0, y);\n"     // above the top layer: open
+  "  h4 = mix(h4, vec4(1.0), ab); up = mix(up, 1.0, ab);\n"
+  "  return vec3(sv_dir(h4, up, n), sv_dir(h4, up, r), u2.y * (1.0 - ab));\n"
+  "}\n"
+  // RED IS THE ENEMY'S (ART_BIBLE: the red wrap is the only saturated red at
+  // head height). The towns' awnings and shutters were authored at hue 5-9
+  // degrees and saturation 0.74-0.78, i.e. the wrap's own colour (4 deg, 0.82)
+  // hung at 2.5 m beside every lineup. The static world's reds are turned to
+  // terracotta (28 deg) and capped at 0.55 here, in the shader, because a solid's
+  // colour is hashed into net_world_hash and must not move. Smooth weights in
+  // hue and saturation, so brick (14 deg, 0.57) is untouched and nothing bands.
+  "vec3 reserve_red(vec3 c){\n"
+  "  float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));\n"
+  "  if (c.r < mx || mx - mn < 1e-4) return c;\n"
+  "  float sat = (mx - mn) / mx;\n"
+  "  float h = (c.g - c.b) / (mx - mn) * 60.0;\n"
+  "  float w = smoothstep(0.55, 0.66, sat) * (1.0 - smoothstep(10.0, 15.0, h)) * smoothstep(-30.0, -18.0, h);\n"
+  "  if (w <= 0.0) return c;\n"
+  "  float s2 = min(sat, 0.55), m2 = mx * (1.0 - s2);\n"
+  "  vec3 t = vec3(mx, m2 + (mx - m2) * (28.0 / 60.0), m2);\n"
+  "  return mix(c, t, w);\n"
+  "}\n"
   "void main(){\n"
   // 2 = MULTIPLY (smoke): a transmittance, not a colour — it passes untouched.
   // 1 = additive glow, authored as display colour: lifted back into radiance.
-  "  if (uEmis > 1.5) { oCol = vec4(vCol, 1.0); return; }\n"
+  "  if (uEmis > 1.5) { oCol = vec4(vCol, uEmis > 2.5 ? vCol.g : 1.0); return; }\n"
   "  if (uEmis > 0.5) { oCol = vec4(display_in(vCol) * 1.35, 1.0); return; }\n"
   "  vec3 n = normalize(vNrm);\n"
-  "  vec3 alb = vCol * vCol;\n"                 // authored display -> linear
+  "  vec3 alb = uDetail > 0.0 ? reserve_red(vCol) : vCol;\n"
+  "  alb *= alb;\n"                 // authored display -> linear
   "  vec3 dv = vWorld - uEye;\n"
   "  float d = length(dv);\n"
   "  vec3 V = -dv / d;\n"
@@ -1197,7 +1253,19 @@ static const char *WORLD_FS =
   // Diffuse irradiance: the same sky, smoothed to a hemisphere lobe. Sun-facing
   // AO is only partly applied — a crease is dark in ambient light, not in a
   // direct beam.
-  "  vec3 amb = mix(SKY_GND * 0.44, mix(SKY_HOR, SKY_TOP, 0.45) * 0.40,\n"
+  // The sky half of the fill is what the sky-visibility field occludes; what
+  // stands in the way (a facade, a roof's underside) sends back roughly the
+  // ground's own bounce instead, so a covered surface goes toward the ground
+  // fill rather than toward black.
+  "  vec3 sv = sky_vis(vWorld, n, reflect(-V, n));\n"
+  // A roof costs a surface its sky, never all of its light: the floor of a
+  // fully covered shed keeps 30% of the open fill, which is what keeps a dark
+  // tunic separable from the floor it crouches on (36_ins_shade_foundry).
+  // The floor is the STATIC world's only: a figure is read dark against the
+  // ground, so it takes the full occlusion and gains contrast where the
+  // floored ground beside it would otherwise have caught up with it.
+  "  float svd = uDetail > 0.0 ? max(sv.x, mix(" SV_MIN ", " SV_MIN_ROOF ", sv.z)) : sv.x;\n"
+  "  vec3 amb = mix(SKY_GND * 0.44, mix(SKY_GND * 0.44 * " SV_OCC ", mix(SKY_HOR, SKY_TOP, 0.45) * 0.40, svd),\n"
   "                 n.y * 0.5 + 0.5);\n"
   "  vec3 irr = amb * ao * uAmb;\n"
   "  float fr = pow(1.0 - NoV, 5.0);\n"
@@ -1214,7 +1282,9 @@ static const char *WORLD_FS =
   "  float sh = 0.0;\n"
   "  if (dot(n, SUN_DIR) > 0.0 || glint > 0.0 || wet > 0.0)\n"
   "    sh = mix(0.45, 1.0, ao) * sun_shadow();\n"
-  "  vec3 env = env_gloss(reflect(-V, n), rough) * mix(1.0, ao, 0.75);\n"
+  // ...and a reflection of sky the surface cannot see is not there: the floor
+  // of a street canyon mirrored a whole open sky. Specular occlusion along R.
+  "  vec3 env = env_gloss(reflect(-V, n), rough) * mix(1.0, ao, 0.75) * mix(mix(" SV_SPEC ", " SV_MIN_ROOF ", sv.z * step(0.0, uDetail - 0.5)), 1.0, sv.y);\n"
   // INSIDE THE FILM, THE SUN DISC IS SUPPRESSED. env_gloss hands a 0.05-rough
   // surface a lobe about seven hundred wide, i.e. a near-delta reflection of a
   // near-delta sun: one pixel of pure white that no filter in the frame can
@@ -1292,8 +1362,13 @@ static const char *WORLD_FS =
   "    col += lit(n, V, uRim, diff, F0, rough, VM_RIM);\n"
   // A view-space rim on top: the upper silhouette catches a cool edge in any
   // arena, so a blade or a gauntlet stays crisp against walls of its own colour.
+  // uVm 2 is the ARMORY PREVIEW (v5): the same rig, but this rim scales with
+  // the surface's own albedo. Unscaled it added a flat +0.4 grey to any face
+  // grazing the view, and a dark boot's instep and toe cap (0.13) came out as
+  // pale grey blocks. First person (uVm 1) is unchanged.
   "    { float fr = 1.0 - clamp(dot(n, V), 0.0, 1.0);\n"
-  "      col += vec3(0.42, 0.48, 0.58) * fr * fr * fr * (0.35 + 0.65 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0)); }\n"
+  "      float ra = uVm > 1.5 ? clamp(dot(diff, vec3(0.3333)) * 4.0, 0.12, 1.0) : 1.0;\n"
+  "      col += vec3(0.42, 0.48, 0.58) * fr * fr * fr * ra * (0.35 + 0.65 * clamp(n.y * 0.5 + 0.5, 0.0, 1.0)); }\n"
   // A shot is the brightest light source in the player's world for two ticks,
   // and it used to illuminate nothing: the additive flash ribbon was drawn in
   // front of a rifle that stayed exactly as dark as it had been the tick
@@ -1345,6 +1420,7 @@ static const char *WORLD_FS =
   "    }\n"
   "  }\n"
   "  col = mix(col, sky_env(-V, 0.0), 1.0 - exp(-d * d * uFog));\n"
+  "  if (uSvXf.w > 0.5) col = vec3(uSvXf.w < 1.5 ? sv.x : sv.y) * 0.45 / EXPOSURE;\n"
   // ALPHA = "this is the static world". Nothing read the scene's alpha, so it
   // carries the one bit the composite needs to keep the edge catch-light (see
   // AO_FS) on the world's chamfered corners and OFF the moving geometry: the

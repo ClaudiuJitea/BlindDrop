@@ -39,7 +39,20 @@
 // 16: LOADOUT VARIANTS. The entity record's weapon byte carries the shooter's
 // rifle/pistol variant in its top bits and the input's buttons word carries the
 // menu's choice in its top nibble — a 15 peer would reject both.
-#define NET_PROTO 16   // 12: TEAM DEATHMATCH (NP_TEAM, NP_SCORES team block + team column)
+// 17: the SNIPER gets a loadout (bolt-action / SCAR-20): the loadout grows to five
+// bits, the input word's top five and the whole of the entity's weapon byte above
+// its three weapon bits — a 16 peer would read the sniper bit as a button or drop it.
+// The same release also rebuilds the Citadel's street (pickups, bins, motorbikes,
+// cafe tables, tyre stacks, roof tanks — all solid): a 16 peer would fail the hash.
+#define NET_PROTO 22   // 22: SUPPLY STATIONS (EV_PICKUP, new solids on every map),
+                       //     three of each grenade at spawn
+                       // 21: SHOTGUNS, MACHINE GUNS, DUAL BERETTAS (an 11-bit loadout) and
+                       //     IN_ALTFIRE (FIRE MODE: burst, the R8's fan)
+                       // 20: THE CS2 ARSENAL: 14 primaries, 9 pistols, 4 snipers. The
+                       //     loadout is ten bits and leaves the buttons word and the
+                       //     weapon byte for a u16 of its own in both records.
+                       // 19: INCENDIARY (EV_FLAME, a 3-kind nade byte, IN_SLOT7)
+                       // 18: SMOKE GRENADES (EV_SMOKE, the nade byte in the entity record, IN_SLOT6)
 // Floors on UNVERIFIED requests, so the answer to one is always smaller than
 // the request was and neither responder can be pointed at a forged
 // source address. 16 against the 7-byte COOKIE; 736 against the INSTANCES
@@ -104,9 +117,8 @@ typedef struct {
                          // g_tick - view at consume time IS the round trip —
                          // the ping the scoreboard shows. 0 = not synced yet.
   uint32_t buttons;      // IN_COUNT outgrew 16 bits with the weapon slots
-  uint8_t  loadout;      // the menu's loadout (loadout_pack), applied by the
-                         // server on this human's next spawn. On the wire it
-                         // is the top nibble of the buttons word (IN_COUNT <= 28)
+  uint16_t loadout;      // the menu's loadout (loadout_pack), applied by the
+                         // server on this human's next spawn: its own u16
   int16_t  yaw, pitch;   // yaw: full circle -> i16; pitch: +/-PITCH_MAX -> i16
   int16_t  wish_x, wish_y;
 } net_input_t;
@@ -160,7 +172,10 @@ static float   net_dq_wish(int16_t q){ return f_clamp((float)q * (1.0f / 32767.0
 static void net_input_encode(np_wr *w, const net_input_t *in) {
   np_w32(w, in->tick);
   np_w32(w, in->view);
-  np_w32(w, (in->buttons & 0x0FFFFFFFu) | (uint32_t)(in->loadout & 15) << 28);
+  static_assert(IN_COUNT <= 32, "the buttons word");
+  static_assert(LOADOUT_BITS <= 16, "the loadout is a u16");
+  np_w32(w, in->buttons);
+  np_w16(w, (uint16_t)(in->loadout & ((1u << LOADOUT_BITS) - 1u)));
   np_w16(w, (uint16_t)in->yaw);
   np_w16(w, (uint16_t)in->pitch);
   np_w16(w, (uint16_t)in->wish_x);
@@ -172,10 +187,9 @@ static void net_input_encode(np_wr *w, const net_input_t *in) {
 static int net_input_decode(np_rd *r, net_input_t *in) {
   in->tick   = np_r32(r);
   in->view   = np_r32(r);
-  uint32_t raw = np_r32(r);
-  in->buttons = raw & ((1u << IN_COUNT) - 1u);
-  in->loadout = (uint8_t)(raw >> 28);
-  if ((in->loadout & 3) >= WPN_VARS || (in->loadout >> 2 & 3) >= WPN_VARS) in->loadout = 0;
+  in->buttons = np_r32(r) & ((1u << IN_COUNT) - 1u);
+  in->loadout = np_r16(r);
+  if (!loadout_valid(in->loadout)) in->loadout = 0;
   in->yaw    = (int16_t)np_r16(r);
   in->pitch  = (int16_t)np_r16(r);
   in->wish_x = (int16_t)np_r16(r);
@@ -191,11 +205,12 @@ static int net_input_decode(np_rd *r, net_input_t *in) {
 typedef struct {
   uint8_t  id, flags;      // flags bit0 alive, bit1 grounded, bit2 crouched,
                            // bit3 sliding, bit4 knife guard up
-  uint8_t  hp, weapon;     // weapon: 3 bits used...
-  uint8_t  loadout;        // ...and the byte's top bits carry this on the
-                           // wire: loadout_pack's nibble (rifle, pistol variant)
+  uint8_t  hp, weapon;     // weapon: 3 bits used
+  uint16_t loadout;        // loadout_pack's ten bits (primary, pistol, sniper)
   uint8_t  spawn_seq;
   uint8_t  melee;          // swing for remote figures: variant << 6 | ticks / 2
+  uint8_t  nade;           // the grenade slot (nade_pack): bits0-1 the kind in
+                           // hand, bits2-4 / 5-7 how many of the next two kinds
   uint8_t  mag;            // rounds in the CURRENT weapon's magazine. Without
                            // it a lost reload press was invisible forever: the
                            // predicted HUD showed a full mag while the server
@@ -260,10 +275,12 @@ static float   net_dq_vel(int16_t q){ return (float)q * 0.01f; }
 
 static void net_ent_encode(np_wr *w, const net_ent_t *e) {
   np_w8(w, e->id); np_w8(w, e->flags);
-  np_w8(w, e->hp); np_w8(w, (uint8_t)((e->weapon & 7) | (e->loadout & 15) << 3));
+  np_w8(w, e->hp); np_w8(w, (uint8_t)(e->weapon & 7));
+  np_w16(w, (uint16_t)(e->loadout & ((1u << LOADOUT_BITS) - 1u)));
   np_w8(w, e->spawn_seq);
   np_w8(w, e->melee);
   np_w8(w, e->mag);
+  np_w8(w, e->nade);
   np_w16(w, (uint16_t)e->x); np_w16(w, (uint16_t)e->y); np_w16(w, (uint16_t)e->z);
   np_w16(w, (uint16_t)e->vx); np_w16(w, (uint16_t)e->vy); np_w16(w, (uint16_t)e->vz);
   np_w16(w, (uint16_t)e->yaw); np_w16(w, (uint16_t)e->pitch);
@@ -304,7 +321,7 @@ static void net_ev_from_live(net_ev_t *n, const event_t *e, uint32_t id) {
 }
 static void net_ev_to_live(event_t *e, const net_ev_t *n) {
   *e = (event_t){0};
-  e->type = (ev_type_t)(n->type > EV_BLAST ? EV_IMPACT : n->type);
+  e->type = (ev_type_t)(n->type > EV_PICKUP ? EV_IMPACT : n->type);
   // src/dst/wpn are ARRAY INDICES in every consumer (g_player_anim via
   // human_of_ent, WPN_DEF, g_bots) — a hostile server's 254 walked straight
   // into g_player_anim[234]. Out-of-range ids neutralize to -1 (no owner),
@@ -321,11 +338,11 @@ static int net_ent_decode(np_rd *r, net_ent_t *e) {
   e->id = np_r8(r); e->flags = np_r8(r);
   e->hp = np_r8(r);
   e->weapon = np_r8(r);
-  e->loadout = (uint8_t)(e->weapon >> 3 & 15);
-  e->weapon &= 7;
+  e->loadout = np_r16(r);
   e->spawn_seq = np_r8(r);
   e->melee = np_r8(r);
   e->mag = np_r8(r);
+  e->nade = np_r8(r);
   e->x = (int16_t)np_r16(r); e->y = (int16_t)np_r16(r); e->z = (int16_t)np_r16(r);
   e->vx = (int16_t)np_r16(r); e->vy = (int16_t)np_r16(r); e->vz = (int16_t)np_r16(r);
   e->yaw = (int16_t)np_r16(r); e->pitch = (int16_t)np_r16(r);
@@ -335,7 +352,7 @@ static int net_ent_decode(np_rd *r, net_ent_t *e) {
   // old `& 3` let a hostile server hand out weapon 2 and 3 against a
   // WPN_COUNT of 2, i.e. an out-of-bounds read per snapshot record.
   return !r->bad && e->id < MAX_ENTS && e->weapon < WPN_COUNT &&
-         (e->loadout & 3) < WPN_VARS && (e->loadout >> 2 & 3) < WPN_VARS;
+         loadout_valid(e->loadout);
 }
 
 // FNV-1a over the generated solids: map_generate has NO transcendental

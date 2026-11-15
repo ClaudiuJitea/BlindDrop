@@ -142,16 +142,44 @@ static int smat_classify(v3 c) {
 // from g_rng, so registering a prop changes no map.
 static uint8_t g_solid_hide_all[SRV_LOBBIES][MAX_SOLIDS];
 #define g_solid_hide (g_solid_hide_all[g_lobby])
-enum { PROP_TRUCK = 1, PROP_CAR, PROP_LAMP, PROP_HELI, PROP_PALM, PROP_BARREL };
-typedef struct { int kind, ax, dir; float x, z; v3 col, col2; } prop_t;
+enum { PROP_TRUCK = 1, PROP_CAR, PROP_LAMP, PROP_HELI, PROP_PALM, PROP_BARREL, PROP_MESH,
+       PROP_ROOF };   // ROOF: a shed's rafters and pendant lamps; `dir` = the half's sign
+// The Blender-built prop meshes (render/decor.c, PMESH). PROP_CAR carries its
+// body in `dir` (CAR_SEDAN / CAR_PICKUP, | CAR_FLIP to face the other way);
+// PROP_MESH carries the mesh id in `dir` and quarter turns in `ax`.
+enum { PM_SEDAN, PM_PICKUP, PM_DUMPSTER, PM_MOTO, PM_AC, PM_DISH, PM_WTANK, PM_CAFE, PM_TYRES,
+       PM_WELL, PM_GENSET, PM_FORKLIFT, PM_SOLAR, PM_IBC, PM_SACKS, PM_BENCH, PM_ELEC,
+       PM_SUP_MED, PM_SUP_MED_I, PM_SUP_AMMO, PM_SUP_AMMO_I, PM_COUNT };
+enum { CAR_SEDAN = 0, CAR_PICKUP = 1, CAR_FLIP = 2 };
+typedef struct { int kind, ax, dir; float x, z; v3 col, col2; float y; } prop_t;   // y: base height
 #define MAX_PROPS 192
 static prop_t g_props_all[SRV_LOBBIES][MAX_PROPS];
 static int g_nprops_all[SRV_LOBBIES];
 #define g_props (g_props_all[g_lobby])
 #define g_nprops (g_nprops_all[g_lobby])
 static void prop_add(int kind, float x, float z, int ax, int dir, v3 c, v3 c2) {
-  if (g_nprops < MAX_PROPS) g_props[g_nprops++] = (prop_t){kind, ax, dir, x, z, c, c2};
+  if (g_nprops < MAX_PROPS) g_props[g_nprops++] = (prop_t){kind, ax, dir, x, z, c, c2, 0.0f};
 }
+// ...one standing on something (a roof) rather than on the ground.
+static void prop_add_y(int kind, float x, float y, float z, int ax, int dir, v3 c, v3 c2) {
+  if (g_nprops < MAX_PROPS) g_props[g_nprops++] = (prop_t){kind, ax, dir, x, z, c, c2, y};
+}
+// SUPPLY STATIONS: a medical cabinet (health) and an ammunition crate
+// (grenades) stood at fixed places on every map. Placed by the map build from
+// the solids alone (supply_place, no g_rng), so the server and every client
+// agree where they are without a byte on the wire; only a pickup travels, as
+// EV_PICKUP, which restarts that station's cooldown everywhere. A station is a
+// hidden collision block plus a Blender model drawn live (it empties when
+// taken and lights up again when restocked) — see render/supply_draw.
+enum { SUP_HEALTH = 0, SUP_NADES = 1 };
+#define MAX_SUPPLY 12
+typedef struct { float x, z; int kind, qt; } supply_t;
+static supply_t g_supply_all[SRV_LOBBIES][MAX_SUPPLY];
+static int      g_nsupply_all[SRV_LOBBIES];
+static long     g_supply_ready_all[SRV_LOBBIES][MAX_SUPPLY];   // tick it restocks at
+#define g_supply (g_supply_all[g_lobby])
+#define g_nsupply (g_nsupply_all[g_lobby])
+#define g_supply_ready (g_supply_ready_all[g_lobby])
 static void solids_hide(int from) {
   for (int i = from; i < g_num_solids; i++) g_solid_hide[i] = 1;
 }

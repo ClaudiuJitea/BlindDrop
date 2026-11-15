@@ -304,23 +304,109 @@ static v3 vm_pouch_disp(v3 wc, v3 eye, v3 rgt, v3 upv, v3 fwd, float t) {
   return v3_add(v3_scale(v3_sub(P, wc), t), arc);
 }
 // The magazine's own centre in the baked model (its bounds' middle).
-// THE FAMAS IS A BULLPUP: its magazine sits BEHIND the grip, so the viewmodel's
-// rig carries a per-variant override for the three things that hang off the
-// magazine (its centre, the reload hold, the free fall) and for its sight: no
-// optic, the iron sights inside the carry handle's window (post, aperture). Everything else — grip,
-// trigger, fore-end — is on the AR's stations by construction (build_models.py).
-#define RV_FAMAS 2
-#define PV_DEAGLE 2
-#define VM_FAMAS_IRON_Y  0.0600f  // the post tip and the aperture's centre, INSIDE
-#define VM_FAMAS_IRON_Z -0.1400f  // the handle's window; the aperture at its back
-#define VM_FAMAS_MUZ_Z   0.500f
-// A bullpup's cheek weld is on the BUTT, behind the handle: aimed, the FAMAS sits
-// this much further from the eye than the AR, so the handle's rear wall and its
-// sight tunnel frame the view instead of filling it.
-#define VM_FAMAS_ADS_PUSH 0.070f
-#define VM_DEAGLE_MUZ_Z  0.196f
+// EVERY LOADOUT GUN'S OWN STATIONS. Each variant is authored in its slot's frame
+// on the slot's grip and trigger (the sculpted firing hand closes on them
+// unchanged, build_models.py), but a bullpup carries its magazine behind the
+// grip, an SMG is half a rifle long, a P90 feeds from the top and every gun
+// aims through its own sight. This table is the ONE place those differences
+// live — the viewmodel, the hands and the dropped magazine all read it:
+//   muz        the muzzle (y, z): the flash and the tracer leave from here
+//   sight      0 the EOTech holo (ring + dot), 1 a red dot (dot only),
+//              2 iron sights (no reticle: the rear aperture at (sy, sz), radius
+//              sr), 3 a magnified scope (round ocular at (sy, sz), radius sr,
+//              black duplex reticle)
+//   mag        the magazine's centre (y, z); 0 = the slot's
+//   reld       where the support hand holds the magazine mid-reload (y, z) and
+//              the hand's axis (ay, az); ay = az = 0 keeps the slot's
+//   fore_dz    the support hand's fore-end station, moved along the bore (an
+//              SMG's fore-end is far nearer the grip than a rifle's). THE HAND
+//              MESH REACHES 55 mm AHEAD of its station and 86 mm behind it
+//              (HAND_L's own extent), so the station sits ~55 mm behind the
+//              front of whatever it holds — at the old values every SMG's
+//              fingers closed round the muzzle.
+//   ads_push   how much further from the eye the gun sits when aimed (a
+//              bullpup's cheek weld is on its butt)
+//   mag_k      1 the magazine drops out below; -1 it lifts out above (P90)
+typedef struct {
+  float muz_y, muz_z;
+  int   sight;
+  float sy, sz, sr;
+  float mag_y, mag_z;
+  float reld_y, reld_z, reld_ay, reld_az;
+  float fore_dz, ads_push, mag_k;
+} vm_var_t;
+#define VM_HOLO_Y_ 0.0741f   // (VM_HOLO_Y, below)
+#define VM_HOLO_Z_ 0.1680f
+#define VM_HOLO_R_ 0.0133f
+static const vm_var_t VM_VAR[3][WPN_VARS] = {
+  { {0.022f, 0.492f, 0, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1},       // M4A4
+    {0.022f, 0.492f, 1, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1},       // AK-47 (Kobra)
+    {0.022f, 0.500f, 2, 0.0600f, -0.1400f, 0.0026f, -0.076f, -0.146f,                       // FAMAS
+     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, 0.070f, 1},
+    {0.022f, 0.640f, 2, 0.0600f, -0.0080f, 0.0024f, 0, 0, 0, 0, 0, 0, 0, 0, 1},              // M4A1-S
+    {0.020f, 0.500f, 2, 0.0600f, -0.0180f, 0.0024f, -0.100f, 0.128f, 0, 0, 0, 0, 0, 0, 1},   // GALIL AR
+    {0.019f, 0.490f, 3, 0.0750f, 0.1500f, 0.0136f, 0, 0, 0, 0, 0, 0, 0, -0.090f, 1},         // SG 553 (objective)
+    {0.020f, 0.480f, 3, 0.0780f, 0.1260f, 0.0126f, -0.076f, -0.146f,                        // AUG (objective)
+     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, -0.060f, 1},
+    {0.019f, 0.225f, 2, 0.0460f, -0.0480f, 0.0022f, -0.120f, -0.035f,                       // MAC-10
+     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.104f, 0, 1},
+    {0.019f, 0.235f, 2, 0.0520f, -0.0450f, 0.0022f, -0.115f, -0.032f,                       // MP9
+     -0.1200f, -0.0360f, 0.921f, 0.386f, -0.114f, 0, 1},
+    {0.019f, 0.235f, 2, 0.0580f, -0.0550f, 0.0024f, -0.120f, -0.036f,                       // MP7
+     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.116f, 0, 1},
+    {0.019f, 0.420f, 2, 0.0600f, -0.0400f, 0.0026f, -0.090f, 0.095f,                        // MP5-SD
+     -0.0600f, 0.0920f, 0.990f, 0.140f, 0, 0, 1},
+    {0.019f, 0.240f, 2, 0.0620f, -0.0400f, 0.0026f, -0.085f, 0.095f,                        // UMP-45
+     -0.0620f, 0.0950f, 1.0f, 0.0f, -0.104f, 0, 1},
+    {0.019f, 0.230f, 1, 0.0840f, 0.0900f, 0.0100f, 0.052f, -0.030f,                         // P90
+     0.0620f, -0.0300f, 0.0f, 1.0f, -0.136f, 0, -1},
+    {0.019f, 0.440f, 2, 0.0580f, 0.2000f, 0.0024f, -0.020f, 0.205f,                         // PP-BIZON
+     -0.0200f, 0.2050f, 0.0f, 1.0f, 0, 0, 1},
+    // THE SHOTGUNS: group 1 is ONE SHELL at the loading port, the support hand
+    // thumbs it in along the bore (hold axis along z); group 3 the pump.
+    {0.036f, 0.550f, 2, 0.0520f, -0.0300f, 0.0022f, -0.014f, 0.085f,                        // NOVA
+     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1},
+    {0.036f, 0.540f, 2, 0.0560f, -0.0300f, 0.0024f, -0.014f, 0.085f,                        // XM1014
+     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1},
+    {0.036f, 0.360f, 2, 0.0520f, 0.0000f, 0.0022f, -0.014f, 0.085f,                         // SAWED-OFF
+     -0.0380f, 0.0850f, 0.0f, 1.0f, -0.030f, 0, 1},
+    {0.030f, 0.420f, 2, 0.0560f, -0.0400f, 0.0022f, -0.120f, -0.035f,                       // MAG-7 (box in the grip)
+     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.020f, 0, 1},
+    // THE MACHINE GUNS: the ammunition box hangs at the magwell.
+    {0.022f, 0.560f, 2, 0.0640f, 0.0200f, 0.0026f, -0.075f, 0.118f,                         // M249
+     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1},
+    {0.022f, 0.580f, 2, 0.0640f, 0.0100f, 0.0026f, -0.075f, 0.118f,                         // NEGEV
+     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1} },
+  { {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // P2000
+    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // GLOCK-18
+    {0.006f, 0.196f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // DESERT EAGLE
+    {0.006f, 0.300f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // USP-S (the can)
+    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // P250
+    {0.006f, 0.152f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // FIVE-SEVEN
+    {0.006f, 0.215f, 2, 0, 0, 0, 0, 0, -0.1100f, 0.1050f, 1.0f, 0.0f, 0, 0, 1},  // TEC-9: mag ahead of the guard
+    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // CZ75-AUTO
+    {0.006f, 0.205f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // R8 REVOLVER
+    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1} },  // DUAL BERETTAS (the right gun)
+  { {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // AWP
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // SCAR-20
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // SSG 08
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1} },  // G3SG1
+};
+static const vm_var_t *vm_var(int cur, int var) {
+  int row = wpn_var_row(cur);
+  return row < 0 ? NULL : &VM_VAR[row][armory_idx(var, wpn_var_n(cur))];
+}
+// THE SCAR-20 IS SEMI-AUTOMATIC: no bolt handle to lift (nor the G3SG1). Its
+// mesh is built on the bolt gun's stations (grip, trigger, magwell, fore-end,
+// scope axis, ocular, muzzle — see scar20() in tools/build_models.py), so every
+// sniper contract holds as is; only the end of the reload differs. The right
+// hand stays on the grip and the charging handle (mesh group 3, left side) runs
+// back and slams home on the bolt window instead of a bolt being worked.
+#define SCAR_CH_TRAVEL 0.062f   // the charging handle's rearward throw
+// The magazine's own centre in the baked model (its bounds' middle).
 static v3 vm_mag_centre_v(int cur, int var) {
-  if (cur == WPN_AR && var == RV_FAMAS) return (v3){{0.0f, -0.076f, -0.146f}};
+  const vm_var_t *vv = vm_var(cur, var);
+  if (vv && (vv->mag_y != 0.0f || vv->mag_z != 0.0f)) return (v3){{0.0f, vv->mag_y, vv->mag_z}};
   return cur == WPN_SR ? (v3){{0.0f, -0.066f, 0.053f}} : (v3){{0.0f, -0.097f, 0.127f}};
 }
 // The second magazine held in the same hand during a tactical reload: beside
@@ -351,12 +437,22 @@ static v3 gun_drop_pose(int cur, int var, v3 org, v3 gx, v3 *gy, v3 *gz, float t
 // The viewmodel keeps 1.0: every first-person contract is untouched.
 static float g_gun_girth = 1.0f;   // declared above fig_hand, which reads it
 
+static int g_fig_ent;                    // (builder.c) the figure being drawn
+static int ent_wvar(int ent, int wpn);   // defined with ent_weapon
 static void gun_hold(int cur, int which, v3 org, v3 gx, v3 gy, v3 gz,
                      v3 *c, v3 *a, float *r) {
   const float *h = GUN_HOLD[cur][which];
   float gg = g_gun_girth;
+  // THE FIGURE'S SUPPORT HAND ON A SHORT GUN: the third-person station sits
+  // 86 mm behind the viewmodel's, so it moves back by the gun's own fore_dz less
+  // that difference — on a MAC-10 it would otherwise close round the muzzle.
+  float hz = h[2];
+  if (which == GH_FORE3 && cur == WPN_AR && g_fig_ent >= 0) {
+    const vm_var_t *fv = vm_var(cur, ent_wvar(g_fig_ent, cur));
+    if (fv && fv->fore_dz < -0.05f) hz += fv->fore_dz + 0.05f;
+  }
   *c = v3_add(org, v3_add(v3_scale(gx, h[0] * gg),
-       v3_add(v3_scale(gy, h[1] * gg), v3_scale(gz, h[2] * gg))));
+       v3_add(v3_scale(gy, h[1] * gg), v3_scale(gz, hz * gg))));
   *a = v3_norm(v3_add(v3_scale(gx, h[4]),
        v3_add(v3_scale(gy, h[5]), v3_scale(gz, h[6]))));
   *r = h[3] * gg;
@@ -446,7 +542,8 @@ static float g_gun_sight_r;   // its smaller half-extent (the tighter constraint
 // Sculpted first-person meshes, generated by tools/build_models.py and compiled
 // in, so the game still ships as one file. Each is placed by a rigid frame; the
 // procedural builders stay the authority for where hands and sights go.
-#include "../models.h"
+// (models.h itself is included at the top of render/decor.c, which the world
+// props need first — see pmesh_draw there.)
 
 // --- THE ARMORY'S TABLES (names and config keys: see KNIFE_MODEL_NAMES) ----
 // Every knife is authored on the combat knife's own grip cylinder, so the one
@@ -458,17 +555,24 @@ static const mdl_ref_t KNIFE_MODELS[KNIFE_MODEL_COUNT] = {
   {KNIFE_KUKRI_V, KNIFE_KUKRI_P, KNIFE_KUKRI_NP},
   {KNIFE_TALON_V, KNIFE_TALON_P, KNIFE_TALON_NP},
 };
-// The loadout's first-person meshes, [slot][variant]: row 0 the rifles, row 1
-// the pistols. NULL for a slot without variants.
-static const mdl_ref_t GUN_VAR_MODELS[2][WPN_VARS] = {
-  {{RIFLE_V, RIFLE_P, RIFLE_NP}, {RIFLE_AK_V, RIFLE_AK_P, RIFLE_AK_NP},
-   {RIFLE_FAMAS_V, RIFLE_FAMAS_P, RIFLE_FAMAS_NP}},
-  {{PISTOL_V, PISTOL_P, PISTOL_NP}, {PISTOL_GLOCK_V, PISTOL_GLOCK_P, PISTOL_GLOCK_NP},
-   {PISTOL_DEAGLE_V, PISTOL_DEAGLE_P, PISTOL_DEAGLE_NP}},
+// The loadout's first-person meshes, [slot][variant], rows as WPN_VAR
+// (wpn_var_row): the rifles, the pistols, the snipers. NULL for a slot without
+// variants. Cells past a row's own count are never reached (wpn_var_n).
+#define MDL(t) {t##_V, t##_P, t##_NP}
+static const mdl_ref_t GUN_VAR_MODELS[3][WPN_VARS] = {
+  {MDL(RIFLE), MDL(RIFLE_AK), MDL(RIFLE_FAMAS), MDL(RIFLE_M4A1S), MDL(RIFLE_GALIL),
+   MDL(RIFLE_SG553), MDL(RIFLE_AUG), MDL(SMG_MAC10), MDL(SMG_MP9), MDL(SMG_MP7),
+   MDL(SMG_MP5SD), MDL(SMG_UMP45), MDL(SMG_P90), MDL(SMG_BIZON), MDL(SG_NOVA), MDL(SG_XM1014),
+   MDL(SG_SAWEDOFF), MDL(SG_MAG7), MDL(MG_M249), MDL(MG_NEGEV)},
+  {MDL(PISTOL), MDL(PISTOL_GLOCK), MDL(PISTOL_DEAGLE), MDL(PISTOL_USPS), MDL(PISTOL_P250),
+   MDL(PISTOL_FIVESEVEN), MDL(PISTOL_TEC9), MDL(PISTOL_CZ75), MDL(PISTOL_R8), MDL(PISTOL_ELITES)},
+  {MDL(SNIPER), MDL(SNIPER_SCAR), MDL(SNIPER_SSG08), MDL(SNIPER_G3SG1)},
 };
+#undef MDL
 static const mdl_ref_t *gun_var_model(int cur, int var) {
-  if (cur != WPN_AR && cur != WPN_PT) return NULL;
-  return &GUN_VAR_MODELS[cur == WPN_PT][armory_idx(var, WPN_VARS)];
+  int row = wpn_var_row(cur);
+  if (row < 0) return NULL;
+  return &GUN_VAR_MODELS[row][armory_idx(var, wpn_var_n(cur))];
 }
 // A weapon theme is PAINT, applied in the shader's viewmodel finish block
 // (uSkin): `pat` 0 = factory (the block is skipped), 1 solid, 2 blotch camo,
@@ -494,15 +598,25 @@ static const wpn_theme_t WPN_THEMES[WPN_THEME_COUNT] = {
 // the part's value RELATIVE to its family's authored reference.
 typedef struct { float fab[3], pad[3], hard[3], acc[3], lea[3], led[3]; } gear_theme_t;
 static const gear_theme_t GEAR_THEMES[GEAR_THEME_COUNT] = {
-  {{0}, {0}, {0}, {0}, {0}, {1.00f, 0.62f, 0.10f}},           // SLATE: identity
+  // The `led` column is a DIM MATTE INDICATOR now (v5): the glove's acrylic
+  // windows used to be lit inlays (3.4x past the bloom knee) in amber, lime,
+  // red and cyan per outfit — the loudest thing in the first-person frame and
+  // a saturated accent on kit that has no business glowing. model_draw draws
+  // them as moulded polymer in these colours (g_md_led), never lit.
+  {{0}, {0}, {0}, {0}, {0}, {0.300f, 0.262f, 0.200f}},        // SLATE: identity
   {{0.50f, 0.42f, 0.30f}, {0.42f, 0.37f, 0.29f}, {0.44f, 0.37f, 0.27f},
-   {0.25f, 0.23f, 0.20f}, {0.24f, 0.20f, 0.15f}, {1.00f, 0.62f, 0.10f}},
+   {0.25f, 0.23f, 0.20f}, {0.24f, 0.20f, 0.15f}, {0.300f, 0.262f, 0.200f}},
   {{0.29f, 0.32f, 0.21f}, {0.33f, 0.34f, 0.27f}, {0.27f, 0.30f, 0.20f},
-   {0.64f, 0.54f, 0.40f}, {0.16f, 0.16f, 0.13f}, {0.45f, 1.00f, 0.30f}},
+   {0.64f, 0.54f, 0.40f}, {0.16f, 0.16f, 0.13f}, {0.235f, 0.262f, 0.200f}},
+  // SHADOW's accent plate was a saturated red (0.62, 0.12, 0.09): the hostile
+  // hue on a friendly glove. Graphite now, a value step over the shell.
   {{0.13f, 0.13f, 0.14f}, {0.22f, 0.22f, 0.23f}, {0.12f, 0.12f, 0.13f},
-   {0.62f, 0.12f, 0.09f}, {0.09f, 0.09f, 0.10f}, {1.00f, 0.16f, 0.08f}},
+   {0.300f, 0.300f, 0.315f}, {0.09f, 0.09f, 0.10f}, {0.190f, 0.190f, 0.200f}},
   {{0.70f, 0.72f, 0.75f}, {0.50f, 0.52f, 0.56f}, {0.80f, 0.82f, 0.85f},
-   {0.28f, 0.31f, 0.36f}, {0.30f, 0.31f, 0.34f}, {0.25f, 0.80f, 1.00f}},
+   {0.28f, 0.31f, 0.36f}, {0.30f, 0.31f, 0.34f}, {0.250f, 0.275f, 0.300f}},
+  // REAPER: black on black, a value step apart.
+  {{0.105f, 0.108f, 0.118f}, {0.170f, 0.172f, 0.182f}, {0.110f, 0.114f, 0.126f},
+   {0.210f, 0.214f, 0.228f}, {0.085f, 0.087f, 0.094f}, {0.170f, 0.175f, 0.185f}},
 };
 // ...and the same colourway on the WHOLE third-person kit, not just the hands:
 // fatigues, trousers, plate carrier, helmet, webbing, boots, pads, balaclava
@@ -513,22 +627,48 @@ static const gear_theme_t GEAR_THEMES[GEAR_THEME_COUNT] = {
 typedef struct {
   float uni[3], pants[3], carrier[3], helm[3], web[3], boot[3], rub[3], bala[3], gog[3];
 } body_kit_t;
+// v5 (2026-11-15): every `gog` is SMOKED GLASS — a near-black lens whose only
+// light is its own specular gleam, tinted at most a breath cool or warm. They
+// used to be lit (albedo over 1) in cyan, amber, lime, violet and magenta: the
+// brightest and most saturated thing on every figure, on the face. The
+// friendly cue lives in the armband and the HUD diamond now. Each row keeps
+// the ramp, MEASURED (Rec.709 luminance of the display value):
+//            boot   pants  uni    carrier helm
+//   SLATE    .131   .318   .371   .619    .657
+//   COYOTE   .166   .376   .437   .345    .538
+//   RANGER   .141   .274   .320   .551    .582
+//   SHADOW   .081   .121   .141   .231    .301
+//   ARCTIC   .261   .619   .718   .327    .838
+//   REAPER   .055   .107   .138   .198    .262
 static const body_kit_t BODY_KITS[GEAR_THEME_COUNT] = {
+  // SLATE: the helmet was the brand's blaze orange (0.90, 0.48, 0.12) — and the
+  // pauldrons, which wear the helmet colour, with it. A light grey composite
+  // shell now, still the value peak over the wolf-grey carrier.
   {{0.335f, 0.375f, 0.440f}, {0.290f, 0.320f, 0.380f}, {0.700f, 0.610f, 0.470f},   // SLATE
-   {0.900f, 0.480f, 0.120f}, {0.150f, 0.160f, 0.190f}, {0.130f, 0.130f, 0.150f},
-   {0.160f, 0.168f, 0.190f}, {0.260f, 0.275f, 0.305f}, {0.360f, 1.700f, 2.000f}},
-  {{0.500f, 0.430f, 0.320f}, {0.430f, 0.370f, 0.280f}, {0.400f, 0.390f, 0.290f},   // COYOTE
+   {0.660f, 0.660f, 0.620f}, {0.150f, 0.160f, 0.190f}, {0.130f, 0.130f, 0.150f},
+   {0.160f, 0.168f, 0.190f}, {0.260f, 0.275f, 0.305f}, {0.050f, 0.057f, 0.066f}},
+  // COYOTE: the carrier a clear step UNDER the uniform (it sat at 0.88x).
+  {{0.500f, 0.430f, 0.320f}, {0.430f, 0.370f, 0.280f}, {0.360f, 0.350f, 0.265f},   // COYOTE
    {0.620f, 0.530f, 0.380f}, {0.240f, 0.200f, 0.150f}, {0.200f, 0.160f, 0.120f},
-   {0.300f, 0.260f, 0.200f}, {0.360f, 0.310f, 0.240f}, {2.000f, 1.200f, 0.250f}},
+   {0.300f, 0.260f, 0.200f}, {0.360f, 0.310f, 0.240f}, {0.072f, 0.062f, 0.048f}},
+  // RANGER: the shell was BELOW the sand carrier (0.434 against 0.551).
   {{0.300f, 0.335f, 0.235f}, {0.260f, 0.285f, 0.210f}, {0.640f, 0.540f, 0.400f},   // RANGER
-   {0.420f, 0.450f, 0.310f}, {0.160f, 0.160f, 0.130f}, {0.150f, 0.140f, 0.120f},
-   {0.200f, 0.210f, 0.170f}, {0.240f, 0.250f, 0.200f}, {0.800f, 2.000f, 0.600f}},
+   {0.570f, 0.600f, 0.450f}, {0.160f, 0.160f, 0.130f}, {0.150f, 0.140f, 0.120f},
+   {0.200f, 0.210f, 0.170f}, {0.240f, 0.250f, 0.200f}, {0.055f, 0.061f, 0.050f}},
+  // SHADOW: graphite shell, smoked lens (it was a violet glow; before that red).
   {{0.140f, 0.140f, 0.150f}, {0.120f, 0.120f, 0.130f}, {0.230f, 0.230f, 0.240f},   // SHADOW
-   {0.620f, 0.120f, 0.090f}, {0.090f, 0.090f, 0.100f}, {0.080f, 0.080f, 0.090f},
-   {0.180f, 0.180f, 0.190f}, {0.120f, 0.120f, 0.130f}, {2.000f, 0.300f, 0.150f}},
+   {0.300f, 0.300f, 0.320f}, {0.090f, 0.090f, 0.100f}, {0.080f, 0.080f, 0.090f},
+   {0.180f, 0.180f, 0.190f}, {0.120f, 0.120f, 0.130f}, {0.046f, 0.046f, 0.054f}},
+  // ARCTIC: boots brought under the webbing so they are the floor again.
   {{0.700f, 0.720f, 0.750f}, {0.600f, 0.620f, 0.660f}, {0.300f, 0.330f, 0.380f},   // ARCTIC
-   {0.820f, 0.840f, 0.870f}, {0.280f, 0.300f, 0.340f}, {0.300f, 0.310f, 0.340f},
-   {0.480f, 0.500f, 0.540f}, {0.620f, 0.640f, 0.680f}, {0.500f, 1.600f, 2.000f}},
+   {0.820f, 0.840f, 0.870f}, {0.280f, 0.300f, 0.340f}, {0.250f, 0.260f, 0.290f},
+   {0.480f, 0.500f, 0.540f}, {0.620f, 0.640f, 0.680f}, {0.060f, 0.066f, 0.076f}},
+  // REAPER: the black operator, but FOUR MATERIALS, not one blob. Matte cloth
+  // fatigues, a warmer nylon carrier a clear step up, a blue-grey composite
+  // shell at the peak, rubber pads between; the visor was lit magenta.
+  {{0.135f, 0.138f, 0.148f}, {0.105f, 0.107f, 0.115f}, {0.200f, 0.198f, 0.190f},   // REAPER
+   {0.255f, 0.262f, 0.275f}, {0.085f, 0.086f, 0.090f}, {0.055f, 0.055f, 0.060f},
+   {0.150f, 0.152f, 0.158f}, {0.100f, 0.100f, 0.105f}, {0.048f, 0.047f, 0.050f}},
 };
 static const mdl_ref_t *armory_knife(void) {
   return &KNIFE_MODELS[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)];
@@ -561,6 +701,16 @@ static const gear_theme_t *armory_gear(void) {
 // model_draw's two armory hooks, both scoped by vm_build around the draws they
 // apply to and NULL/0 everywhere else.
 static int g_md_skin;                    // 1: weapon parts carry the theme flag
+// THE THREE GRENADE MESHES (tools/build_models.py grenade()): the frag's egg,
+// the smoke's tall can, the incendiary's short fat one — one shape per kind, on
+// the same fuze, spoon, pin and ring, so every hand pose fits all three.
+static mdl_ref_t nade_mdl(int kind) {
+  if (kind == NADE_SMOKE) return (mdl_ref_t){GRENADE_SMK_V, GRENADE_SMK_P, GRENADE_SMK_NP};
+  if (kind == NADE_INC)   return (mdl_ref_t){GRENADE_INC_V, GRENADE_INC_P, GRENADE_INC_NP};
+  return (mdl_ref_t){GRENADE_V, GRENADE_P, GRENADE_NP};
+}
+// The third-person hand's procedural grenade: which kind it draws.
+static int g_gun_smoke;
 static float g_md_scale = 1.0f;          // uniform mesh scale about the origin
 #define KNIFE_FIST_S  0.86f              // the knife fist against the rifle hand
 #define KNIFE_VM_PUSH 1.10f              // the knife assembly's distance factor
@@ -588,6 +738,35 @@ static v3 gear_dye(int flag, v3 c) {
   return (v3){{f_clamp(t[0] * k, 0, 1), f_clamp(t[1] * k, 0, 1), f_clamp(t[2] * k, 0, 1)}};
 }
 
+// THE HERO PARTS' COLOUR SLOTS (tools/hero_models.py): a part flagged 8..11
+// takes slots[flag - 8] (the figure's helmet, webbing, lens and face-cloth
+// colours) times its baked grey. NULL outside the hero head.
+static const v3 *g_md_slots;
+// v5: no lit inlays on kit. g_md_led (the glove scope in vm_build) draws a flag-3
+// part as moulded polymer in the outfit's indicator colour; g_md_matte (every
+// third-person weapon, gun_tp_draw) as the part's own colour desaturated and
+// capped at a matte 0.30 — the scope rings on a slung AWP were orange lamps on
+// the operator's back in the armory.
+static const float *g_md_led;
+static int g_md_matte;
+// THE WEAPON THEME ON THE LOCAL BODY'S THIRD-PERSON GUNS (v5). The theme was
+// only ever painted in the first-person pass (the shader's uSkin block), so the
+// armory preview and your own body in third person held factory guns whatever
+// you picked. Set by the draw sites for the local figure only (a theme is a
+// client setting). The third-person guns are small, so the pattern is reduced
+// to its colours: the light family takes the theme's primary paint, the dark
+// furniture its tint, each scaled to the part's own value.
+static const wpn_theme_t *g_tp_theme;
+static v3 tp_theme_dye(v3 c) {
+  const wpn_theme_t *t = g_tp_theme;
+  float lum = (c.x + c.y + c.z) * (1.0f / 3.0f);
+  int light = c.x > c.z * 1.3f;
+  const float *p = light ? t->a : t->d;
+  float pl = (p[0] + p[1] + p[2]) * (1.0f / 3.0f);
+  float k = light ? lum / 0.55f : lum / fmaxf(pl, 0.05f);
+  k = f_clamp(k, 0.45f, 1.6f);
+  return (v3){{f_clamp(p[0] * k, 0, 1), f_clamp(p[1] * k, 0, 1), f_clamp(p[2] * k, 0, 1)}};
+}
 static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int group,
                        v3 o, v3 ax, v3 ay, v3 az) {
   // The weapon frame (x right, y up, z forward) is left-handed where the world is
@@ -606,6 +785,24 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
     if (g_md_skin && P[i].flag >= 4 && P[i].flag <= 6)
       mtl -= P[i].r > P[i].b * 1.3f ? 0.3f : 0.2f;
     if (g_md_gear) c = gear_dye(P[i].flag, c);
+    if (g_md_matte && g_tp_theme && P[i].flag >= 4 && P[i].flag <= 6) c = tp_theme_dye(c);
+    if (P[i].flag == 3 && (g_md_led || g_md_matte)) {
+      if (g_md_led) c = (v3){{g_md_led[0], g_md_led[1], g_md_led[2]}};
+      else {
+        float m = (c.x + c.y + c.z) * (1.0f / 3.0f);
+        c = v3_lerp((v3){{m, m, m}}, c, 0.30f);
+        float mx = fmaxf(c.x, fmaxf(c.y, c.z));
+        if (mx > 0.30f) c = v3_scale(c, 0.30f / mx);
+      }
+      mtl = -4.0f;
+    }
+    if (P[i].flag >= 8 && P[i].flag <= 11) {
+      v3 sc = g_md_slots ? g_md_slots[P[i].flag - 8] : (v3){{0.2f, 0.2f, 0.2f}};
+      c = v3_scale(sc, P[i].r);
+      // The lens is GLASS (dielectric, the part's own low roughness): smoked,
+      // lit only by its gleam. It was a lit inlay (-3), i.e. a lamp.
+      mtl = P[i].flag >= 10 ? 0.0f : P[i].flag == 8 ? -6.0f : -4.0f;   // glass lens (10 smoked, 11 clear), painted shell, polymer
+    }
     mat_set(P[i].rough, mtl);
     for (int k = P[i].start; k < P[i].start + P[i].count; k++) {
       int t = (k - P[i].start) % 3;
@@ -624,6 +821,55 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
   ao_off();
 }
 
+// THE INSURGENT CARRIES AN AK — in third person, as LOOKS ONLY. The sculpted
+// AK mesh is 66k vertices (the first-person one), i.e. thirty of this
+// builder's carbines, so twenty bots cannot carry it; instead the carbine is
+// re-dressed in the AK's three tells that survive at range: wood furniture
+// (stock, grip, handguard), a curved steel magazine, and no optic on the rail.
+// The stations the hands close on are the carbine's own, so the grip, the
+// support hand and the weld are untouched, and nothing in the sim changes: the
+// bot's weapon is still the carbine with the carbine's numbers. Set by the
+// figure draw for an insurgent's rifle, 0 everywhere else.
+static int g_gun_ak;
+// THE LOADOUT GUNS IN THIRD PERSON: each has a low-poly copy of its sculpted
+// mesh (build_models.py emit_lod: no bevels, no parts under 5 mm, decimated to
+// ~1-2k triangles), drawn on the figure in place of gun_build's procedural
+// carbine/pistol/rifle — whose STATIONS (grip, fore-end, muzzle, hands) still
+// come from gun_build, called first, exactly as the viewmodel does. Variant 0
+// keeps the procedural gun it always had (and the insurgent's AK dress).
+#define TPM(t) {TP_##t##_V, TP_##t##_P, TP_##t##_NP}
+static const mdl_ref_t TP_VAR_MODELS[3][WPN_VARS] = {
+  {{0}, TPM(RIFLE_AK), TPM(RIFLE_FAMAS), TPM(RIFLE_M4A1S), TPM(RIFLE_GALIL), TPM(RIFLE_SG553),
+   TPM(RIFLE_AUG), TPM(SMG_MAC10), TPM(SMG_MP9), TPM(SMG_MP7), TPM(SMG_MP5SD), TPM(SMG_UMP45),
+   TPM(SMG_P90), TPM(SMG_BIZON), TPM(SG_NOVA), TPM(SG_XM1014), TPM(SG_SAWEDOFF), TPM(SG_MAG7),
+   TPM(MG_M249), TPM(MG_NEGEV)},
+  {{0}, TPM(PISTOL_GLOCK), TPM(PISTOL_DEAGLE), TPM(PISTOL_USPS), TPM(PISTOL_P250),
+   TPM(PISTOL_FIVESEVEN), TPM(PISTOL_TEC9), TPM(PISTOL_CZ75), TPM(PISTOL_R8), TPM(PISTOL_ELITES)},
+  {{0}, TPM(SNIPER_SCAR), TPM(SNIPER_SSG08), TPM(SNIPER_G3SG1)},
+};
+#undef TPM
+static int ent_wvar(int ent, int wpn);   // defined with ent_weapon
+static const mdl_ref_t *gun_tp_model(int ent, int cur) {
+  int row = wpn_var_row(cur);
+  if (ent < 0 || row < 0) return NULL;
+  int v = ent_wvar(ent, cur);
+  if (v <= 0 || v >= wpn_var_n(cur) || !TP_VAR_MODELS[row][v].v) return NULL;
+  return &TP_VAR_MODELS[row][v];
+}
+// Draws `m` where gun_build put the gun: every group at the origin, the
+// magazine (group 1) down its reload travel, all at the figure's gun scale.
+static void gun_tp_draw(const mdl_ref_t *m, int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01) {
+  float s0 = g_md_scale;
+  g_md_scale = g_gun_girth;
+  g_md_matte = 1;
+  model_draw(m->v, m->p, m->np, 0, org, gx, gy, gz);
+  model_draw(m->v, m->p, m->np, 2, org, gx, gy, gz);
+  model_draw(m->v, m->p, m->np, 3, org, gx, gy, gz);
+  float md = cur < WPN_KN ? md01 * GUN_MAG_TRAVEL[cur][0] * g_gun_girth : 0.0f;
+  model_draw(m->v, m->p, m->np, 1, v3_sub(org, v3_scale(gy, md)), gx, gy, gz);
+  g_md_matte = 0;
+  g_md_scale = s0;
+}
 static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
                     float trig01, float bolt01) {
   float sight_y = gun_sight_y(cur);
@@ -719,7 +965,22 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     (fnode_t){.p = {{u, vy, wz}}, .col = c, .bcol = c, \
               .rx = (r) * gg, .rz = (rr) * gg}
 
+  // v5: ON THE BODY the blaze accent is a muted coyote, not a lamp-orange.
+  // Seen from behind at the low ready, the AR's butt-pad rib plate was the
+  // orange block on the operator's back in the armory; the stowed guns wear it
+  // too. First person (girth 1.0) keeps the brand accent.
+  if (g_gun_girth != 1.0f) acc = (v3){{0.420f, 0.360f, 0.280f}};
+  if (g_gun_girth != 1.0f && g_tp_theme) {   // the local body's theme (see g_tp_theme)
+    body = tp_theme_dye(body); chas = tp_theme_dye(chas); acc = tp_theme_dye(acc);
+    upper = tp_theme_dye(upper);
+  }
   if (cur == WPN_AR) {
+    if (g_gun_ak) {
+      body = (v3){{0.480f, 0.215f, 0.105f}};   // red-brown laminate, the AK's wood
+      // (well off the carbine's own TAN polymer, which reads as wood at range)
+      acc  = upper;                            // no blaze: not our kit
+      mag  = (v3){{0.250f, 0.255f, 0.270f}};   // stamped steel
+    }
     // ---- receiver group (flat-sided: boxes) ----
     mat_set(MAT_PARK_R, MAT_PARK_M);
     GBOX(0,  0.021f,  0.085f, 0.0155f, 0.0145f, 0.105f, upper);  // upper receiver
@@ -1027,6 +1288,15 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       // carries, and three nodes instead of five is the same curve with nothing
       // in it that a silhouette can see. Its two recessed ribs went with it: the
       // minimal read is the point.
+      if (g_gun_ak) {
+        // THE BANANA: curving FORWARD, the one AK shape a silhouette keeps.
+        GCH(8, 1, 1, gz, {
+          GN(mdx, -0.030f - md, 0.107f, 0.0196f, 0.0120f, mag),
+          GN(mdx, -0.085f - md, 0.106f, 0.0196f, 0.0118f, mag),
+          GN(mdx, -0.135f - md, 0.120f, 0.0192f, 0.0116f, mag),
+          GN(mdx, -0.172f - md, 0.144f, 0.0186f, 0.0112f, mag),
+        });
+      } else
       GCH(8, 1, 1, gz, {
         GN(mdx, -0.030f - md, 0.107f, 0.0196f, 0.0120f, mag),
         GN(mdx, -0.090f - md, 0.089f, 0.0190f, 0.0117f, mag),
@@ -1061,6 +1331,11 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       v3 mup = v3_norm(v3_add(v3_scale(gy, 0.9580f), v3_scale(gz, 0.2870f)));
       v3 mfw = v3_norm(v3_add(v3_scale(gy, -0.2870f), v3_scale(gz, 0.9580f)));
       v3 mbt = GUNP(mdx, -0.140f - md, 0.074f);   // the chain's last node
+      if (g_gun_ak) {   // the banana's last bone (0, -0.037, +0.024), normalised
+        mup = v3_norm(v3_add(v3_scale(gy, 0.8390f), v3_scale(gz, -0.5442f)));
+        mfw = v3_norm(v3_add(v3_scale(gy, 0.5442f), v3_scale(gz, 0.8390f)));
+        mbt = GUNP(mdx, -0.172f - md, 0.144f);
+      }
       scene_box(v3_add(mbt, v3_scale(mup, -0.0028f * gg)),
                 v3_scale(gx, 0.0134f * gg), v3_scale(mup, 0.0058f * gg),
                 v3_scale(mfw, 0.0206f * gg), black);
@@ -1181,6 +1456,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     // the new height: bottoms buried 1 mm into the rail (whose teeth no
     // longer reach this station), tops still 1.5 mm ABOVE the window's inner
     // lower edge in open air, outer faces 1.07 mm inside the frame's wall.
+    if (!g_gun_ak) {   // the AK carries no optic (sight_p below still published)
     GBOX(0, 0.0424f, 0.1834f, 0.0136f, 0.0060f, 0.0100f, black);  // rail clamp
     GBOX( 0.0148f, 0.04635f, 0.1834f, 0.0028f, 0.00665f, 0.0050f, black);  // R post
     GBOX(-0.0148f, 0.04635f, 0.1834f, 0.0028f, 0.00665f, 0.0050f, black);  // L post
@@ -1211,6 +1487,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
     fig_tube(GUNP(0, sight_y, AR_APERTURE_Z - 0.0017f),
              GUNP(0, sight_y, AR_APERTURE_Z + 0.0017f),
              0.0121f * gg, 0.02027f * gg, 0.0105f * gg, 0.01867f * gg, 4, steel, gy);
+    }
     g_gun_sight_p = GUNP(0, sight_y, gun_sight_z(cur));   // one copy; see figm weld
     g_gun_sight_r = 0.0105f;      // the window's inner HALF-HEIGHT, the tighter one
     mat_set(MAT_POLY_R, 0.0f);
@@ -1246,6 +1523,42 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
       v3 gc0 = v3_add(GUNP(0, -0.0643f, 0.0263f), v3_scale(ka, 0.020f * gg));
       const float gk = 1.2f * gg;
       mat_set(MAT_POLY_R, 0.0f);
+      if (g_gun_smoke == NADE_INC) {
+        // THE INCENDIARY: the smoke can's size and shape (the two share a
+        // pouch), told apart by colour — a dark can, rolled rims proud of it
+        // top and bottom, and a red band.
+        v3 can = {{0.300f, 0.305f, 0.285f}}, rim = {{0.220f, 0.225f, 0.215f}},
+           red = {{0.660f, 0.110f, 0.070f}};
+        fnode_t sn[] = {
+          {.p = v3_sub(gc0, v3_scale(ka, 0.040f * gk)), .col = rim, .bcol = rim,
+           .rx = 0.022f * gk, .rz = 0.022f * gk},
+          {.p = v3_sub(gc0, v3_scale(ka, 0.004f * gk)), .col = can, .bcol = red,
+           .rx = 0.023f * gk, .rz = 0.023f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.010f * gk)), .col = red, .bcol = can,
+           .rx = 0.023f * gk, .rz = 0.023f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.034f * gk)), .col = rim, .bcol = rim,
+           .rx = 0.022f * gk, .rz = 0.022f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.050f * gk)), .col = upper, .bcol = upper,
+           .rx = 0.011f * gk, .rz = 0.011f * gk}};
+        fig_chain(sn, 5, 12, 1, 1, gx);
+      } else if (g_gun_smoke) {
+        // THE SMOKE CANISTER: a straight grey-blue can with a white band and
+        // the fuze on top — the frag's egg against a cylinder, readable in a
+        // hand at range.
+        v3 can = {{0.400f, 0.430f, 0.460f}}, band = {{0.880f, 0.880f, 0.860f}};
+        fnode_t sn[] = {
+          {.p = v3_sub(gc0, v3_scale(ka, 0.040f * gk)), .col = can, .bcol = can,
+           .rx = 0.021f * gk, .rz = 0.021f * gk},
+          {.p = v3_sub(gc0, v3_scale(ka, 0.004f * gk)), .col = can, .bcol = band,
+           .rx = 0.023f * gk, .rz = 0.023f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.010f * gk)), .col = band, .bcol = band,
+           .rx = 0.023f * gk, .rz = 0.023f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.034f * gk)), .col = can, .bcol = can,
+           .rx = 0.021f * gk, .rz = 0.021f * gk},
+          {.p = v3_add(gc0, v3_scale(ka, 0.050f * gk)), .col = upper, .bcol = upper,
+           .rx = 0.011f * gk, .rz = 0.011f * gk}};
+        fig_chain(sn, 5, 12, 1, 1, gx);
+      } else {
       fnode_t nd[] = {
         {.p = v3_sub(gc0, v3_scale(ka, 0.034f * gk)), .col = olive, .bcol = olive,
          .rx = 0.014f * gk, .rz = 0.014f * gk},
@@ -1256,6 +1569,7 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
         {.p = v3_add(gc0, v3_scale(ka, 0.046f * gk)), .col = upper, .bcol = upper,
          .rx = 0.011f * gk, .rz = 0.011f * gk}};
       fig_chain(nd, 4, 12, 1, 1, gx);
+      }
     }
     g_gun_trig_p = GUNP(0, -0.0300f, 0.0450f);
     g_gun_sight_p = GUNP(0, 0, 0);

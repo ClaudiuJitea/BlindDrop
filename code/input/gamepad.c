@@ -118,15 +118,16 @@ static const char *const KNIFE_MODEL_NAMES[KNIFE_MODEL_COUNT] = {
 static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
   "FACTORY", "DESERT", "WOODLAND", "ARCTIC", "URBAN", "TIGER",
   "BLACKOUT", "CRIMSON", "COBALT", "FADE", "GILDED"};
-#define GEAR_THEME_COUNT 5
+#define GEAR_THEME_COUNT 6
 static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
-  "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC"};
+  "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC", "REAPER"};
 // The third-person body's own pieces (fig_kit and the figure builders). Index
 // 0 of each is the shipped operator, so an untouched config is unchanged.
-#define HEAD_GEAR_COUNT 4
-enum { HEAD_HELMET, HEAD_CAP, HEAD_WRAP, HEAD_BARE };
+// v5: the helmet with the quad-tube NVG on its mount, flipped up or down.
+#define HEAD_GEAR_COUNT 6
+enum { HEAD_HELMET, HEAD_CAP, HEAD_WRAP, HEAD_BARE, HEAD_NVG_UP, HEAD_NVG_DOWN };
 static const char *const HEAD_GEAR_NAMES[HEAD_GEAR_COUNT] = {
-  "HELMET", "CAP", "HEAD WRAP", "BARE"};
+  "HELMET", "CAP", "HEAD WRAP", "BARE", "NVG UP", "NVG DOWN"};
 #define VEST_GEAR_COUNT 3
 enum { VEST_CARRIER, VEST_RIG, VEST_NONE };
 static const char *const VEST_GEAR_NAMES[VEST_GEAR_COUNT] = {
@@ -134,6 +135,18 @@ static const char *const VEST_GEAR_NAMES[VEST_GEAR_COUNT] = {
 #define PACK_GEAR_COUNT 2
 enum { PACK_ASSAULT, PACK_NONE };
 static const char *const PACK_GEAR_NAMES[PACK_GEAR_COUNT] = {"ASSAULT PACK", "NONE"};
+// What is printed on the balaclava: plain, or a SKULL — the jaw and teeth on the
+// lower face (HALF), or the whole skull, cheekbones and sockets round the eyes.
+// v5 adds six sculpted masks (tools/hero_models.py, a procedural stand-in past
+// 12 m): two gas masks, a half-face respirator with clear glasses, ballistic
+// goggles over the balaclava, a ballistic face plate, a shemagh with dark
+// glasses. Appended, so a saved index keeps meaning what it meant.
+#define FACE_GEAR_COUNT 9
+enum { FACE_PLAIN, FACE_SKULL_HALF, FACE_SKULL, FACE_GAS_TWIN, FACE_GAS_PANO, FACE_RESP,
+       FACE_GOGGLES, FACE_PLATE, FACE_SHEMAGH };
+static const char *const FACE_GEAR_NAMES[FACE_GEAR_COUNT] = {
+  "BALACLAVA", "SKULL JAW", "SKULL MASK", "GAS MASK TWIN", "GAS MASK PANO", "RESPIRATOR",
+  "GOGGLES", "FACE PLATE", "SHEMAGH"};
 static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
 // THE LOADOUT, and unlike everything above it is NOT cosmetic: each slot's
 // variant is its own gun — damage, magazine, fire mode, rate and recoil (see
@@ -142,8 +155,20 @@ static int armory_idx(int v, int n) { return v >= 0 && v < n ? v : 0; }
 // A change takes effect on the next spawn; online it rides each input to the
 // server (net_input_t.loadout), which is the one that applies it. WPN_VARS is
 // defined beside WPN_VAR.
-static const char *const RIFLE_VAR_NAMES[WPN_VARS] = {"M4 CARBINE", "AK-47", "FAMAS"};
-static const char *const PISTOL_VAR_NAMES[WPN_VARS] = {"DUTY PISTOL", "GLOCK-18", "DESERT EAGLE"};
+static const char *const RIFLE_VAR_NAMES[RV_N] = {
+  "M4A4", "AK-47", "FAMAS", "M4A1-S", "GALIL AR", "SG 553", "AUG",
+  "MAC-10", "MP9", "MP7", "MP5-SD", "UMP-45", "P90", "PP-BIZON",
+  "NOVA", "XM1014", "SAWED-OFF", "MAG-7", "M249", "NEGEV"};
+static const char *const PISTOL_VAR_NAMES[PV_N] = {
+  "P2000", "GLOCK-18", "DESERT EAGLE", "USP-S", "P250", "FIVE-SEVEN", "TEC-9",
+  "CZ75-AUTO", "R8 REVOLVER", "DUAL BERETTAS"};
+static const char *const SNIPER_VAR_NAMES[SV_N] = {"AWP", "SCAR-20", "SSG 08", "G3SG1"};
+// The name of variant `v` of slot `id` (the slot's own name for a slot without).
+static const char *wvar_name(int id, int v) {
+  return id == WPN_AR ? RIFLE_VAR_NAMES[armory_idx(v, RV_N)]
+       : id == WPN_PT ? PISTOL_VAR_NAMES[armory_idx(v, PV_N)]
+       : id == WPN_SR ? SNIPER_VAR_NAMES[armory_idx(v, SV_N)] : WPN_DEF[id].name;
+}
 // Crosshair options. The colours are chosen for VALUE as much as hue: each
 // reads against both the bright sand/sky and the dark interiors, and the set
 // spans the hues that survive the common colour-vision deficiencies (yellow

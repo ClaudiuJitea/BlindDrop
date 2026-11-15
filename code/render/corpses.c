@@ -341,6 +341,25 @@ static void vfx_tick(void) {
       if (q->pos.y < q->r0) q->pos.y = q->r0;
     }
   if (g_online) nade_tick(0);
+  // A burning pool sends up a column of dark smoke: a few puffs a tick from
+  // random burning cells, rising on the heat and drifting with the wind.
+  for (int i = 0; i < MAX_INFERNOS; i++) {
+    const inferno_t *f = &g_infernos[i];
+    if (!inferno_alive(f) || (g_tick + i) % 4) continue;
+    float age = inferno_age(f);
+    v3 wd = wind_dir();
+    for (int n = 0; n < 2 && f->ncell > 0; n++) {
+      int c = f->cells[(int)rng_rangef(&g_rng_vfx, 0.0f, (float)f->ncell - 0.01f)];
+      float k = inferno_cell_heat(f, c, age);
+      if (k < 0.15f) continue;
+      int x = c % FIRE_NX, z = c / FIRE_NX;
+      v3 p = {{f->ox + (x + 0.5f) * FIRE_CELL, f->fy[c] + 0.6f * k, f->oz + (z + 0.5f) * FIRE_CELL}};
+      puff_add(p, (v3){{wd.x * 0.5f + rng_rangef(&g_rng_vfx, -0.2f, 0.2f), rng_rangef(&g_rng_vfx, 0.9f, 1.7f),
+                        wd.z * 0.5f + rng_rangef(&g_rng_vfx, -0.2f, 0.2f)}},
+               0.22f, rng_rangef(&g_rng_vfx, 0.9f, 1.7f), 0.07f + 0.06f * k, -0.35f, 0.990f,
+               (int)rng_rangef(&g_rng_vfx, 260, 560), 0.95f);
+    }
+  }
   for (int i = 0; i < MAX_WMAGS; i++)
     if (g_wmags[i].life > 0) {
       wmag_t *q = &g_wmags[i];
@@ -616,6 +635,10 @@ static void vfx_tick(void) {
   if (g_score_pop > 0) g_score_pop--;
   for (int i = 0; i < DMG_SLOTS; i++)
     if (g_dmg[i].life > 0) g_dmg[i].life--;
+  g_hurt_kick *= 0.975f;
+  if (g_hurt_kick < 0.002f) g_hurt_kick = 0.0f;
+  for (int i = 0; i < SPLAT_N; i++)
+    if (g_splat[i].life > 0) g_splat[i].life--;
   // The banner DISPLAY fades at STREAK_TICKS but the COUNT lives for the whole
   // MULTI_WIN (the EV_KILL window check above resets it): zeroing the count
   // with the display made a kill 1.25-3 s after the second one a TRIPLE to the
@@ -638,6 +661,8 @@ static void vfx_match_reset(void) {
   memset(g_shock, 0, sizeof g_shock);
   memset(g_brands, 0, sizeof g_brands);
   memset(g_nades, 0, sizeof g_nades);
+  smoke_reset();
+  inferno_reset();
   g_shake = g_blast_light = 0.0f;
   memset(g_flashes, 0, sizeof g_flashes);
   memset(g_dust, 0, sizeof g_dust);
@@ -655,6 +680,8 @@ static void vfx_match_reset(void) {
   g_mark_head = 0;
   g_dmg_t = 0;
   memset(g_dmg, 0, sizeof g_dmg);
+  g_hurt_kick = 0.0f;
+  memset(g_splat, 0, sizeof g_splat);
   // ALL FOUR halves of the marker, not just the visible one: a marker still
   // waiting out its per-weapon arming delay when the match restarts would arm
   // itself into the new one, and the crosshair kick would ride across with it.

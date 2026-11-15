@@ -415,7 +415,11 @@ static fchk_res_t fchk_scene(void) {
   fchk_res_t r = {0};
   int nt = g_scene_floats / (VERT_FLOATS * 3);
   r.tris = nt;
-  static fchk_edge_t ed[65536];
+  // 3 edges per triangle. 65536 was 21845 triangles, and the v5 close-tier
+  // operator is ~22.5k: the overflow was silently DROPPED, so the last part
+  // built (the hand) came out "open". Sized for 2x that, and an overflow is
+  // now an error rather than a hole in the measurement.
+  static fchk_edge_t ed[3 * 49152];
   static float trad[FCHK_TMAX];   // circumradius about the centroid, for the
                                   // crossing tier's one-subtraction reject
   int ne = 0;
@@ -442,6 +446,7 @@ static fchk_res_t fchk_scene(void) {
       uint64_t a = k[e], b = k[(e + 1) % 3];
       if (ne < (int)(sizeof ed / sizeof *ed))
         ed[ne++] = (fchk_edge_t){a < b ? a : b, a < b ? b : a, a < b ? 1 : -1, i};
+      else { fprintf(stderr, "figcheck: edge table full at tri %d of %d\n", i, nt); exit(1); }
     }
   }
   qsort(ed, ne, sizeof *ed, fchk_cmp);

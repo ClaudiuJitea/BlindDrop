@@ -26,12 +26,68 @@ static v3 fx_cool(float a1, float knee, v3 hot, v3 mid, v3 cold) {
                    : v3_lerp(mid, cold, (a1 - knee) / (1.0f - knee));
 }
 
+// THE INCENDIARY'S FIRE, DRAWN (sim/inferno.c holds the pools). Each burning
+// cell is a handful of flame tongues — eye-facing ribbons, white-yellow at the
+// root to a dull red tip — that LICK: each one rises, stretches and shrinks on
+// its own loop, so the sheet of fire churns rather than standing there. Under
+// them a low glow on the ground, and over the whole pool one wide bloom of its
+// light in the air. Additive, like the fireball, and like it the heat scales
+// everything, so a pool catching and dying back reads in the flames' height.
+static void inferno_fx(v3 eye) {
+  for (int i = 0; i < MAX_INFERNOS; i++) {
+    const inferno_t *f = &g_infernos[i];
+    if (!inferno_alive(f)) continue;
+    float age = ((float)(g_tick - f->t0) + g_fx_alpha) / (float)TICK_HZ;
+    float sum = 0.0f;
+    v3 wd = wind_dir();
+    for (int ci = 0; ci < f->ncell; ci++) {
+      int c = f->cells[ci];
+      float k = inferno_cell_heat(f, c, age);
+      if (k < 0.02f) continue;
+      sum += k;
+      int x = c % FIRE_NX, z = c / FIRE_NX;
+      uint32_t h = fx_hash((uint32_t)c * 2654435761u ^ (uint32_t)f->t0);
+      v3 base = {{f->ox + (x + 0.5f) * FIRE_CELL, f->fy[c] + 0.02f, f->oz + (z + 0.5f) * FIRE_CELL}};
+      fx_disc(v3_add(base, (v3){{0, 0.08f, 0}}), eye, 0.40f,
+              v3_scale((v3){{0.50f, 0.17f, 0.035f}}, k), (v3){{0, 0, 0}}, 8);
+      for (int t = 0; t < 3; t++) {
+        uint32_t ht = fx_hash(h + (uint32_t)t * 977u);
+        float j0 = (float)(ht & 255) / 255.0f - 0.5f, j1 = (float)(ht >> 8 & 255) / 255.0f - 0.5f;
+        float ph = (float)(ht >> 16 & 255) / 255.0f, rate = 1.1f + 0.8f * (float)(ht >> 24 & 255) / 255.0f;
+        float q = age * rate + ph;
+        q -= floorf(q);                                   // where in its lick
+        float lick = sinf(q * F_PI);
+        float hgt = k * (0.45f + 0.65f * (float)(ht >> 4 & 63) / 63.0f) * (0.55f + 0.60f * lick);
+        v3 root = v3_add(base, (v3){{j0 * 0.40f, 0.0f, j1 * 0.40f}});
+        float sway = 0.10f * sinf(age * 6.0f + ph * 9.0f);
+        v3 lean = {{wd.x * 0.30f + sway * 0.5f, 1.0f, wd.z * 0.30f + sway * 0.35f}};
+        // A tongue is a column of SOFT blobs, fat and hot at the root, thin and
+        // red as it climbs, and the top one breaks away as the lick ends — the
+        // shape fire has, where a hard ribbon read as a row of teeth.
+        for (int b = 0; b < 4; b++) {
+          float u = ((float)b + 0.6f * q) / 4.0f;          // climbs with the lick
+          v3 p = v3_add(root, v3_scale(lean, hgt * u));
+          float r = (0.36f - 0.20f * u) * (0.55f + 0.45f * k) * (b == 3 ? 1.0f - q : 1.0f);
+          float hot = 1.0f - u;
+          v3 col = {{0.42f + 0.26f * hot, 0.10f + 0.26f * hot * hot, 0.015f + 0.07f * hot * hot * hot}};
+          fx_disc(p, eye, r, v3_scale(col, k * (0.50f + 0.25f * lick)), (v3){{0, 0, 0}}, 12);
+        }
+      }
+    }
+    if (sum > 0.05f) {
+      float g = f_clamp(sum / 30.0f, 0.0f, 1.0f);
+      fx_disc(v3_add(f->at, (v3){{0, 0.7f, 0}}), eye, 3.2f + 1.2f * g,
+              v3_scale((v3){{0.30f, 0.12f, 0.025f}}, g), (v3){{0, 0, 0}}, 16);
+    }
+  }
+}
+
 static void fx_build(v3 eye) {
   scene_reset();
   for (int i = 0; i < MAX_TRACERS; i++)
     if (g_tracers[i].life > 0) {
       tracer_t *tr = &g_tracers[i];
-      const tracer_look_t *tl = tracer_look(tr->wpn);
+      const tracer_look_t *tl = tracer_look_side(tr->wpn, tr->src);
       // ANCHORED ONCE, ON THE FIRST FRAME THAT DRAWS IT, and then left alone. The
       // event fires before the shooter's pose for this tick is solved, so the
       // spawn point is one pose stale and, for a rifle coming up from the low
@@ -201,6 +257,7 @@ static void fx_build(v3 eye) {
       }
       fx_disc(q->pos, eye, q->r * (0.55f + 0.75f * sqrtf(a1)), c, (v3){{0, 0, 0}}, 12);
     }
+  inferno_fx(eye);
   // Young smoke is lit from under by the fire inside it.
   for (int i = 0; i < MAX_PUFFS; i++)
     if (g_puffs[i].life > 0 && g_puffs[i].r1 >= 1.0f && g_puffs[i].soot > 0.2f) {
@@ -311,7 +368,13 @@ static void fx_build(v3 eye) {
     uint32_t h = fx_hash(fl->seed ^ 0x9E37u);
     float s = (0.22f + 0.08f * (float)((h >> 8) & 255) / 255.0f) *
               (0.45f + 0.55f * f);
+    // The insurgent's AK throws the bigger, warmer star of an unsuppressed
+    // 7.62 through a slant brake: a quarter larger, more orange than white.
+    g_fx_flash_ak = fl->wpn == WPN_AR && fl->src >= 0 && fl->src != g_local_ent &&
+                    fig_ins_of(fl->src);
+    if (g_fx_flash_ak) s *= 1.25f;
     fx_flash(fl->pos, fl->dir, t1, t2, eye, s, f, fl->seed, fl->wpn);
+    g_fx_flash_ak = 0;
   }
   for (int i = 0; i < MAX_PARTICLES; i++)
     if (g_parts[i].life > 0) {
@@ -529,3 +592,138 @@ static void fx_build(v3 eye) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// THE SMOKE, DRAWN. Every lit cell of every cloud (sim/smoke.c) is one soft
+// camera-facing disc, and the cloud is composited OVER the frame in the two
+// blends this renderer already has: a MULTIPLY pass that dims what is behind
+// by each disc's transmittance, then an ADDITIVE pass that lays down the smoke's
+// own light. Done naively the additive layers would sum (ten layers of grey on
+// a dense core = white), so each disc's light is attenuated by the smoke
+// IN FRONT of it, marched through the same grid the bots see with — which is
+// exactly back-to-front "over" compositing, without a sort.
+//
+// The light is the scene's own: the preset's sun and sky, at the same scale the
+// world shader lights a matte surface with. Each cell is shadowed toward the sun
+// and toward the sky by the smoke around it, so a cloud has a bright crown, a
+// dark belly and a shadowed far side — the volume read CS2's smokes have.
+// ---------------------------------------------------------------------------
+typedef struct { v3 p; float r, a; v3 L; int veil; } smk_puff_t;
+#define SMK_PUFF_MAX (MAX_SMOKES * SMK_BUDGET + 1)
+static smk_puff_t g_smk_puff[SMK_PUFF_MAX];
+static int g_smk_npuff;
+
+static void smoke_prep(v3 eye, v3 fwd) {
+  g_smk_npuff = 0;
+  const atm_t *am = atm_now();
+  v3 sun = atm_sun();
+  v3 sc = {{am->sun_col[0], am->sun_col[1], am->sun_col[2]}};
+  v3 skyu = v3_scale((v3){{am->hor[0] * 0.55f + am->top[0] * 0.45f, am->hor[1] * 0.55f + am->top[1] * 0.45f,
+                           am->hor[2] * 0.55f + am->top[2] * 0.45f}}, 0.40f);
+  v3 skyd = v3_scale((v3){{am->gnd[0], am->gnd[1], am->gnd[2]}}, 0.44f);
+  const float alb = 0.46f;                       // linear: a light grey, ~0.68 display
+  float tnow = (float)g_tick + g_fx_alpha;
+  for (int i = 0; i < MAX_SMOKES; i++) {
+    const smoke_t *s = &g_smokes[i];
+    if (!smoke_alive(s)) continue;
+    float age = ((float)(g_tick - s->t0) + g_fx_alpha) / (float)TICK_HZ;
+    const float *den = smoke_den(&g_smokes[i]);
+    for (int ci = 0; ci < s->ncell && g_smk_npuff < SMK_PUFF_MAX; ci++) {
+      int c = s->cells[ci];
+      float k = s->bclear[c] ? smoke_cell_dens_x(s, c, age, 0) : den[c];
+      if (k < 0.02f) continue;
+      int x = c % SMK_NX, z = (c / SMK_NX) % SMK_NZ, y = c / (SMK_NX * SMK_NZ);
+      uint32_t h = fx_hash((uint32_t)c * 2654435761u ^ (uint32_t)s->t0);
+      float j0 = (float)(h & 255) / 255.0f - 0.5f, j1 = (float)(h >> 8 & 255) / 255.0f - 0.5f,
+            j2 = (float)(h >> 16 & 255) / 255.0f - 0.5f;
+      // A slow churn: each puff drifts on its own small loop, so a standing
+      // cloud still breathes.
+      float ph = (float)(h >> 24) * 0.0245f, w = tnow * (0.35f / (float)TICK_HZ);
+      v3 p = {{s->o.x + (x + 0.5f + j0 * 0.40f) * SMK_CELL + 0.07f * sinf(w + ph),
+               s->o.y + (y + 0.5f + j1 * 0.30f) * SMK_CELL + 0.05f * sinf(w * 0.7f + ph * 1.3f),
+               s->o.z + (z + 0.5f + j2 * 0.40f) * SMK_CELL + 0.07f * cosf(w * 0.8f + ph)}};
+      // The bloom ROLLS OUT: a young cell is a small puff swelling to size.
+      float u = f_clamp((float)s->dist[c] / SMK_DU / s->dmax, 0.0f, 1.0f);
+      float grow = f_clamp((age - (0.06f + SMK_BLOOM * powf(u, 1.4f))) / 0.55f, 0.0f, 1.0f);
+      float r = SMK_CELL * (1.05f + 0.30f * j1) * (0.45f + 0.55f * grow);
+      // THE ROUNDS' TUNNELS, cut per puff at its own distance from each line
+      // (smoke_shot_hole): a round, soft-rimmed hole. A thinned puff also
+      // SHRINKS, so the rim is a falloff and not a ring of full-size discs.
+      if (s->nshot) {
+        float hk = smoke_shot_hole(s, p, age);
+        k *= 1.0f - hk;
+        r *= 1.0f - 0.45f * hk;
+        if (k < 0.02f) continue;
+      }
+      // Sat on the floor: the lowest puffs sit a little higher and smaller, so
+      // their discs do not slice the ground with a hard line.
+      if (y == 0 || s->dist[c - SMK_NX * SMK_NZ] == 255) { p.y += 0.10f; r *= 0.85f; }
+      v3 dq = v3_sub(p, eye);
+      float ed = v3_len(dq);
+      if (ed < 0.55f) continue;                  // the in-smoke veil owns the lens
+      // How much smoke stands between the eye and this puff (its own half
+      // excluded): what is left of its light, and whether it can be seen at all.
+      float tf = smoke_tau_step(eye, v3_sub(p, v3_scale(dq, SMK_CELL * 0.5f / ed)), SMK_CELL);
+      float Tf = expf(-tf);
+      if (Tf < 0.012f) continue;
+      // Self-shadowing: toward the sun, and toward the open sky above.
+      float ts = smoke_tau_step(p, v3_add(p, v3_scale(sun, 2.5f)), SMK_CELL);
+      float ta = smoke_tau_step(p, v3_add(p, (v3){{0, 1.5f, 0}}), SMK_CELL);
+      float Ts = expf(-0.75f * ts), Ta = expf(-0.45f * ta);
+      float shade = 1.0f + 0.10f * j2;
+      v3 L = v3_scale(v3_add(v3_scale(sc, 0.55f * Ts * fmaxf(sun.y, 0.15f) + 0.08f),
+                             v3_add(v3_scale(skyu, am->amb * (0.40f + 0.60f * Ta)),
+                                    v3_scale(skyd, am->amb * 0.55f))), alb * shade);
+      // Atmospheric fog takes a far cloud the way it takes a far wall.
+      float fog = 1.0f - expf(-ed * ed * am->fog);
+      float a = (1.0f - expf(-k * SMK_SIGMA * 0.95f)) * (1.0f - fog);
+      g_smk_puff[g_smk_npuff++] = (smk_puff_t){p, r, a, v3_scale(L, a * Tf), 0};
+    }
+  }
+  // INSIDE THE CLOUD the puffs within half a metre are skipped (a disc on the
+  // lens is a smear), so the near smoke is this: one even veil just in front of
+  // the eye, lit like the cloud at that point and as thick as the density
+  // there. It is drawn in the world passes, so the gun and the HUD stay on top
+  // of it — in CS2 you still see your own hands in a smoke.
+  float ed = smoke_density_at(eye);
+  if (ed > 0.01f && g_smk_npuff < SMK_PUFF_MAX) {
+    float ts = smoke_tau_step(eye, v3_add(eye, v3_scale(sun, 2.5f)), SMK_CELL);
+    float ta = smoke_tau_step(eye, v3_add(eye, (v3){{0, 1.5f, 0}}), SMK_CELL);
+    v3 L = v3_scale(v3_add(v3_scale(sc, 0.55f * expf(-0.75f * ts) * fmaxf(sun.y, 0.15f) + 0.08f),
+                           v3_add(v3_scale(skyu, am->amb * (0.40f + 0.60f * expf(-0.45f * ta))),
+                                  v3_scale(skyd, am->amb * 0.55f))), alb);
+    float a = f_clamp(ed * 1.02f, 0.0f, 0.94f);
+    g_smk_puff[g_smk_npuff++] = (smk_puff_t){v3_add(eye, v3_scale(fwd, 0.30f)), 1.6f, a,
+                                             v3_scale(L, a), 1};
+  }
+}
+// pass 0: transmittance (multiply), pass 1: the smoke's light (additive, raw).
+// fx_disc's own fan, with the ring's trig computed once rather than per puff:
+// a few thousand puffs a frame make the 2 x 9 sin/cos the visible cost.
+#define SMK_DISC_N 9
+static void smoke_build(v3 eye, int pass) {
+  static float cs[SMK_DISC_N + 1], sn[SMK_DISC_N + 1];
+  if (cs[0] == 0.0f)
+    for (int k = 0; k <= SMK_DISC_N; k++) {
+      cs[k] = cosf((float)k / SMK_DISC_N * F_TAU);
+      sn[k] = sinf((float)k / SMK_DISC_N * F_TAU);
+    }
+  scene_reset();
+  for (int i = 0; i < g_smk_npuff; i++) {
+    const smk_puff_t *q = &g_smk_puff[i];
+    v3 f = v3_norm(v3_sub(eye, q->p)), up = {{0, 1, 0}};
+    v3 x = v3_cross(up, f);
+    x = v3_dot(x, x) > 1e-6f ? v3_norm(x) : (v3){{1, 0, 0}};
+    v3 y = v3_cross(f, x);
+    x = v3_scale(x, q->r);
+    y = v3_scale(y, q->r);
+    float t = 1.0f - q->a;
+    v3 mid = pass ? q->L : (v3){{t, t, t}}, rim = pass ? (v3){{0, 0, 0}} : (v3){{1, 1, 1}};
+    if (q->veil) rim = mid;                    // the veil is even edge to edge
+    for (int k = 0; k < SMK_DISC_N; k++) {
+      scene_push(q->p, FX_N, mid);
+      scene_push(v3_add(q->p, v3_add(v3_scale(x, cs[k]), v3_scale(y, sn[k]))), FX_N, rim);
+      scene_push(v3_add(q->p, v3_add(v3_scale(x, cs[k + 1]), v3_scale(y, sn[k + 1]))), FX_N, rim);
+    }
+  }
+}
