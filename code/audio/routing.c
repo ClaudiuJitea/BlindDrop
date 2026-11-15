@@ -349,10 +349,10 @@ static int ev_var(const event_t *e) {
 // variant with its OWN recorded takes keeps their pitch: re-pitching an AK
 // recording would only make it a worse AK.
 static void audio_var_voice(const event_t *e, float *rate, float *lvl) {
-  int v = ev_var(e);
-  if (!v) return;
-  if (!var_has_takes(e->wpn, v)) *rate *= WPN_VAR[wpn_var_row(e->wpn)][v].pitch;
-  *lvl *= WPN_VAR[wpn_var_row(e->wpn)][v].level;
+  int v = ev_var(e), row = wpn_var_row(e->wpn);
+  if (!v || row < 0) return;   // (a slot with no variants has no row)
+  if (!var_has_takes(e->wpn, v)) *rate *= WPN_VAR[row][v].pitch;
+  *lvl *= WPN_VAR[row][v].level;
 }
 // A MAN GOING DOWN, as the world hears it: one of the death voices at the
 // victim, and his body reaching the floor a beat later. Never the same voice

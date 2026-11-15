@@ -1386,7 +1386,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
                     nin > 0 ? 0.42f : 0.03f, nin > 0 ? 0.12f : 0.04f, nin > 0 ? 0.90f : 0.45f);
             // how many: three of each at spawn, more from a supply crate
             if (nin > 1) {
-              char cn[4]; snprintf(cn, sizeof cn, "%d", nin);
+              char cn[12]; snprintf(cn, sizeof cn, "%d", nin);
               ui_text_sh(cn, px2 + 2.6f, cy2 - 3.6f, 0.5f, TXT_BOLD, 0.6f, C4(C_BONE, 0.85f));
             }
             x -= 11.0f;
@@ -1396,7 +1396,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
             ui_rect(px2 - 2.2f, cy2 - 2.2f, 4.4f, 4.4f, nsm > 0 ? 0.80f : 0.02f,
                     nsm > 0 ? 0.82f : 0.03f, nsm > 0 ? 0.85f : 0.04f, nsm > 0 ? 0.85f : 0.45f);
             if (nsm > 1) {
-              char cn[4]; snprintf(cn, sizeof cn, "%d", nsm);
+              char cn[12]; snprintf(cn, sizeof cn, "%d", nsm);
               ui_text_sh(cn, px2 + 3.0f, cy2 - 3.6f, 0.5f, TXT_BOLD, 0.6f, C4(C_BONE, 0.85f));
             }
             x -= 12.0f;
