@@ -187,7 +187,7 @@ static void smoke_fill(smoke_t *s, int sx, int sy, int sz) {
 // two solids), and fills.
 static void smoke_spawn(v3 at, int src) {
   int slot = 0;
-  long oldest = 1L << 62;
+  long oldest = LONG_MAX;
   for (int i = 0; i < MAX_SMOKES; i++) {
     if (!g_smokes[i].on) { slot = i; oldest = -1; break; }
     if (g_smokes[i].t0 < oldest) { oldest = g_smokes[i].t0; slot = i; }

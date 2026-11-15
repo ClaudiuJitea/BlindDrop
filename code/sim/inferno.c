@@ -166,7 +166,7 @@ static int inferno_cell_at(const inferno_t *f, v3 p) {
   return c;
 }
 // The heat at a point (the hottest pool covering it).
-static float inferno_heat_at(v3 p) {
+[[maybe_unused]] static float inferno_heat_at(v3 p) {   // harness `fireheat`
   float k = 0.0f;
   for (int i = 0; i < MAX_INFERNOS; i++) {
     const inferno_t *f = &g_infernos[i];
@@ -197,7 +197,7 @@ static void inferno_snuff(inferno_t *f, const smoke_t *s) {
 
 static void inferno_spawn(v3 at, int src) {
   int slot = 0;
-  long oldest = 1L << 62;
+  long oldest = LONG_MAX;
   for (int i = 0; i < MAX_INFERNOS; i++) {
     if (!g_infernos[i].on) { slot = i; oldest = -1; break; }
     if (g_infernos[i].t0 < oldest) { oldest = g_infernos[i].t0; slot = i; }
