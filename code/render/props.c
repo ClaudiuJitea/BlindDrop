@@ -54,57 +54,6 @@ static void pcyl(v3 c, v3 ax, float r, float hl, int segs, v3 col) {
     }
   }
 }
-// A road wheel: tyre with a rounded shoulder, steel rim, hub and lug nuts.
-// `out` is the lateral direction the wheel's face looks toward.
-static void pwheel(v3 c, v3 out, float r, float w, int duals) {
-  v3 rub = rgb(0.045f, 0.045f, 0.05f), rim = rgb(0.52f, 0.53f, 0.55f), hub = rgb(0.30f, 0.30f, 0.32f);
-  mat_set(0.92f, 0.0f);
-  pcyl(c, out, r, w * 0.5f, 20, rub);
-  pcyl(v3_add(c, v3_scale(out, w * 0.5f)), out, r * 0.86f, 0.006f, 20, rgb(0.06f, 0.06f, 0.065f)); // sidewall
-  mat_set(0.30f, 0.85f);
-  pcyl(v3_add(c, v3_scale(out, w * 0.5f + 0.004f)), out, r * 0.58f, 0.010f, 18, rim);
-  mat_set(0.40f, 0.75f);
-  pcyl(v3_add(c, v3_scale(out, w * 0.5f + 0.016f)), out, r * 0.22f, 0.012f, 12, hub);
-  v3 t1, t2;
-  axis_frame(out, &t1, &t2);
-  int nl = duals ? 8 : 5;
-  for (int k = 0; k < nl; k++) {
-    float a = (float)k * F_TAU / (float)nl;
-    v3 lp = v3_add(c, v3_add(v3_scale(out, w * 0.5f + 0.022f),
-                   v3_add(v3_scale(t1, cosf(a) * r * 0.33f), v3_scale(t2, sinf(a) * r * 0.33f))));
-    pcyl(lp, out, 0.014f, 0.010f, 6, hub);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// THE LOFT: a smooth body swept through a row of rounded cross-sections.
-// Every section is a superellipse (exponent p: 2 an ellipse, 8 a box with
-// soft corners) of half-sizes hu x hv, centred (cu, cv) off the loft axis at
-// distance t along it; `tw` narrows the upper half (a car's tumblehome). The
-// ends can be ROUNDED (rnd): the first and last sections are replaced by a
-// quarter-circle run of shrinking copies, so a nose or a roof edge turns over
-// instead of ending on a flat cap. Normals are taken from the surface itself
-// (central differences), so the body shades as one smooth skin, and every
-// quad asks a colour function what it is — paint, glass, a lamp lens, a grille
-// — from where it sits on the body and which way it faces. That is how the
-// windows, lights and seams are part of the shape rather than boxes on it.
-// ---------------------------------------------------------------------------
-typedef struct { float t, cu, cv, hu, hv, p, tw; } lsec_t;
-typedef struct { v3 A, U, V; } lfr_t;     // loft axis and the section's two axes
-typedef struct { v3 col; float rough, metal; int smat; } lmat_t;
-// q and n arrive in the PROP frame: x = along F, y = up, z = along L.
-typedef lmat_t (*lcol_fn)(const void *ctx, v3 q, v3 n);
-#define LOFT_MAXS 64
-#define LOFT_MAXR 48
-#define LOFT_RND 5
-static float sgnpow(float x, float e) { return copysignf(powf(fabsf(x), e), x); }
-static v3 loft_local(const pfr_t *f, v3 p) {
-  v3 d = v3_sub(p, f->o);
-  return (v3){{v3_dot(d, f->F), d.y, v3_dot(d, f->L)}};
-}
-static v3 loft_dir(const pfr_t *f, v3 n) {
-  return (v3){{v3_dot(n, f->F), n.y, v3_dot(n, f->L)}};
-}
 static void loft_tri(v3 a, v3 b, v3 c, v3 na, v3 nb, v3 nc, v3 col) {
   v3 fn = v3_cross(v3_sub(b, a), v3_sub(c, a));
   if (v3_dot(fn, v3_add(na, v3_add(nb, nc))) >= 0.0f) {
@@ -112,86 +61,6 @@ static void loft_tri(v3 a, v3 b, v3 c, v3 na, v3 nb, v3 nc, v3 col) {
   } else {
     scene_push(a, na, col); scene_push(c, nc, col); scene_push(b, nb, col);
   }
-}
-static void loft(const pfr_t *f, const lfr_t *lf, const lsec_t *in, int ns, int ring,
-                 float rnd, lcol_fn fn, const void *ctx) {
-  static lsec_t S[LOFT_MAXS];
-  static v3 P[LOFT_MAXS][LOFT_MAXR], N[LOFT_MAXS][LOFT_MAXR], C[LOFT_MAXS];
-  if (ring > LOFT_MAXR) ring = LOFT_MAXR;
-  int n = 0;
-  for (int i = 0; i < ns && n < LOFT_MAXS - 2 * LOFT_RND; i++) {
-    int end = i == 0 ? -1 : i == ns - 1 ? 1 : 0;
-    if (rnd > 0.0f && end) {
-      for (int k = 0; k < LOFT_RND; k++) {
-        // phi 0 = the tip, pi/2 = full size; the run sits INSIDE the length
-        int kk = end < 0 ? k : LOFT_RND - 1 - k;
-        float phi = (float)kk / (float)(LOFT_RND - 1) * F_PI * 0.5f;
-        // A BLUNT end that still closes: the section scales by sin(phi)^0.4,
-        // so it turns over over `rnd` of length and ends on a point — no flat
-        // cap, whose fan of triangles could only ever take one colour badly.
-        lsec_t s = in[i];
-        float sc = powf(fmaxf(sinf(phi), 0.0f), 0.4f);
-        if (end < 0) s.t = in[i].t + rnd * (1.0f - cosf(phi));
-        else         s.t = in[i].t - rnd * (1.0f - cosf(phi));
-        s.hu = fmaxf(s.hu * sc, 0.002f);
-        s.hv = fmaxf(s.hv * sc, 0.002f);
-        S[n++] = s;
-      }
-    } else {
-      S[n++] = in[i];
-    }
-  }
-  for (int i = 0; i < n; i++) {
-    const lsec_t *s = &S[i];
-    float e = 2.0f / s->p;
-    C[i] = v3_add(f->o, v3_add(v3_scale(lf->A, s->t), v3_add(v3_scale(lf->U, s->cu), v3_scale(lf->V, s->cv))));
-    for (int j = 0; j < ring; j++) {
-      float th = (float)j * F_TAU / (float)ring;
-      float x = sgnpow(cosf(th), e) * s->hu, y = sgnpow(sinf(th), e) * s->hv;
-      if (y > 0.0f) x *= 1.0f + (s->tw - 1.0f) * (y / s->hv);
-      P[i][j] = v3_add(C[i], v3_add(v3_scale(lf->U, x), v3_scale(lf->V, y)));
-    }
-  }
-  for (int i = 0; i < n; i++)
-    for (int j = 0; j < ring; j++) {
-      v3 dt = v3_sub(P[i < n - 1 ? i + 1 : i][j], P[i > 0 ? i - 1 : i][j]);
-      v3 dr = v3_sub(P[i][(j + 1) % ring], P[i][(j + ring - 1) % ring]);
-      v3 nn = v3_cross(dr, dt);
-      v3 rad = v3_sub(P[i][j], C[i]);
-      if (v3_dot(nn, nn) < 1e-12f) nn = v3_dot(rad, rad) > 1e-10f ? rad : lf->A;
-      nn = v3_norm(nn);
-      if (v3_dot(nn, rad) < 0.0f) nn = v3_scale(nn, -1.0f);
-      // A tip ring is a point: its normal is the axis, outward.
-      if (S[i].hu < 0.01f && S[i].hv < 0.01f) nn = i == 0 ? v3_scale(lf->A, -1.0f) : lf->A;
-      N[i][j] = nn;
-    }
-  for (int i = 0; i + 1 < n; i++)
-    for (int j = 0; j < ring; j++) {
-      int j1 = (j + 1) % ring;
-      v3 a = P[i][j], b = P[i + 1][j], c = P[i + 1][j1], d = P[i][j1];
-      v3 q = v3_scale(v3_add(v3_add(a, b), v3_add(c, d)), 0.25f);
-      v3 nq = v3_norm(v3_add(v3_add(N[i][j], N[i + 1][j]), v3_add(N[i + 1][j1], N[i][j1])));
-      lmat_t m = fn(ctx, loft_local(f, q), loft_dir(f, nq));
-      mat_set(m.rough, m.metal);
-      g_scene_smat = m.smat;
-      loft_tri(a, b, c, N[i][j], N[i + 1][j], N[i + 1][j1], m.col);
-      loft_tri(a, c, d, N[i][j], N[i + 1][j1], N[i][j1], m.col);
-    }
-  for (int e = 0; e < 2; e++) {           // caps, where an end is not a point
-    int i = e ? n - 1 : 0;
-    if (S[i].hu < 0.012f && S[i].hv < 0.012f) continue;
-    v3 an = e ? lf->A : v3_scale(lf->A, -1.0f);
-    // Each fan triangle asks for itself: a cap can span a grille AND paint.
-    for (int j = 0; j < ring; j++) {
-      v3 p1 = P[i][j], p2 = P[i][(j + 1) % ring];
-      v3 qc = v3_add(v3_scale(C[i], 0.2f), v3_scale(v3_add(p1, p2), 0.4f));
-      lmat_t m = fn(ctx, loft_local(f, qc), loft_dir(f, an));
-      mat_set(m.rough, m.metal);
-      g_scene_smat = m.smat;
-      loft_tri(C[i], p1, p2, an, an, an, m.col);
-    }
-  }
-  g_scene_smat = 0;
 }
 // A cone frustum a -> b (radii r0, r1), open ends unless `caps`.
 static void ptaper(v3 a, v3 b, float r0, float r1, int segs, v3 col, int caps) {
@@ -235,158 +104,19 @@ static void pball(v3 c, float r, v3 col) {
       loft_tri(a, e, b, n00, n11, n01, col);
     }
 }
-static lmat_t LM(v3 col, float rough, float metal, int smat) {
-  return (lmat_t){col, rough, metal, smat};
-}
-#define LGLASS(c) LM(c, 0.04f, 0.0f, SMAT_VGLASS)
-// A section for a loft along F: from floor-height y0 to y1, half-width hw.
-#define BSEC(a, y0, y1, hw, p, tw) ((lsec_t){(a), 0.0f, ((y0) + (y1)) * 0.5f, (hw), ((y1) - (y0)) * 0.5f, (p), (tw)})
-
-// THE TRUCK: a cab-over carrying a container. The cab is lofted UP (sections
-// are horizontal slices), so its front, sides and the raked windscreen are all
-// one rounded pressing; the glass and grille are coloured onto it. Fenders
-// wrap the wheels, the chassis shows behind the cab.
-typedef struct { v3 paint; } truck_ctx_t;
-static lmat_t truck_cab_col(const void *ctx, v3 q, v3 n) {
-  const truck_ctx_t *c = ctx;
-  float a = q.x, y = q.y, b = fabsf(q.z);
-  v3 gl = rgb(0.06f, 0.08f, 0.09f), rub = rgb(0.03f, 0.03f, 0.035f);
-  if (n.y > 0.75f) return LM(c->paint, 0.25f, 0.0f, 0);
-  if (n.x > 0.45f) {                                       // the face
-    if (y > 1.93f && y < 2.73f && b < 0.99f) return LGLASS(gl);
-    if (y > 1.88f && y < 2.78f && b < 1.04f) return LM(rub, 0.6f, 0.0f, 0);   // its rubber
-    if (y > 1.18f && y < 1.76f && b < 0.76f) return LM(rgb(0.04f, 0.04f, 0.045f), 0.5f, 0.3f, 0);
-  }
-  if (b > 1.0f && fabsf(n.z) > 0.55f) {                    // the doors
-    if (a > 4.40f && a < 5.10f && y > 1.98f && y < 2.68f) return LGLASS(gl);
-    if (a > 4.36f && a < 5.14f && y > 1.94f && y < 2.72f) return LM(rub, 0.6f, 0.0f, 0);
-  }
-  if (y < 1.10f) return LM(v3_scale(c->paint, 0.5f), 0.4f, 0.0f, 0);
-  return LM(c->paint, 0.25f, 0.0f, 0);
-}
-static void fender(const pfr_t *f, float a, float side, float r, float w, v3 col) {
-  // An arc of short plates over a wheel, from the front round to the back.
-  for (int k = 0; k < 9; k++) {
-    float t0 = F_PI * (0.06f + 0.88f * (float)k / 9.0f), t1 = F_PI * (0.06f + 0.88f * (float)(k + 1) / 9.0f);
-    float tm = (t0 + t1) * 0.5f;
-    v3 c = PF(f, a + cosf(tm) * r, side * (1.03f), 0.48f + sinf(tm) * r);
-    v3 tg = v3_add(v3_scale(f->F, -sinf(tm)), (v3){{0, cosf(tm), 0}});
-    v3 rd = v3_add(v3_scale(f->F, cosf(tm)), (v3){{0, sinf(tm), 0}});
-    pbox_v(c, v3_scale(tg, r * (t1 - t0) * 0.55f), v3_scale(rd, 0.02f), v3_scale(f->L, w * 0.5f), col);
-  }
-}
 static void prop_truck(const prop_t *pr) {
+  // The truck is the Blender model (tools/props_models.py truck_cab) in the
+  // cab's paint; the container on its bed is world geometry. Only the amber
+  // roof markers are drawn here, lit.
   pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
              pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
-  v3 cab = pr->col, dk = rgb(0.07f, 0.07f, 0.075f), steel = rgb(0.24f, 0.25f, 0.26f);
-  v3 chrome = rgb(0.70f, 0.71f, 0.72f);
-  // CHASSIS: two ladder rails and cross members, under where the box sat.
-  mat_set(0.55f, 0.6f);
-  for (int sd = -1; sd <= 1; sd += 2)
-    pbox(&f, -3.6f, 3.6f, (float)sd * 0.52f - 0.06f, (float)sd * 0.52f + 0.06f, 0.70f, 1.00f, steel);
-  for (float a = -3.2f; a < 3.4f; a += 1.1f) pbox(&f, a, a + 0.10f, -0.52f, 0.52f, 0.78f, 0.94f, steel);
-  pbox(&f, -3.6f, 3.38f, -1.10f, 1.10f, 1.04f, 1.20f, rgb(0.18f, 0.19f, 0.20f));   // the bed
-  mat_set(0.35f, 0.0f);
-  pbox(&f, -3.60f, 3.38f, -1.105f, -1.095f, 1.06f, 1.10f, rgb(0.85f, 0.70f, 0.15f));
-  pbox(&f, -3.60f, 3.38f, 1.095f, 1.105f, 1.06f, 1.10f, rgb(0.85f, 0.70f, 0.15f));
-  // Fuel tank, air tanks, battery box, side guards.
-  mat_set(0.18f, 0.95f);
-  pcyl(PF(&f, 2.15f, -0.86f, 0.80f), f.F, 0.24f, 0.55f, 18, chrome);
-  for (int k = 0; k < 2; k++) pcyl(PF(&f, 2.15f + (float)k * 0.42f - 0.42f, -0.86f, 0.80f), f.F, 0.245f, 0.015f, 18, steel);
-  mat_set(0.5f, 0.4f);
-  pcyl(PF(&f, 0.6f, 0.80f, 0.78f), f.F, 0.13f, 0.40f, 12, rgb(0.30f, 0.31f, 0.33f));
-  pcyl(PF(&f, -0.4f, 0.80f, 0.78f), f.F, 0.13f, 0.40f, 12, rgb(0.30f, 0.31f, 0.33f));
-  mat_set(0.6f, 0.0f);
-  pbox(&f, 1.0f, 1.5f, 0.70f, 1.05f, 0.62f, 0.98f, dk);
-  for (int sd = -1; sd <= 1; sd += 2) {
-    mat_set(0.5f, 0.5f);
-    pbox(&f, -1.40f, 1.60f, (float)sd * 1.02f, (float)sd * 1.06f, 0.48f, 0.52f, steel);
-    pbox(&f, -1.40f, 1.60f, (float)sd * 1.02f, (float)sd * 1.06f, 0.74f, 0.78f, steel);
-  }
-  // THE CAB.
-  {
-    lfr_t lf = {{{0, 1, 0}}, f.L, f.F};
-    truck_ctx_t tc = {cab};
-    static const lsec_t CAB[] = {
-      {1.00f, 0.0f, 4.36f, 1.12f, 0.94f, 9.0f, 1.0f},
-      {1.85f, 0.0f, 4.38f, 1.14f, 0.97f, 9.0f, 1.0f},
-      {2.00f, 0.0f, 4.37f, 1.14f, 0.95f, 9.0f, 1.0f},
-      {2.45f, 0.0f, 4.35f, 1.13f, 0.91f, 9.0f, 1.0f},
-      {2.80f, 0.0f, 4.32f, 1.11f, 0.87f, 8.0f, 1.0f},
-      {3.00f, 0.0f, 4.30f, 1.08f, 0.84f, 7.0f, 1.0f},
-    };
-    loft(&f, &lf, CAB, (int)(sizeof CAB / sizeof CAB[0]), 44, 0.14f, truck_cab_col, &tc);
-  }
-  // A roof visor with marker lamps, a sun visor over the glass, wipers.
-  mat_set(0.3f, 0.0f);
-  pbox(&f, 3.70f, 4.90f, -0.95f, 0.95f, 2.96f, 3.26f, v3_scale(cab, 0.85f));
+  pmesh_draw(PM_TRUCK, f.o, f.F, f.L, pr->col, rgb(0.07f, 0.07f, 0.075f));
   g_scene_smat = SMAT_LED;
+  mat_set(0.3f, 0.0f);
   for (int k = -2; k <= 2; k++)
-    pbox(&f, 5.13f, 5.17f, (float)k * 0.22f - 0.04f, (float)k * 0.22f + 0.04f, 2.82f, 2.86f, rgb(0.95f, 0.55f, 0.10f));
+    pbox(&f, 4.965f, 4.985f, (float)k * 0.22f - 0.035f, (float)k * 0.22f + 0.035f, 3.10f, 3.14f,
+         rgb(0.95f, 0.55f, 0.10f));
   g_scene_smat = 0;
-  mat_set(0.5f, 0.2f);
-  pbox(&f, 5.05f, 5.30f, -1.02f, 1.02f, 2.76f, 2.80f, dk);
-  for (int sd = -1; sd <= 1; sd += 2)
-    pbox(&f, 5.30f, 5.33f, (float)sd * 0.45f - 0.40f, (float)sd * 0.45f + 0.10f, 1.96f, 1.98f, dk);
-  // Door handles, steps, mirrors.
-  for (int sd = -1; sd <= 1; sd += 2) {
-    float bs = (float)sd * 1.14f;
-    mat_set(0.25f, 0.9f);
-    pbox(&f, 4.42f, 4.62f, bs - 0.02f, bs + 0.02f, 1.78f, 1.82f, chrome);
-    mat_set(0.6f, 0.5f);
-    pbox(&f, 4.30f, 5.05f, (float)sd * 0.92f, (float)sd * 1.10f, 0.72f, 0.76f, steel);
-    pbox(&f, 4.30f, 5.05f, (float)sd * 0.92f, (float)sd * 1.10f, 0.98f, 1.02f, steel);
-    mat_set(0.4f, 0.6f);
-    pbox(&f, 5.20f, 5.24f, (float)sd * 1.12f, (float)sd * 1.34f, 2.42f, 2.45f, dk);
-    pbox(&f, 5.20f, 5.24f, (float)sd * 1.12f, (float)sd * 1.34f, 1.98f, 2.01f, dk);
-    pbox(&f, 5.12f, 5.22f, (float)sd * 1.30f, (float)sd * 1.38f, 1.95f, 2.55f, dk);
-    g_scene_smat = SMAT_VGLASS;
-    mat_set(0.03f, 0.0f);
-    pbox(&f, 5.11f, 5.115f, (float)sd * 1.305f, (float)sd * 1.375f, 1.98f, 2.52f, rgb(0.5f, 0.55f, 0.6f));
-    g_scene_smat = 0;
-  }
-  // FRONT: grille slats, badge, headlamps, bumper, fog lamps, plate.
-  mat_set(0.55f, 0.3f);
-  for (float y = 1.24f; y < 1.72f; y += 0.08f) pbox(&f, 5.30f, 5.35f, -0.72f, 0.72f, y, y + 0.03f, steel);
-  mat_set(0.2f, 0.9f);
-  pbox(&f, 5.31f, 5.36f, -0.18f, 0.18f, 1.78f, 1.83f, chrome);
-  for (int sd = -1; sd <= 1; sd += 2) {
-    g_scene_smat = 0;
-    mat_set(0.10f, 0.7f);
-    pbox(&f, 5.28f, 5.33f, (float)sd * 0.78f, (float)sd * 1.04f, 1.22f, 1.42f, rgb(0.80f, 0.80f, 0.76f));
-    pbox(&f, 5.28f, 5.33f, (float)sd * 0.78f, (float)sd * 1.04f, 1.44f, 1.50f, rgb(0.95f, 0.55f, 0.10f));
-    pbox(&f, 5.43f, 5.46f, (float)sd * 0.70f, (float)sd * 0.90f, 0.74f, 0.84f, rgb(0.92f, 0.90f, 0.80f));
-    g_scene_smat = 0;
-  }
-  mat_set(0.45f, 0.4f);
-  pbox(&f, 5.26f, 5.44f, -1.14f, 1.14f, 0.62f, 0.96f, rgb(0.16f, 0.17f, 0.18f));
-  mat_set(0.4f, 0.0f);
-  pbox(&f, 5.44f, 5.445f, -0.26f, 0.26f, 0.66f, 0.80f, rgb(0.92f, 0.82f, 0.20f));
-  // WHEELS under their fenders.
-  for (int sd = -1; sd <= 1; sd += 2) {
-    v3 out = v3_scale(f.L, (float)sd);
-    pwheel(PF(&f, 4.40f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 0);
-    pwheel(PF(&f, -2.00f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 1);
-    pwheel(PF(&f, -3.05f, (float)sd * 1.03f, 0.48f), out, 0.48f, 0.30f, 1);
-    mat_set(0.6f, 0.0f);
-    fender(&f, 4.40f, (float)sd, 0.58f, 0.34f, v3_scale(cab, 0.7f));
-    fender(&f, -2.00f, (float)sd, 0.58f, 0.34f, dk);
-    fender(&f, -3.05f, (float)sd, 0.58f, 0.34f, dk);
-    pbox(&f, -3.62f, -3.58f, (float)sd * 0.80f, (float)sd * 1.16f, 0.18f, 0.82f, dk);     // mud flap
-    g_scene_smat = SMAT_VGLASS;
-    mat_set(0.04f, 0.0f);
-    pbox(&f, -3.62f, -3.60f, (float)sd * 0.70f, (float)sd * 1.00f, 0.86f, 0.98f, rgb(0.85f, 0.08f, 0.05f));
-    pbox(&f, -3.62f, -3.60f, (float)sd * 0.55f, (float)sd * 0.68f, 0.86f, 0.98f, rgb(0.95f, 0.55f, 0.10f));
-    g_scene_smat = 0;
-  }
-  // Exhaust stack behind the cab, its heat shield and rain cap; air horns.
-  mat_set(0.2f, 0.95f);
-  pcyl(PF(&f, 3.30f, 0.92f, 2.20f), (v3){{0, 1, 0}}, 0.065f, 1.10f, 12, chrome);
-  mat_set(0.5f, 0.6f);
-  pcyl(PF(&f, 3.30f, 0.92f, 2.00f), (v3){{0, 1, 0}}, 0.085f, 0.45f, 12, steel);
-  mat_set(0.2f, 0.95f);
-  for (int k = 0; k < 2; k++)
-    ptaper(PF(&f, 4.2f + (float)k * 0.3f, 0.35f, 3.30f), PF(&f, 4.6f + (float)k * 0.3f, 0.35f, 3.30f), 0.025f, 0.05f, 8, chrome, 1);
 }
 
 // THE CAR: a saloon or a single-cab pickup, modelled in Blender
@@ -408,127 +138,13 @@ static void prop_mesh(const prop_t *pr) {
     pmesh_draw(pr->dir, (v3){{pr->x, pr->y, pr->z}}, F, L, pr->col, pr->col2);
 }
 
-// THE HELICOPTER: a twin-engine utility type in olive drab. The fuselage is one
-// loft from the rounded nose through the cabin into the tapering tail boom;
-// the cockpit glazing (windscreen, chin bubbles, door windows), the open
-// cabin door and the anti-glare panel are coloured onto it. The engine
-// cowling, exhausts, fin, stabiliser, skids and lights are their own parts.
-// The rotors turn, so they are drawn live (rescue_scene), not here.
-typedef struct { v3 paint; } heli_ctx_t;
-static lmat_t heli_body_col(const void *ctx, v3 q, v3 n) {
-  const heli_ctx_t *c = ctx;
-  float a = q.x, y = q.y, b = fabsf(q.z);
-  v3 gl = rgb(0.15f, 0.19f, 0.21f), fr = rgb(0.09f, 0.10f, 0.08f), in = rgb(0.035f, 0.037f, 0.035f);
-  v3 pt = c->paint;
-  if (n.y < -0.55f) pt = v3_scale(pt, 0.78f);                   // the belly
-  if (a > 2.80f && n.x > 0.12f) {                                // the cockpit glazing
-    if (y > 1.52f && y < 2.46f && n.y < 0.90f) {
-      if (b < 0.045f) return LM(fr, 0.6f, 0.0f, 0);             // centre post
-      if (fabsf(b - 0.66f) < 0.035f) return LM(fr, 0.6f, 0.0f, 0);   // corner posts
-      if (fabsf(y - 2.05f) < 0.02f && b > 0.66f) return LM(fr, 0.6f, 0.0f, 0);
-      return LGLASS(gl);
-    }
-    if (a > 3.70f && y > 0.86f && y < 1.40f && b > 0.10f && b < 0.72f) return LGLASS(gl);   // chin
-    if (y >= 1.40f && y <= 1.52f) return LM(rgb(0.05f, 0.05f, 0.05f), 0.8f, 0.0f, 0);       // anti-glare lip
-  }
-  if (fabsf(n.z) > 0.55f && b > 0.6f) {
-    if (a > 2.05f && a < 2.90f && y > 1.58f && y < 2.38f && fabsf(a - 2.48f) > 0.02f) return LGLASS(gl);
-    if (a > 1.98f && a < 2.97f && y > 0.80f && y < 2.45f && (y < 1.0f || fabsf(a - 2.0f) < 0.03f))
-      return LM(fr, 0.6f, 0.0f, 0);                                            // door seams
-    if (a > -1.50f && a < 0.95f && y > 0.80f && y < 2.36f) {                 // the open cabin door
-      if (a > -1.45f && a < 0.90f && y > 0.85f && y < 2.31f) return LM(in, 0.95f, 0.0f, 0);
-      return LM(fr, 0.6f, 0.0f, 0);
-    }
-    if (a > -2.35f && a < -1.70f && y > 1.66f && y < 2.24f) return LGLASS(gl);  // aft window
-  }
-  if (a < -9.7f && a > -10.0f) return LM(rgb(0.80f, 0.74f, 0.20f), 0.5f, 0.0f, 0);  // boom band
-  return LM(pt, 0.62f, 0.0f, 0);
-}
-static lmat_t heli_plain_col(const void *ctx, v3 q, v3 n) {
-  const heli_ctx_t *c = ctx;
-  (void)q;
-  return LM(n.y < -0.55f ? v3_scale(c->paint, 0.8f) : c->paint, 0.62f, 0.0f, 0);
-}
-static lmat_t heli_cowl_col(const void *ctx, v3 q, v3 n) {
-  const heli_ctx_t *c = ctx;
-  if (fabsf(n.z) > 0.55f && q.x > 0.45f && q.x < 1.10f && q.y > 2.70f)
-    return LM(rgb(0.03f, 0.03f, 0.03f), 0.9f, 0.2f, 0);     // intake screens
-  if (fabsf(n.z) > 0.55f && q.x > -2.1f && q.x < -0.3f && q.y > 2.68f && q.y < 2.98f &&
-      fmodf(q.x + 3.0f, 0.36f) < 0.05f)
-    return LM(rgb(0.08f, 0.09f, 0.07f), 0.8f, 0.0f, 0);     // access panel seams
-  return LM(v3_scale(c->paint, 0.94f), 0.6f, 0.0f, 0);
-}
 static void prop_heli(const prop_t *pr) {
+  // The airframe is the Blender model (tools/props_models.py helicopter) in
+  // the instance's paint; the rotor blades turn, so rescue_scene draws them,
+  // and the lamps below are drawn lit.
   pfr_t f = {{{pr->x, 0.0f, pr->z}}, pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}},
              pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}}};
-  lfr_t lf = {f.F, f.L, {{0, 1, 0}}};
-  heli_ctx_t hc = {pr->col};
-  v3 stl = rgb(0.20f, 0.21f, 0.22f), dk = rgb(0.06f, 0.065f, 0.06f), soot = rgb(0.07f, 0.06f, 0.05f);
-  static const lsec_t BODY[] = {
-    BSEC(4.58f, 1.02f, 1.50f, 0.28f, 2.6f, 0.90f),  BSEC(4.32f, 0.84f, 1.78f, 0.68f, 2.8f, 0.85f),
-    BSEC(3.92f, 0.72f, 2.06f, 0.94f, 3.0f, 0.82f),  BSEC(3.40f, 0.66f, 2.36f, 1.10f, 3.4f, 0.84f),
-    BSEC(2.85f, 0.63f, 2.58f, 1.18f, 4.0f, 0.88f),
-    BSEC(2.20f, 0.63f, 2.64f, 1.20f, 4.2f, 0.90f),  BSEC(0.00f, 0.62f, 2.66f, 1.22f, 4.6f, 0.90f),
-    BSEC(-1.80f, 0.64f, 2.66f, 1.20f, 4.6f, 0.90f), BSEC(-2.60f, 0.88f, 2.60f, 1.04f, 4.0f, 0.90f),
-    BSEC(-3.20f, 1.32f, 2.52f, 0.70f, 3.4f, 0.92f), BSEC(-3.75f, 1.74f, 2.44f, 0.40f, 3.0f, 0.95f),
-    BSEC(-4.40f, 1.90f, 2.40f, 0.29f, 2.6f, 1.00f), BSEC(-7.00f, 2.00f, 2.36f, 0.20f, 2.4f, 1.00f),
-    BSEC(-10.20f, 2.08f, 2.33f, 0.13f, 2.2f, 1.00f), BSEC(-10.60f, 2.10f, 2.32f, 0.11f, 2.2f, 1.00f),
-  };
-  loft(&f, &lf, BODY, (int)(sizeof BODY / sizeof BODY[0]), 36, 0.22f, heli_body_col, &hc);
-  // The engine cowling and transmission fairing on the cabin roof.
-  static const lsec_t COWL[] = {
-    BSEC(1.50f, 2.50f, 2.86f, 0.40f, 3.0f, 0.80f), BSEC(1.00f, 2.50f, 3.12f, 0.60f, 4.0f, 0.80f),
-    BSEC(-0.60f, 2.50f, 3.18f, 0.64f, 4.5f, 0.82f), BSEC(-2.10f, 2.50f, 3.08f, 0.56f, 4.0f, 0.82f),
-    BSEC(-3.00f, 2.45f, 2.80f, 0.34f, 3.0f, 0.85f),
-  };
-  loft(&f, &lf, COWL, (int)(sizeof COWL / sizeof COWL[0]), 28, 0.18f, heli_cowl_col, &hc);
-  // Exhausts, angled up and out of the cowling's tail.
-  mat_set(0.85f, 0.3f);
-  for (int sd = -1; sd <= 1; sd += 2) {
-    v3 a = PF(&f, -2.30f, (float)sd * 0.30f, 2.92f), b = PF(&f, -2.95f, (float)sd * 0.46f, 3.12f);
-    ptaper(a, b, 0.12f, 0.15f, 12, soot, 0);
-    pcyl(b, v3_norm(v3_sub(b, a)), 0.105f, 0.01f, 12, rgb(0.02f, 0.02f, 0.02f));
-  }
-  // The mast, the swashplate, the hub and the tail gearbox (the blades turn).
-  mat_set(0.35f, 0.8f);
-  pcyl(PF(&f, 0.0f, 0.0f, 3.32f), (v3){{0, 1, 0}}, 0.12f, 0.16f, 14, stl);
-  pcyl(PF(&f, 0.0f, 0.0f, 3.24f), (v3){{0, 1, 0}}, 0.30f, 0.035f, 18, stl);
-  pcyl(PF(&f, 0.0f, 0.0f, 3.52f), (v3){{0, 1, 0}}, 0.20f, 0.06f, 14, dk);
-  pball(PF(&f, -10.72f, 0.0f, 3.42f), 0.16f, pr->col);
-  // The FIN, swept and tapering, lofted upward; the stabiliser across the boom.
-  {
-    lfr_t vf = {{{0, 1, 0}}, f.L, f.F};
-    static const lsec_t FIN[] = {
-      {2.22f, 0.0f, -10.15f, 0.07f, 0.62f, 2.4f, 1.0f}, {3.10f, 0.0f, -10.55f, 0.06f, 0.46f, 2.4f, 1.0f},
-      {4.25f, 0.0f, -11.00f, 0.045f, 0.30f, 2.4f, 1.0f},
-    };
-    loft(&f, &vf, FIN, 3, 16, 0.05f, heli_plain_col, &hc);
-    static const lsec_t STAB[] = {
-      {-1.45f, 0.0f, 2.20f, 0.30f, 0.035f, 2.4f, 1.0f}, {1.45f, 0.0f, 2.20f, 0.30f, 0.035f, 2.4f, 1.0f},
-    };
-    lfr_t sf = {f.L, f.F, {{0, 1, 0}}};
-    pfr_t sfr = f;
-    sfr.o = PF(&f, -7.70f, 0.0f, 0.0f);
-    loft(&sfr, &sf, STAB, 2, 14, 0.06f, heli_plain_col, &hc);
-  }
-  // SKIDS: two tubes with upturned toes, on two bowed cross tubes.
-  mat_set(0.4f, 0.7f);
-  for (int sd = -1; sd <= 1; sd += 2) {
-    float bs = (float)sd * 1.34f;
-    ptaper(PF(&f, -2.80f, bs, 0.07f), PF(&f, 2.55f, bs, 0.07f), 0.05f, 0.05f, 10, stl, 1);
-    ptaper(PF(&f, 2.55f, bs, 0.07f), PF(&f, 3.00f, bs, 0.30f), 0.05f, 0.045f, 10, stl, 1);
-    for (int k = 0; k < 2; k++) {
-      float a = k ? 1.55f : -1.45f;
-      ptaper(PF(&f, a, bs, 0.07f), PF(&f, a, (float)sd * 1.22f, 0.50f), 0.05f, 0.05f, 10, stl, 1);
-      ptaper(PF(&f, a, (float)sd * 1.22f, 0.50f), PF(&f, a, (float)sd * 0.70f, 0.64f), 0.05f, 0.05f, 10, stl, 1);
-    }
-    pbox(&f, -0.20f, 0.25f, (float)sd * 1.30f, (float)sd * 1.42f, 0.30f, 0.33f, stl);   // boarding step
-    // The cabin door rail and handle, the cockpit door handle.
-    mat_set(0.5f, 0.6f);
-    pbox(&f, -1.60f, 1.30f, (float)sd * 1.185f, (float)sd * 1.215f, 2.40f, 2.44f, dk);
-    pbox(&f, 2.30f, 2.42f, (float)sd * 1.18f, (float)sd * 1.215f, 1.48f, 1.52f, dk);
-    mat_set(0.4f, 0.7f);
-  }
+  pmesh_draw(PM_HELI, f.o, f.F, f.L, pr->col, pr->col2);
   // Lights: red to port, green to starboard, anti-collision beacons, a
   // landing light under the chin. Always lit (SMAT_LED).
   g_scene_smat = SMAT_LED;
@@ -541,11 +157,6 @@ static void prop_heli(const prop_t *pr) {
   g_scene_smat = SMAT_VGLASS;
   pbox(&f, 3.20f, 3.45f, -0.14f, 0.14f, 0.66f, 0.70f, rgb(0.90f, 0.90f, 0.85f));
   g_scene_smat = 0;
-  // Aerials and the pitot probe.
-  mat_set(0.5f, 0.4f);
-  pbox(&f, -1.70f, -1.20f, -0.02f, 0.02f, 2.66f, 2.92f, dk);
-  pbox(&f, -0.60f, -0.40f, -0.02f, 0.02f, 0.42f, 0.63f, dk);
-  ptaper(PF(&f, 4.40f, 0.30f, 1.40f), PF(&f, 4.95f, 0.30f, 1.40f), 0.018f, 0.010f, 6, stl, 1);
 }
 
 // A DATE PALM: a trunk that leans and curves, ringed with old leaf bases and

@@ -1,5 +1,13 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
+## What's new in 0.8.1
+
+- **The helicopter** on Compound is rebuilt: a rounded fuselage with a glazed nose, chin windows and roof windows, cockpit door windows, the cabin door slid open on its rail, an engine cowling with intake screens and exhausts, a swept fin and a stabiliser, skids on bowed cross tubes, steps, aerials and a pitot. Its rotor blades now taper and twist, with a darker leading edge.
+- **The container truck** is rebuilt: a rounded cab-over cab with a split windscreen, a white side stripe and a dark lower skirt, a chrome-barred grille, headlamps, fog lamps, mirrors on arms, a roof visor with amber markers, ten-spoke wheels (dual at the rear), a chrome fuel tank, air tanks, side guards, mud flaps and an exhaust stack.
+- **Cars and pickups:** treaded tyres on smoother wheels, a chrome strip under the side windows, black rubbing strips down the flanks and clearer glass.
+
+0.8.1 plays with 0.8 (same network protocol, 22).
+
 ## What's new in 0.8
 
 - **The full arsenal:** Armory > Loadout now picks from **20 primaries** (M4A4, AK-47, FAMAS, M4A1-S, Galil AR, SG 553, AUG, MAC-10, MP9, MP7, MP5-SD, UMP-45, P90, PP-Bizon, Nova, XM1014, Sawed-Off, MAG-7, M249, Negev), **10 pistols** (P2000, Glock-18, Desert Eagle, USP-S, P250, Five-SeveN, Tec-9, CZ75-Auto, R8 Revolver, Dual Berettas) and **4 snipers** (AWP, SCAR-20, SSG 08, G3SG1), each with its own model, handling and recorded report. `B` switches fire mode where a gun has one.

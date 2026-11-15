@@ -126,10 +126,15 @@ static void rescue_scene(float alpha) {
     v3 d = {{cosf(b), 0, sinf(b)}}, q = {{-sinf(b), 0, cosf(b)}};
     float droop = 0.035f * (1.0f - spin);
     for (int s = 0; s < 6; s++) {            // six spans, each lower toward the tip
-      float r0 = 0.35f + (float)s * 0.95f, r1 = r0 + 0.95f;
-      v3 m = v3_add(c, v3_add(v3_scale(d, (r0 + r1) * 0.5f), (v3){{0, -droop * (r0 + r1) * 0.5f, 0}}));
+      float r0 = 0.35f + (float)s * 0.95f, r1 = r0 + 0.95f, rm = (r0 + r1) * 0.5f;
+      float chord = 0.29f - 0.012f * (float)s, tw = 0.06f - 0.012f * (float)s;   // taper and twist
+      v3 m = v3_add(c, v3_add(v3_scale(d, rm), (v3){{0, -droop * rm, 0}}));
       v3 ex = v3_add(v3_scale(d, 0.475f), (v3){{0, -droop * 0.475f, 0}});
-      scene_box(m, ex, (v3){{0, 0.022f, 0}}, v3_scale(q, 0.27f), s == 5 ? tipc : rc);
+      v3 qa = v3_add(v3_scale(q, chord * 0.62f), (v3){{0, tw * chord, 0}});
+      // the main blade body, and its darker, thicker leading edge
+      scene_box(v3_sub(m, v3_scale(q, chord * 0.18f)), ex, (v3){{0, 0.016f, 0}}, qa, s == 5 ? tipc : rc);
+      scene_box(v3_add(m, v3_scale(q, chord * 0.62f)), ex, (v3){{0, 0.024f, 0}},
+                v3_scale(q, chord * 0.22f), s == 5 ? tipc : v3_scale(rc, 0.7f));
     }
     scene_box(v3_add(c, v3_scale(d, 0.22f)), v3_scale(d, 0.22f), (v3){{0, 0.05f, 0}}, v3_scale(q, 0.09f),
               rgb(0.20f, 0.21f, 0.22f));   // the grip

@@ -65,6 +65,8 @@ static const pmesh_t PMESH[PM_COUNT] = {
   [PM_SUP_MED_I] = {PROP_SUP_MED_I_V, PROP_SUP_MED_I_P, PROP_SUP_MED_I_NP, PROP_SUP_MED_I_K},
   [PM_SUP_AMMO] = {PROP_SUP_AMMO_V, PROP_SUP_AMMO_P, PROP_SUP_AMMO_NP, PROP_SUP_AMMO_K},
   [PM_SUP_AMMO_I] = {PROP_SUP_AMMO_I_V, PROP_SUP_AMMO_I_P, PROP_SUP_AMMO_I_NP, PROP_SUP_AMMO_I_K},
+  [PM_HELI]     = {PROP_HELI_V, PROP_HELI_P, PROP_HELI_NP, PROP_HELI_K},
+  [PM_TRUCK]    = {PROP_TRUCK_V, PROP_TRUCK_P, PROP_TRUCK_NP, PROP_TRUCK_K},
 };
 static void pmesh_draw(int id, v3 o, v3 F, v3 L, v3 paint, v3 paint2) {
   const pmesh_t *m = &PMESH[id];

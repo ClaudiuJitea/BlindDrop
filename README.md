@@ -68,7 +68,7 @@
   <img src="media/wounds.jpg" alt="First person at 22 health: blood smeared round the edges of the screen and a dark red vignette closing in" width="49%">
   <img src="media/outpost_bastion.jpg" alt="Outpost: a HESCO sniper bastion with a ladder and a handrail, an ammunition crate in front of it" width="49%">
   <img src="media/harbor_forklift.jpg" alt="Harbor: a yellow counterbalance forklift with its LPG bottle and forks down beside the container yard" width="49%">
-  <img src="media/foundry_shed.jpg" alt="Foundry: two IBC tote tanks in their steel cages against the shed wall" width="49%">
+  <img src="media/truck.jpg" alt="Compound: a cab-over container truck in orange with a white side stripe, chrome grille bars, mirrors on arms and amber roof lamps" width="49%">
 </p>
 
 Walk up to a **medical station** (a white cabinet under a green cross) when you're hurt, or an
@@ -76,7 +76,7 @@ Walk up to a **medical station** (a white cabinet under a green cross) when you'
 what it holds only if you need it, it empties, and it restocks 25 seconds later. Bots use them too
 when they pass one. Every stair and raised walkway has a handrail; narrow streets are spanned by
 covered rooms and stone arches in the old towns and pipe bridges at the docks and the refinery; the
-yards and streets have forklifts, IBC tanks, sack pallets, benches and power cabinets; Outpost has a
+yards and streets have forklifts, container trucks, IBC tanks, sack pallets, benches and power cabinets; Outpost has a
 climbable HESCO bastion and barracks tents in each side lane, and Bazaar's second house a ladder to
 its roof.
 
@@ -136,7 +136,7 @@ match. A game you host has its own mode and map under **Multiplayer > Host setti
 <p align="center">
   <img src="media/rescue.jpg" alt="A guard at the pen in the sniper scope, the operator still undetected" width="49%">
   <img src="media/hostage.jpg" alt="The operator with the three freed hostages at the landing zone" width="49%">
-  <img src="media/extraction.jpg" alt="The helicopter on its pad, a guard tower behind the rotor" width="49%">
+  <img src="media/extraction.jpg" alt="The olive utility helicopter on its pad at blue hour: glazed nose, the cabin door slid open, skids and tapered rotor blades" width="49%">
   <img src="media/compound.jpg" alt="The compound at blue hour from above the HQ" width="49%">
 </p>
 
@@ -226,7 +226,7 @@ make build/game-x86_64
 ./build/game-x86_64
 ```
 
-`make dist-linux RELEASE_VERSION=v0.8` builds the redistributable binary (needs Docker). The
+`make dist-linux RELEASE_VERSION=v0.8.1` builds the redistributable binary (needs Docker). The
 first-person models come from `tools/build_models.py`, regenerated with
 `blender -b --factory-startup -P tools/build_models.py`; the world props (vehicles, street furniture,
 supply stations) are in `tools/props_models.py` and rebuild on their own with

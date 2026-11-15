@@ -149,7 +149,7 @@ enum { PROP_TRUCK = 1, PROP_CAR, PROP_LAMP, PROP_HELI, PROP_PALM, PROP_BARREL, P
 // PROP_MESH carries the mesh id in `dir` and quarter turns in `ax`.
 enum { PM_SEDAN, PM_PICKUP, PM_DUMPSTER, PM_MOTO, PM_AC, PM_DISH, PM_WTANK, PM_CAFE, PM_TYRES,
        PM_WELL, PM_GENSET, PM_FORKLIFT, PM_SOLAR, PM_IBC, PM_SACKS, PM_BENCH, PM_ELEC,
-       PM_SUP_MED, PM_SUP_MED_I, PM_SUP_AMMO, PM_SUP_AMMO_I, PM_COUNT };
+       PM_SUP_MED, PM_SUP_MED_I, PM_SUP_AMMO, PM_SUP_AMMO_I, PM_HELI, PM_TRUCK, PM_COUNT };
 enum { CAR_SEDAN = 0, CAR_PICKUP = 1, CAR_FLIP = 2 };
 typedef struct { int kind, ax, dir; float x, z; v3 col, col2; float y; } prop_t;   // y: base height
 #define MAX_PROPS 192

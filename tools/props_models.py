@@ -332,7 +332,7 @@ def sedan_like(P, wheel_x, cab, name, pickup=False):
             y0w = max(belt(xf), belt(xr)) + .045
             y1w = cab['win_top']
             gl = patch(bvh, side_win(sgn, lambda y, xf=xf: xf, lambda y, xr=xr: xr, y0w, y1w, .0), 12, 6, .006)
-            finish(gl, (.07, .09, .10), .04, 0, 0, flag=F_GLASS)
+            finish(gl, (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
     def screen(x_of_y, ylo, yhi, wfn, sgnx, lift):
         def fn(u, v):
             y = ylo + (yhi - ylo) * v
@@ -342,11 +342,20 @@ def sedan_like(P, wheel_x, cab, name, pickup=False):
         return fn
     wsw = lambda y: P['roofw'] - .05 + (W * .86 - P['roofw']) * max(0, (top(xa1) - y)) / (top(xa1) - belt(xa0)) * .9
     ylo_ws, yhi_ws = belt(xa0) + .03, top(xa1) - .04
-    finish(patch(bvh, screen(ws_x, ylo_ws, yhi_ws, wsw, 1, 0), 16, 10, .006), (.07, .09, .10), .04, 0, 0, flag=F_GLASS)
+    finish(patch(bvh, screen(ws_x, ylo_ws, yhi_ws, wsw, 1, 0), 16, 10, .006), (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
     if cab['rs_top'] is not None:
         ylo_rs, yhi_rs = belt(xc1) + .04, top(xc0) - .04
         rsw = lambda y: P['roofw'] - .07 + (W * .84 - P['roofw']) * max(0, (top(xc0) - y)) / (top(xc0) - belt(xc1)) * .85
-        finish(patch(bvh, screen(rs_x, ylo_rs, yhi_rs, rsw, -1, 0), 16, 8, .006), (.07, .09, .10), .04, 0, 0, flag=F_GLASS)
+        finish(patch(bvh, screen(rs_x, ylo_rs, yhi_rs, rsw, -1, 0), 16, 8, .006), (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
+    # --- brightwork: a chrome strip along the belt line under the side glass,
+    # and a black rubbing strip down each flank at bumper height
+    xb0 = ws_x(belt(xa0) + .02) - .02
+    xb1 = (rs_x(belt(xc1) + .02) + .05) if cab['rs_top'] is not None else min(x for _, x in cab['windows']) - .02
+    for sgn in (-1, 1):
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((xb1 + (xb0 - xb1) * t, belt(xb1 + (xb0 - xb1) * t) + .022, sgn * 2),
+                                              (0, 0, -sgn)), 18, .018, .0025), CHROME, .18, .95, 0)
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((-P['L'] + .55 + (2 * P['L'] - 1.1) * t, .56, sgn * 2), (0, 0, -sgn)),
+                      22, .045, .004), PLASTIC, .6, 0, 0)
     # --- shut lines: doors, bonnet, boot
     for sgn in (-1, 1):
         for xs_ in cab['door_lines']:
@@ -441,7 +450,7 @@ def sedan_like(P, wheel_x, cab, name, pickup=False):
     for xw in wheel_x:
         for sgn in (-1, 1):
             road_wheel(xw, WY, sgn * (W - .135), sgn, R=cab['tyre_r'], W=.20, spokes=cab['spokes'], name='w',
-                       tread=0, seg=20)
+                       tread=14, seg=28)
     return bvh
 
 def v3s(v): return (v, v, v)
@@ -1281,6 +1290,258 @@ def supply_ammo_item():
         finish(_ry(.645, .665, 0, z, .0285, 14), (.66, .11, .07), .6, 0, 0)
         finish(_ry(.73, .755, 0, z, .013, 10), (.30, .30, .32), .4, .7, 0)
 
+# ---------------------------------------------------------------- lofted shells
+def superloft(secs, n=32, name='sloft', subd=1, cap=True):
+    """A smooth shell through super-ellipse sections along x. secs: (x, yc, hw,
+    hh, e) — centre height, half width (z), half height (y), squareness (2 =
+    ellipse, 4+ = boxy). One subdivision pass, ends capped."""
+    bm = bmesh.new(); rings = []
+    for x, yc, hw, hh, e in secs:
+        ring = []
+        for i in range(n):
+            t = 2 * math.pi * i / n
+            c, s_ = cos(t), sin(t)
+            z = hw * (abs(c) ** (2 / e)) * (1 if c >= 0 else -1)
+            y = hh * (abs(s_) ** (2 / e)) * (1 if s_ >= 0 else -1)
+            ring.append(bm.verts.new((x, yc + y, z)))
+        rings.append(ring)
+    for k in range(len(rings) - 1):
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new((rings[k][i], rings[k][j], rings[k + 1][j], rings[k + 1][i]))
+    if cap:
+        bm.faces.new(rings[0][::-1]); bm.faces.new(rings[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    o = from_bm(bm, name)
+    if subd:
+        m = o.modifiers.new('sd', 'SUBSURF'); m.levels = subd
+        bpy.context.view_layer.objects.active = o; o.select_set(True)
+        bpy.ops.object.modifier_apply(modifier=m.name); o.select_set(False)
+    return o
+
+def _glass_patch(bvh, org_fn, nu, nv, lift=.006, col=(.10, .14, .17)):
+    finish(patch(bvh, org_fn, nu, nv, lift), col, .04, 0, 0, flag=F_GLASS)
+
+# ---------------------------------------------------------------- the helicopter
+def helicopter():
+    """A twin-engine utility helicopter in the instance's paint: a rounded
+    fuselage lofted from the nose through the cabin into a tapering tail boom,
+    the engine and gearbox cowling on the roof with intake screens and
+    exhausts, a glazed nose (windscreen, roof windows, chin bubbles), cockpit
+    door windows, the cabin door slid open on one side, a swept fin, a
+    stabiliser, the tail rotor gearbox and mast, skids on bowed cross tubes,
+    steps, aerials, a pitot, light housings and a yellow tail band. The main
+    and tail rotor BLADES are drawn live (they turn); the hub is here."""
+    clear()
+    DK = (.06, .065, .06); STL = (.24, .25, .26); FR = (.09, .10, .08); IN = (.035, .037, .035)
+    secs = [(4.62, 1.18, .16, .20, 2.2), (4.48, 1.24, .46, .44, 2.4), (4.20, 1.36, .74, .70, 2.6),
+            (3.80, 1.50, .96, .90, 2.9), (3.30, 1.62, 1.10, 1.00, 3.2), (2.70, 1.68, 1.18, 1.04, 3.6),
+            (1.60, 1.70, 1.20, 1.05, 4.0), (0.00, 1.70, 1.21, 1.05, 4.2), (-1.80, 1.71, 1.20, 1.04, 4.0),
+            (-2.55, 1.84, 1.06, .88, 3.4), (-3.20, 2.04, .66, .56, 3.0), (-3.90, 2.18, .36, .34, 2.6),
+            (-5.50, 2.22, .24, .24, 2.4), (-8.00, 2.25, .17, .19, 2.3), (-10.30, 2.27, .12, .15, 2.2),
+            (-10.70, 2.28, .10, .13, 2.2)]
+    body = superloft(secs, 40, 'heli_body', 1)
+    finish(body, (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
+    # engine cowling and transmission fairing on the roof
+    cowl = superloft([(1.75, 2.62, .30, .10, 2.4), (1.40, 2.72, .56, .26, 3.0), (0.60, 2.76, .64, .34, 3.6),
+                      (-1.20, 2.76, .64, .34, 3.6), (-2.30, 2.70, .54, .26, 3.0), (-3.05, 2.55, .26, .10, 2.4)],
+                     28, 'cowl', 1)
+    finish(cowl, (.47, .47, .47), .6, .05, 0, flag=F_PAINT)
+    bvh = _bvh_of([body, cowl])
+    # glazing: windscreen, the chin bubbles, roof windows, cockpit door windows
+    def ws(u, v):
+        y = 1.62 + .78 * v; z = -.86 + 1.72 * u
+        return ((6.0, y, z), (-1, 0, 0))
+    _glass_patch(bvh, ws, 14, 8)
+    for sgn in (-1, 1):
+        def chin(u, v, sgn=sgn):
+            return ((6.0, .98 + .40 * v, sgn * (.14 + .50 * u)), (-1, -.15, 0))
+        _glass_patch(bvh, chin, 6, 5)
+        def door(u, v, sgn=sgn):
+            return ((2.12 + .82 * u, 1.66 + .70 * v, sgn * 3.0), (0, 0, -sgn))
+        _glass_patch(bvh, door, 8, 6)
+        def aft(u, v, sgn=sgn):
+            return ((-2.30 + .55 * u, 1.70 + .50 * v, sgn * 3.0), (0, 0, -sgn))
+        _glass_patch(bvh, aft, 5, 4)
+        # cockpit door frame and the seam behind it
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((2.02, .85 + 1.6 * t, sgn * 3.0), (0, 0, -sgn)), 10, .025, .002), FR, .6, 0, 0)
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((2.98, .90 + 1.5 * t, sgn * 3.0), (0, 0, -sgn)), 10, .025, .002), FR, .6, 0, 0)
+    def roofw(u, v):
+        return ((3.10 + .75 * u, 6.0, -.55 + 1.10 * v), (0, -1, 0))
+    _glass_patch(bvh, roofw, 6, 6, .006, (.08, .16, .14))
+    # the cabin door, slid back along its rail on the right: the dark cabin
+    def cab_in(u, v):
+        return ((-1.40 + 2.25 * u, .92 + 1.36 * v, 3.0), (0, 0, -1))
+    finish(patch(bvh, cab_in, 10, 8, .004), IN, .95, 0, 0)
+    finish(patch(bvh, lambda u, v: ((-3.10 + 1.55 * u, .92 + 1.38 * v, 3.0), (0, 0, -1)), 6, 6, .03),
+           (.47, .47, .47), .6, .05, 0, flag=F_PAINT)                                  # the slid door
+    finish(patch(bvh, lambda u, v: ((-2.75 + .80 * u, 1.62 + .55 * v, 3.0), (0, 0, -1)), 4, 4, .036),
+           (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
+    finish(patch(bvh, lambda u, v: ((-1.40 + 2.25 * u, .92 + 1.36 * v, -3.0), (0, 0, 1)), 8, 6, .004),
+           (.42, .42, .42), .6, .05, 0, flag=F_PAINT)                                  # the closed door, left
+    finish(patch(bvh, lambda u, v: ((-1.10 + .80 * u, 1.62 + .55 * v, -3.0), (0, 0, 1)), 4, 4, .008),
+           (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
+    for sgn in (-1, 1):
+        finish(box((-.70, 2.42, sgn * 1.22), (1.75, .022, .018)), DK, .5, .5, 0)         # door rails
+        finish(box((-.70, .90, sgn * 1.20), (1.75, .018, .018)), DK, .5, .5, 0)
+    # anti-glare panel over the nose, intake screens, cowl seams
+    finish(patch(bvh, lambda u, v: ((3.60 + .70 * u, 6.0, -.55 + 1.10 * v), (0, -1, 0)), 6, 4, .004), (.05, .05, .05), .85, 0, 0)
+    for sgn in (-1, 1):
+        finish(patch(bvh, lambda u, v, sgn=sgn: ((.55 + .55 * u, 2.62 + .26 * v, sgn * 3.0), (0, 0, -sgn)), 4, 3, .004),
+               (.03, .03, .03), .9, .2, 0)
+        for k in range(5):
+            xk = -2.0 + k * .38
+            finish(ribbon(bvh, lambda t, xk=xk, sgn=sgn: ((xk, 2.55 + .40 * t, sgn * 3.0), (0, 0, -sgn)), 6, .012, .0015),
+                   (.08, .09, .07), .8, 0, 0)
+    # exhausts, angled up and out of the cowl's tail
+    for sgn in (-1, 1):
+        ex = tube((-2.25, 2.86, sgn * .30), (-2.95, 3.06, sgn * .48), .13, 14)
+        finish(ex, (.09, .08, .07), .85, .3, 0)
+        finish(tube((-2.94, 3.055, sgn * .475), (-2.97, 3.065, sgn * .48), .11, 14), (.02, .02, .02), .9, 0, 0)
+    # mast, swashplate, hub (the blades are drawn live)
+    finish(_ry(3.05, 3.50, 0, 0, .12, 16), STL, .35, .8, 0)
+    finish(_ry(3.18, 3.24, 0, 0, .32, 20), STL, .35, .8, 0)
+    finish(_ry(3.46, 3.62, 0, 0, .21, 16), DK, .4, .6, 0)
+    for k in range(2):
+        a_ = k * math.pi / 2
+        finish(tube((.30 * cos(a_), 3.20, .30 * sin(a_)), (.18 * cos(a_), 3.50, .18 * sin(a_)), .022, 6), STL, .4, .7, 0)
+    # the tail: fin (swept), stabiliser, the tail rotor gearbox, a yellow band
+    fin = prof_front([(-10.05, 2.20), (-10.62, 2.18), (-11.12, 4.36), (-10.90, 4.42), (-10.30, 2.95)], -.055, .055, 'fin')
+    finish(_bev(fin, .02, 2), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
+    stab = prof([(-1.45, 2.20), (1.45, 2.20), (1.45, 2.26), (-1.45, 2.26)], -7.95, -7.40, 'stab')
+    finish(_bev(stab, .02, 2), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
+    for sgn in (-1, 1):
+        finish(box((-7.65, 2.30, sgn * 1.45), (.30, .14, .015)), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)  # endplates
+    finish(_rz([(-.30, .02), (-.24, .15), (-.10, .16), (-.06, .10)], -10.72, 3.42, 16, 'tgb'), STL, .45, .6, 0)
+    finish(_rz([(-.36, .02), (-.30, .06), (-.24, .06)], -10.72, 3.42, 12), DK, .4, .6, 0)
+    finish(superloft([(-9.70, 2.27, .125, .155, 2.2), (-10.0, 2.27, .123, .153, 2.2)], 24, 'band', 0, False),
+           (.80, .74, .20), .5, 0, 0)
+    # SKIDS: tubes with upturned toes on two bowed cross tubes, steps
+    for sgn in (-1, 1):
+        bs = sgn * 1.34
+        finish(tube((-2.80, .07, bs), (2.55, .07, bs), .05, 12), STL, .4, .7, 0)
+        finish(tube((2.55, .07, bs), (3.00, .30, bs), .048, 12), STL, .4, .7, 0)
+        finish(tube((-2.80, .07, bs), (-2.92, .14, bs), .048, 12), STL, .4, .7, 0)
+        for a_ in (-1.45, 1.55):
+            finish(tube((a_, .07, bs), (a_, .50, sgn * 1.22), .05, 10), STL, .4, .7, 0)
+            finish(tube((a_, .50, sgn * 1.22), (a_, .66, sgn * .70), .05, 10), STL, .4, .7, 0)
+        finish(box((.03, .33, sgn * 1.36), (.24, .015, .07)), STL, .5, .6, 0)          # boarding step
+        finish(box((2.36, 1.50, sgn * 1.215), (.06, .02, .015)), DK, .5, .6, 0)          # door handle
+    # aerials, pitot, light housings (the lamps are drawn lit)
+    finish(prof_front([(-1.70, 2.66), (-1.20, 2.66), (-1.45, 2.95), (-1.62, 2.95)], -.012, .012, 'aer'), DK, .5, .4, 0)
+    finish(prof_front([(-.60, .66), (-.40, .66), (-.50, .40), (-.58, .40)], -.012, .012, 'aer2'), DK, .5, .4, 0)
+    finish(tube((4.40, 1.40, .30), (4.98, 1.40, .30), .016, 6), STL, .4, .7, 0)
+    for sgn in (-1, 1):
+        finish(box((.87, 2.59, sgn * 1.17), (.09, .04, .03)), DK, .5, .4, 0)
+    finish(box((3.32, .67, 0), (.14, .02, .16)), DK, .5, .4, 0)                        # landing light housing
+
+# ---------------------------------------------------------------- the truck
+def truck_cab():
+    """A cab-over container truck without its box (the container is world
+    geometry): a ladder frame and the flat bed with twist-lock corners, a
+    rounded cab in the instance's paint with a raked windscreen, side windows,
+    a grille of chrome bars, headlamps, indicators, a deep bumper with fog
+    lamps and the plate, steps, grab handles, big mirrors on arms, a sun visor
+    and a roof visor with amber marker lamps, wipers; front fenders and wheel
+    arches; a chrome fuel tank, air tanks, battery box, side guards; dual rear
+    wheels on a tandem; mud flaps and tail lamps; the exhaust stack with its
+    heat shield, and air horns."""
+    clear()
+    STL = (.24, .25, .26); DK = (.07, .07, .075); CHR = (.72, .73, .75); YL = (.85, .70, .15)
+    # chassis and bed
+    for sgn in (-1, 1):
+        finish(box((0, .85, sgn * .52), (3.6, .15, .06)), STL, .55, .6, 0)
+    for a_ in (-3.2, -2.1, -1.0, .1, 1.2, 2.3):
+        finish(box((a_, .86, 0), (.05, .08, .52)), STL, .55, .6, 0)
+    finish(box((-.11, 1.12, 0), (3.49, .08, 1.10)), (.18, .19, .20), .6, .4, 0)
+    for sgn in (-1, 1):
+        finish(box((-.11, 1.08, sgn * 1.10), (3.49, .02, .006)), YL, .4, 0, 0)
+        for a_ in (-3.55, 3.30):
+            finish(box((a_, 1.22, sgn * 1.05), (.05, .03, .05)), (.55, .45, .10), .5, .5, 0)  # twist locks
+    # THE CAB: a raked side profile across the width, edges rounded hard
+    cab = prof_front([(3.42, .95), (5.30, .95), (5.38, 1.90), (5.30, 2.70), (5.12, 3.00), (3.42, 3.00)],
+                     -1.15, 1.15, 'cab')
+    _bev(cab, .14, 4)
+    finish(cab, (.5, .5, .5), .32, .1, 0, flag=F_PAINT)
+    bvh = _bvh_of([cab])
+    # windscreen, two panes, and the side windows
+    for sgn in (-1, 1):
+        _glass_patch(bvh, lambda u, v, sgn=sgn: ((7.0, 1.98 + .74 * v, sgn * (.04 + .92 * u)), (-1, 0, 0)), 8, 8, .006)
+        _glass_patch(bvh, lambda u, v, sgn=sgn: ((4.40 + .72 * u, 2.00 + .68 * v, sgn * 3.0), (0, 0, -sgn)), 6, 6, .006)
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((4.34, 1.0 + 1.9 * t, sgn * 3.0), (0, 0, -sgn)), 10, .012, .0015), DK, .7, 0, 0)
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((5.18, 1.0 + 1.7 * t, sgn * 3.0), (0, 0, -sgn)), 10, .012, .0015), DK, .7, 0, 0)
+    finish(box((5.40, 2.35, 0), (.015, .40, .025)), DK, .6, 0, 0)                     # centre pillar
+    # livery: a white stripe down each side and a dark lower skirt round the cab
+    for sgn in (-1, 1):
+        finish(ribbon(bvh, lambda t, sgn=sgn: ((3.50 + 1.75 * t, 1.62, sgn * 3.0), (0, 0, -sgn)), 16, .07, .003),
+               (.90, .90, .86), .35, 0, 0)
+        finish(patch(bvh, lambda u, v, sgn=sgn: ((3.48 + 1.80 * u, .98 + .26 * v, sgn * 3.0), (0, 0, -sgn)), 10, 3, .003),
+               (.14, .15, .16), .5, .2, 0)
+        finish(box((4.62, 1.80, sgn * 1.152), (.07, .012, .006)), CHR, .2, .9, 0)        # door handle
+    # grille: chrome bars on black, badge; headlamps and indicators
+    finish(box((5.39, 1.48, 0), (.02, .28, .74)), (.03, .03, .035), .7, .2, 0)
+    for k in range(6):
+        finish(box((5.41, 1.24 + k * .095, 0), (.012, .016, .72)), CHR, .2, .9, 0)
+    finish(box((5.42, 1.84, 0), (.01, .03, .20)), CHR, .2, .95, 0)
+    for sgn in (-1, 1):
+        finish(_bev(box((5.36, 1.32, sgn * .92), (.04, .12, .16)), .02, 2), DK, .5, .3, 0)
+        finish(box((5.40, 1.32, sgn * .92), (.01, .10, .14)), (.85, .86, .82), .08, .5, 0)
+        finish(box((5.40, 1.50, sgn * .92), (.01, .035, .14)), LENS_A, .15, 0, 0)
+    # bumper, fog lamps, plate, steps, grab handles
+    finish(_bev(box((5.36, .80, 0), (.10, .18, 1.16)), .04, 2), (.16, .17, .18), .45, .4, 0)
+    for sgn in (-1, 1):
+        finish(_rx(5.44, 5.47, .80, sgn * .82, .06, 14), (.92, .90, .80), .1, .2, 0)
+    finish(box((5.465, .76, 0), (.004, .07, .26)), (.92, .82, .20), .4, 0, 0)
+    for sgn in (-1, 1):
+        for y in (.74, 1.00):
+            finish(box((4.70, y, sgn * 1.03), (.36, .02, .10)), STL, .5, .6, 0)
+        finish(tube((4.36, 1.30, sgn * 1.17), (4.36, 2.10, sgn * 1.17), .018, 8), CHR, .2, .9, 0)
+        # mirror on its arm
+        finish(tube((5.15, 2.55, sgn * 1.13), (5.20, 2.55, sgn * 1.36), .02, 8), DK, .4, .6, 0)
+        finish(tube((5.15, 2.05, sgn * 1.13), (5.20, 2.05, sgn * 1.36), .02, 8), DK, .4, .6, 0)
+        finish(_bev(box((5.18, 2.25, sgn * 1.40), (.05, .32, .08)), .02, 2), DK, .5, .3, 0)
+        finish(box((5.13, 2.25, sgn * 1.40), (.004, .29, .065)), (.55, .60, .65), .05, .9, 0)
+    # roof visor with amber markers, sun visor, wipers
+    finish(_bev(box((4.25, 3.12, 0), (.70, .13, .98)), .06, 3), (.45, .45, .45), .32, .1, 0, flag=F_PAINT)
+    for k in range(-2, 3):
+        finish(box((4.95, 3.12, k * .22), (.02, .025, .04)), LENS_A, .15, 0, 0)
+    finish(box((5.25, 2.80, 0), (.12, .015, 1.0)), DK, .5, .2, 0)
+    for z in (-.45, .45):
+        finish(place_o(box((0, 0, 0), (.008, .30, .012)), (5.39, 2.15, z), (math.radians(40), 0, 0)), DK, .6, 0, 0)
+    # wheels: single front, dual rear on a tandem, fenders and arches
+    for sgn in (-1, 1):
+        road_wheel(4.40, .48, sgn * 1.00, sgn, R=.48, W=.30, spokes=10, rimc=(.62, .63, .65), name='tf', tread=16, seg=28)
+        for xw in (-2.00, -3.05):
+            road_wheel(xw, .48, sgn * 1.02, sgn, R=.48, W=.28, spokes=10, rimc=(.62, .63, .65), name='tr', tread=16, seg=28)
+            road_wheel(xw, .48, sgn * .72, sgn, R=.48, W=.28, spokes=10, rimc=(.40, .41, .42), name='tr2', tread=0, seg=20)
+        fen = _rz([(sgn * .84, .56), (sgn * 1.18, .56), (sgn * 1.18, .60), (sgn * .84, .60)], 4.40, .48, 32, 'fen', loop=True)
+        cut(fen, box((4.40, .00, 0), (.8, .46, 2.0)))
+        finish(fen, (.5, .5, .5), .4, .1, 0, flag=F_PAINT)
+        for xw in (-2.00, -3.05):
+            ff = _rz([(sgn * .60, .56), (sgn * 1.18, .56), (sgn * 1.18, .59), (sgn * .60, .59)], xw, .48, 28, 'ffr', loop=True)
+            cut(ff, box((xw, .20, 0), (.8, .72, 2.0)))
+            finish(ff, DK, .6, 0, 0)
+        # mud flaps and tail lamps
+        finish(box((-3.60, .52, sgn * .98), (.01, .32, .18)), DK, .8, 0, 0)
+        finish(box((-3.61, .92, sgn * .85), (.01, .06, .15)), LENS_R, .12, 0, 0)
+        finish(box((-3.61, .92, sgn * .62), (.01, .06, .06)), LENS_A, .12, 0, 0)
+        # side guards
+        for y in (.50, .76):
+            finish(box((.10, y, sgn * 1.04), (1.50, .022, .02)), STL, .5, .6, 0)
+    # fuel tank (chrome), air tanks, battery box
+    finish(_rx(1.60, 2.70, .80, -.86, .24, 20), CHR, .18, .95, 0)
+    for xs_ in (1.62, 2.68):
+        finish(_rx(xs_ - .015, xs_ + .015, .80, -.86, .25, 20), STL, .4, .7, 0)
+    finish(_rx(.40, .80, .78, .80, .13, 14), (.30, .31, .33), .5, .4, 0)
+    finish(_rx(-.60, -.20, .78, .80, .13, 14), (.30, .31, .33), .5, .4, 0)
+    finish(box((1.25, .80, .88), (.25, .18, .17)), DK, .6, 0, 0)
+    # exhaust stack, heat shield, rain cap; air horns
+    finish(_ry(1.70, 3.40, 3.30, .92, .065, 14), CHR, .2, .95, 0)
+    finish(_ry(2.00, 2.60, 3.30, .92, .085, 14), STL, .5, .6, 0)
+    finish(place_o(box((0, 0, 0), (.08, .006, .08)), (3.30, 3.41, .92), (0, 0, math.radians(18))), DK, .5, .5, 0)
+    for k in range(2):
+        finish(tube((4.0 + k * .3, 3.30, .35), (4.4 + k * .3, 3.30, .35), .04, 10), CHR, .2, .95, 0)
+
 PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5), (pickup, 'PROP_PICKUP', 8.0, .5),
                (dumpster, 'PROP_DUMPSTER', 4.0, .3), (motorbike, 'PROP_MOTO', 4.0, .2),
                (ac_unit, 'PROP_AC', 2.0, .15), (sat_dish, 'PROP_DISH', 2.0, .15),
@@ -1290,4 +1551,5 @@ PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5
                (ibc_tote, 'PROP_IBC', 2.0, .2), (sack_pallet, 'PROP_SACKS', 2.0, .15),
                (bench, 'PROP_BENCH', 2.0, .15), (elec_cabinet, 'PROP_ELEC', 2.0, .15),
                (supply_med, 'PROP_SUP_MED', 4.0, .15), (supply_med_item, 'PROP_SUP_MED_I', 2.0, .10),
-               (supply_ammo, 'PROP_SUP_AMMO', 4.0, .15), (supply_ammo_item, 'PROP_SUP_AMMO_I', 2.0, .08)]
+               (supply_ammo, 'PROP_SUP_AMMO', 4.0, .15), (supply_ammo_item, 'PROP_SUP_AMMO_I', 2.0, .08),
+               (helicopter, 'PROP_HELI', 16.0, .5), (truck_cab, 'PROP_TRUCK', 8.0, .4)]
