@@ -121,8 +121,9 @@ static void prop_truck(const prop_t *pr) {
 
 // THE CAR: a saloon or a single-cab pickup, modelled in Blender
 // (tools/props_models.py) in the footprint car() / pickup_truck() gave its
-// collision — a lofted, subdivided body with wheelhouses, flush glass on the
-// skin, shut lines, lamps, grille, mirrors and alloy wheels — and placed whole.
+// collision — a hard-surface body cut from side, plan and front profiles, a
+// separate glasshouse with framed panes, lined wheelhouses, recessed lamp
+// bands, bumpers, shut lines, mirrors and alloy wheels — and placed whole.
 static void prop_car(const prop_t *pr) {
   v3 F = pr->ax ? (v3){{0, 0, 1}} : (v3){{1, 0, 0}};
   v3 L = pr->ax ? (v3){{1, 0, 0}} : (v3){{0, 0, 1}};
@@ -149,11 +150,11 @@ static void prop_heli(const prop_t *pr) {
   // landing light under the chin. Always lit (SMAT_LED).
   g_scene_smat = SMAT_LED;
   mat_set(0.3f, 0.0f);
-  pbox(&f, 0.80f, 0.95f, -1.19f, -1.15f, 2.56f, 2.62f, rgb(0.95f, 0.10f, 0.06f));
-  pbox(&f, 0.80f, 0.95f, 1.15f, 1.19f, 2.56f, 2.62f, rgb(0.10f, 0.95f, 0.25f));
+  pbox(&f, 0.80f, 0.95f, -1.10f, -1.07f, 2.42f, 2.48f, rgb(0.95f, 0.10f, 0.06f));   // on the housings
+  pbox(&f, 0.80f, 0.95f, 1.07f, 1.10f, 2.42f, 2.48f, rgb(0.10f, 0.95f, 0.25f));
   pbox(&f, -1.10f, -0.90f, -0.08f, 0.08f, 3.13f, 3.20f, rgb(0.95f, 0.12f, 0.06f));
-  pbox(&f, -11.08f, -10.95f, -0.05f, 0.05f, 4.25f, 4.32f, rgb(0.95f, 0.12f, 0.06f));
-  pbox(&f, -10.62f, -10.58f, -0.05f, 0.05f, 2.18f, 2.26f, rgb(0.92f, 0.92f, 0.88f));
+  pbox(&f, -11.10f, -10.98f, -0.04f, 0.04f, 4.42f, 4.49f, rgb(0.95f, 0.12f, 0.06f));   // fin tip
+  pbox(&f, -10.82f, -10.77f, -0.04f, 0.04f, 2.24f, 2.31f, rgb(0.92f, 0.92f, 0.88f));   // boom end
   g_scene_smat = SMAT_VGLASS;
   pbox(&f, 3.20f, 3.45f, -0.14f, 0.14f, 0.66f, 0.70f, rgb(0.90f, 0.90f, 0.85f));
   g_scene_smat = 0;

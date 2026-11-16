@@ -100,44 +100,31 @@ typedef struct {
   v3 hot, cool, hhot, hcool;
   int wake;
 } tracer_look_t;
+// CS2-STYLE (2026-11-15): a SHORT, THIN, FAST streak in one pale warm
+// yellow-white for everyone — a flick of light along the line, not a long
+// coloured bolt. Every shot still draws one. Per weapon only the length,
+// speed, width and brightness differ (the magnum's a touch longer, hotter and
+// quicker; the pistol's the shortest); the sniper keeps its heat wake.
+#define TR_HOT   {{1.55f, 1.45f, 1.12f}}
+#define TR_COOL  {{1.30f, 1.08f, 0.66f}}
+#define TR_HHOT  {{0.26f, 0.23f, 0.15f}}
+#define TR_HCOOL {{0.15f, 0.12f, 0.06f}}
 static const tracer_look_t TRACER_LOOK[3] = {
-  [WPN_AR] = {3.4f, 9.0f, 0.85f, 1.00f, 1.00f,
-              {{1.65f, 1.36f, 0.92f}}, {{1.10f, 0.50f, 0.14f}},
-              {{0.46f, 0.28f, 0.11f}}, {{0.22f, 0.09f, 0.03f}}, 0},
-  [WPN_SR] = {5.2f, 14.0f, 1.00f, 1.35f, 1.30f,
-              {{1.90f, 1.78f, 1.48f}}, {{1.45f, 0.86f, 0.36f}},
-              {{0.52f, 0.40f, 0.24f}}, {{0.30f, 0.15f, 0.06f}}, 66},
-  [WPN_PT] = {2.8f, 6.0f, 0.80f, 0.90f, 0.90f,
-              {{1.60f, 1.12f, 0.58f}}, {{1.00f, 0.36f, 0.08f}},
-              {{0.44f, 0.22f, 0.07f}}, {{0.20f, 0.06f, 0.02f}}, 0},
+  [WPN_AR] = {7.0f, 2.2f, 0.10f, 0.55f, 1.00f, TR_HOT, TR_COOL, TR_HHOT, TR_HCOOL, 0},
+  [WPN_SR] = {9.0f, 3.5f, 0.14f, 0.70f, 1.20f, TR_HOT, TR_COOL, TR_HHOT, TR_HCOOL, 66},
+  [WPN_PT] = {5.5f, 1.6f, 0.08f, 0.50f, 0.90f, TR_HOT, TR_COOL, TR_HHOT, TR_HCOOL, 0},
 };
+#undef TR_HOT
+#undef TR_COOL
+#undef TR_HHOT
+#undef TR_HCOOL
 static const tracer_look_t *tracer_look(int wpn) {
   return &TRACER_LOOK[wpn == WPN_SR ? WPN_SR : wpn == WPN_PT ? WPN_PT : WPN_AR];
 }
-// HOSTILE FIRE BURNS GREEN. The insurgent's AK-pattern rounds carry the green
-// tracer compound real 7.62x39 does, and ours the orange-red of 5.56 — so a
-// line of fire crossing the screen says WHO fired it before the shooter is
-// found, which in a crossfire is the whole question. Same timing, width and
-// wake per weapon as the friendly look (the round is the same round to the
-// sim); only the four colours change, at the same brightness so the VFX
-// hierarchy holds. Hostile = drawn as an insurgent from this seat (fig_ins_of).
+// One colour for both sides, as in CS2 (hostile rounds used to burn green).
 static const tracer_look_t *tracer_look_side(int wpn, int src) {
-  static tracer_look_t hostile[3];
-  static int built;
-  if (!built) {
-    for (int w = 0; w < 3; w++) {
-      hostile[w] = TRACER_LOOK[w];
-      float k = w == WPN_SR ? 1.12f : w == WPN_PT ? 0.92f : 1.0f;
-      hostile[w].hot   = v3_scale((v3){{1.05f, 1.62f, 0.92f}}, k);
-      hostile[w].cool  = v3_scale((v3){{0.28f, 1.00f, 0.24f}}, k);
-      hostile[w].hhot  = v3_scale((v3){{0.20f, 0.44f, 0.14f}}, k);
-      hostile[w].hcool = v3_scale((v3){{0.05f, 0.18f, 0.04f}}, k);
-    }
-    built = 1;
-  }
-  const tracer_look_t *tl = tracer_look(wpn);
-  if (src >= 0 && src != g_local_ent && fig_ins_of(src)) return &hostile[tl - TRACER_LOOK];
-  return tl;
+  (void)src;
+  return tracer_look(wpn);
 }
 // How long each gun's muzzle star burns. The brake on the magnum throws a
 // blast that is visibly longer than the rifle's flash hider lets out.

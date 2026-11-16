@@ -270,259 +270,6 @@ def classify_split(o, rules, name):
     bpy.data.objects.remove(o)
     return objs
 
-# ---------------------------------------------------------------- the saloon
-SEDAN_P = dict(L=2.115, W=.925, plan_e=7.0, roofw=.66, roof=1.445,
-               sill=piecewise([(-2.12, .36), (-1.95, .28), (-1.70, .25), (1.70, .25), (1.95, .28), (2.12, .37)]),
-               belt=piecewise([(-2.12, .86), (-1.30, .925), (0.95, .885), (2.12, .70)]),
-               deck=piecewise([(-2.12, .80), (-1.95, .90), (-1.30, .925), (-1.20, .93),
-                               (0.95, .88), (1.70, .80), (2.0, .73), (2.12, .64)]),
-               top=piecewise([(-2.2, 0), (-1.36, .93), (-0.72, 1.415), (-0.55, 1.44), (0.25, 1.445),
-                              (0.42, 1.40), (0.98, .885), (2.2, 0)]))
-
-def sedan_like(P, wheel_x, cab, name, pickup=False):
-    """Shared by the saloon and the pickup: body, arches, glass, lamps, trim, wheels."""
-    xs = stations(P['L'], 26)
-    body = body_loft(xs, lambda x: car_section(x, P), name + '_body')
-    WY = cab.get('wy', .33); WR = cab['tyre_r'] + .052
-    arches(body, wheel_x, WR + .02, WY, P['W'])
-    bed = None
-    if pickup:
-        # the load bed: a tub cut down into the deck behind the cab
-        bx0, bx1 = -P['L'] + .06, cab['bed_front']
-        bed = box(((bx0 + bx1) / 2, cab['bed_floor'] + .70, 0), ((bx1 - bx0) / 2, .70, P['W'] * .87))
-        cut(body, bed)
-    belt, top, deck = P['belt'], P['top'], P['deck']
-    xa0, xa1 = cab['ws_base'], cab['ws_top']            # windscreen: base x and top x
-    xc0, xc1 = cab['rs_top'], cab['rs_base']            # rear screen: top x and base x
-    def ws_x(y):  # windscreen x at height y (linear between base and top)
-        t = (y - belt(xa0)) / (top(xa1) - belt(xa0)); return xa0 + (xa1 - xa0) * t
-    def rs_x(y):
-        t = (y - belt(xc1)) / (top(xc0) - belt(xc1)); return xc1 + (xc0 - xc1) * t
-    def rules(c, n):
-        x, y, z = c.x, c.y, abs(c.z)
-        # arch liners and the floor pan
-        for xw in wheel_x:
-            if (x - xw) ** 2 + (y - WY) ** 2 < (WR + .028) ** 2 and z < P['W'] - .005:
-                return (TRIM, .95, 0.0, 0)
-        if n.y < -.7 and y < .40: return (TRIM, .9, 0.0, 0)
-        if pickup and bx_in(x) and z < P['W'] * .875 and y > cab['bed_floor'] - .01 and y < deck(x) - .01:
-            return ((.10, .10, .105), .85, 0.0, 0)    # the bed's liner
-        # THE GLASSHOUSE UNDER THE GLASS IS BLACK: the glass patches are a chord
-        # surface over a curved skin, so any paint between them would show
-        # through as red flecks; black reads as the seal and the blacked pillars.
-        if y > belt(x) + .03 and y < top(x) - .035 and n.y < .80 and top(x) > deck(x) + .05:
-            return (TRIM, .55, 0.0, 0)
-        return ((.5, .5, .5), .24, 0.0, F_PAINT)
-    def bx_in(x): return pickup and x < cab['bed_front'] + .02
-    parts = classify_split(body, rules, name + '_skin')
-    bvh = _bvh_of(list(parts.values()))
-    W = P['W']
-    # --- glass: side windows, windscreen, rear screen, each in a black seal
-    def side_win(sgn, x0f, x1f, ylo, yhi, lift):
-        def fn(u, v):
-            y = ylo + (yhi - ylo) * v
-            xf = min(x0f(y), ws_x(y) - .075)
-            xr = max(x1f(y), rs_x(y) + .09) if cab['rs_top'] is not None else x1f(y)
-            x = xr + (xf - xr) * u
-            return ((x, y, sgn * 2.0), (0, 0, -sgn))
-        return fn
-    for sgn in (-1, 1):
-        for (xf, xr) in cab['windows']:
-            ylo = lambda x: belt(x)
-            y0w = max(belt(xf), belt(xr)) + .045
-            y1w = cab['win_top']
-            gl = patch(bvh, side_win(sgn, lambda y, xf=xf: xf, lambda y, xr=xr: xr, y0w, y1w, .0), 12, 6, .006)
-            finish(gl, (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
-    def screen(x_of_y, ylo, yhi, wfn, sgnx, lift):
-        def fn(u, v):
-            y = ylo + (yhi - ylo) * v
-            w = wfn(y)
-            z = -w + 2 * w * u
-            return ((x_of_y(y) + sgnx * 1.5, y, z), (-sgnx, 0, 0))
-        return fn
-    wsw = lambda y: P['roofw'] - .05 + (W * .86 - P['roofw']) * max(0, (top(xa1) - y)) / (top(xa1) - belt(xa0)) * .9
-    ylo_ws, yhi_ws = belt(xa0) + .03, top(xa1) - .04
-    finish(patch(bvh, screen(ws_x, ylo_ws, yhi_ws, wsw, 1, 0), 16, 10, .006), (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
-    if cab['rs_top'] is not None:
-        ylo_rs, yhi_rs = belt(xc1) + .04, top(xc0) - .04
-        rsw = lambda y: P['roofw'] - .07 + (W * .84 - P['roofw']) * max(0, (top(xc0) - y)) / (top(xc0) - belt(xc1)) * .85
-        finish(patch(bvh, screen(rs_x, ylo_rs, yhi_rs, rsw, -1, 0), 16, 8, .006), (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
-    # --- brightwork: a chrome strip along the belt line under the side glass,
-    # and a black rubbing strip down each flank at bumper height
-    xb0 = ws_x(belt(xa0) + .02) - .02
-    xb1 = (rs_x(belt(xc1) + .02) + .05) if cab['rs_top'] is not None else min(x for _, x in cab['windows']) - .02
-    for sgn in (-1, 1):
-        finish(ribbon(bvh, lambda t, sgn=sgn: ((xb1 + (xb0 - xb1) * t, belt(xb1 + (xb0 - xb1) * t) + .022, sgn * 2),
-                                              (0, 0, -sgn)), 18, .018, .0025), CHROME, .18, .95, 0)
-        finish(ribbon(bvh, lambda t, sgn=sgn: ((-P['L'] + .55 + (2 * P['L'] - 1.1) * t, .56, sgn * 2), (0, 0, -sgn)),
-                      22, .045, .004), PLASTIC, .6, 0, 0)
-    # --- shut lines: doors, bonnet, boot
-    for sgn in (-1, 1):
-        for xs_ in cab['door_lines']:
-            finish(ribbon(bvh, lambda t, xs_=xs_: ((xs_, .30 + t * (belt(xs_) - .30 + .02), sgn * 2), (0, 0, -sgn)), 10, .006, .0012),
-                   v3s(.03), .7, 0, 0)
-        # the door bottoms
-        finish(ribbon(bvh, lambda t: ((cab['door_lines'][0] + (cab['door_lines'][-1] - cab['door_lines'][0]) * t, .31, sgn * 2), (0, 0, -sgn)), 12, .006, .0012),
-               v3s(.03), .7, 0, 0)
-        # handles
-        for xh in cab['handles']:
-            p, n = _hit(bvh, (xh, belt(xh) - .09, sgn * 2), (0, 0, -sgn))
-            if p is not None:
-                h = rbox(.065, .011, .012, .005)
-                finish(oriented(h, p + n * .006, n.normalized()), CHROME, .25, .9, 0)
-        # mirror: a stalk off the door's front corner and a housing
-        xm = cab['mirror_x']
-        p, n = _hit(bvh, (xm, belt(xm) + .07, sgn * 2), (0, 0, -sgn))
-        if p is not None:
-            st = rbox(.03, .02, .05, .008); st.location = (p.x, p.y, p.z + sgn * .04)
-            bpy.context.view_layer.objects.active = st; st.select_set(True)
-            bpy.ops.object.transform_apply(location=True); st.select_set(False)
-            finish(st, TRIM, .5, 0, 0)
-            hs = rbox(.05, .055, .09, .025); hs.location = (p.x - .02, p.y + .03, p.z + sgn * .13)
-            bpy.context.view_layer.objects.active = hs; hs.select_set(True)
-            bpy.ops.object.transform_apply(location=True); hs.select_set(False)
-            finish(hs, (.5, .5, .5), .24, 0, 0, flag=F_PAINT)
-            mg = box((p.x - .072, p.y + .03, p.z + sgn * .13), (.002, .045, .075))
-            finish(mg, (.55, .6, .65), .05, .9, 0)
-        # side repeater on the front wing
-        p, n = _hit(bvh, (P['L'] - .55, belt(P['L'] - .55) - .12, sgn * 2), (0, 0, -sgn))
-        if p is not None:
-            finish(oriented(rbox(.012, .012, .03, .005), p + n * .003, n), LENS_A, .2, 0, 0)
-    for xs_ in cab['deck_lines']:
-        finish(ribbon(bvh, lambda t, xs_=xs_: ((xs_, 3.0, -W * .86 + 2 * W * .86 * t), (0, -1, 0)), 14, .006, .0012),
-               v3s(.03), .7, 0, 0)
-    # --- lamps, grille, plates on the nose and the tail
-    L = P['L']
-    # wrap-round rubbing strips on both bumpers, and a lower valance in black
-    for e in (-1, 1):
-        for yy, wdt, colr in ((cab['bump_y'], .05, PLASTIC), (.30, .07, PLASTIC)):
-            def wrap(t, e=e, yy=yy):
-                th = (t * 2 - 1) * math.radians(84)
-                cx = e * (L - .75)
-                d = Vector((e * math.cos(th), 0, math.sin(th)))
-                return ((cx + d.x * 3, yy, d.z * 3), (-d.x, 0, -d.z))
-            finish(ribbon(bvh, wrap, 16, wdt, .004), colr, .6, 0, 0)
-    for sgn in (-1, 1):
-        # headlamp: a dark housing, a clear lens and a chrome reflector behind it
-        for zz, ww, col in ((.62, .17, LENS_W),):
-            p, n = _hit(bvh, (3.0, cab['head_y'], sgn * zz), (-1, 0, 0))
-            if p is not None:
-                finish(oriented(rbox(.03, .065, ww, .02), p - n * .012, n), TRIM, .5, 0, 0)
-                finish(oriented(rbox(.03, .055, ww - .02, .018), p + n * .004, n), (.80, .82, .82), .08, .6, 0)
-                finish(oriented(lathe_z([(0, .035), (.012, .03)], 0, 0, 1, 16), p + n * .012 + Vector((0, 0, -sgn * .07)), n),
-                       (.96, .96, .92), .05, .2, 0)
-        p, n = _hit(bvh, (3.0, cab['head_y'] - .10, sgn * .78), (-1, 0, 0))
-        if p is not None: finish(oriented(rbox(.02, .022, .07, .01), p, n), LENS_A, .2, 0, 0)
-        # tail lamp: a red cluster with the white reverse and amber indicator
-        p, n = _hit(bvh, (-3.0, cab['tail_y'], sgn * .66), (1, 0, 0))
-        if p is not None:
-            finish(oriented(rbox(.03, .07, .20, .02), p - n * .010, n), TRIM, .5, 0, 0)
-            finish(oriented(rbox(.03, .06, .19, .018), p + n * .004, n), LENS_R, .12, 0, 0)
-            finish(oriented(rbox(.03, .02, .05, .008), p + n * .010 + Vector((0, -.02, -sgn * .09)), n), LENS_W, .1, 0, 0)
-            finish(oriented(rbox(.03, .02, .05, .008), p + n * .010 + Vector((0, .025, sgn * .08)), n), LENS_A, .1, 0, 0)
-    # grille: a dark mesh in a chrome frame, with a badge
-    p, n = _hit(bvh, (3.0, cab['grille_y'], 0), (-1, 0, 0))
-    if p is not None:
-        finish(oriented(rbox(.03, cab['grille_h'], .36, .015), p - n * .012, n), CHROME, .25, .9, 0)
-        finish(oriented(box((0, 0, 0), (.03, cab['grille_h'] - .012, .345)), p - n * .006, n), (.04, .04, .045), .7, .2, 0)
-        for k in range(4):
-            yy = -cab['grille_h'] + .02 + k * (2 * cab['grille_h'] - .04) / 3
-            finish(oriented(box((0, 0, 0), (.03, .004, .34)), p - n * .004 + Vector((0, yy, 0)), n), (.32, .33, .35), .4, .8, 0)
-        finish(oriented(lathe_z([(0, .028), (.01, .024)], 0, 0, 1, 16), p + n * .012, n), CHROME, .2, .95, 0)
-    for xe, yy in ((3.0, .36), (-3.0, cab['plate_ry'])):
-        p, n = _hit(bvh, (xe, yy, 0), (-1 if xe > 0 else 1, 0, 0))
-        if p is not None:
-            finish(oriented(box((0, 0, 0), (.006, .055, .24)), p + n * .004, n), PLATE, .5, 0, 0)
-            finish(oriented(box((0, 0, 0), (.006, .010, .22)), p + n * .008 + Vector((0, .02, 0)), n), (.15, .25, .55), .5, 0, 0)
-    # wipers on the cowl, an aerial, the exhaust
-    for zz in (-.35, .15):
-        p, n = _hit(bvh, (xa0 + .05, 3, zz), (0, -1, 0))
-        if p is not None:
-            w = box((0, 0, 0), (.012, .006, .26)); w.location = p + Vector((0, .01, .0))
-            w.rotation_euler = (0, .18, 0)
-            bpy.context.view_layer.objects.active = w; w.select_set(True)
-            bpy.ops.object.transform_apply(location=True, rotation=True); w.select_set(False)
-            finish(w, TRIM, .6, 0, 0)
-    ex = lathe_z([(0, .026), (.10, .026)], 0, 0, 1, 12)
-    oriented(ex, (-L + .02, .27, .45), (-1, 0, 0))
-    finish(ex, CHROME, .3, .9, 0)
-    # wheels in the arches
-    for xw in wheel_x:
-        for sgn in (-1, 1):
-            road_wheel(xw, WY, sgn * (W - .135), sgn, R=cab['tyre_r'], W=.20, spokes=cab['spokes'], name='w',
-                       tread=14, seg=28)
-    return bvh
-
-def v3s(v): return (v, v, v)
-
-def sedan():
-    """A four-door saloon, the town's taxi and family car: the 4.2 m hull the
-    game's collision already gives it (code/world/prefabs.c, car())."""
-    clear()
-    P = SEDAN_P
-    cab = dict(ws_base=.97, ws_top=.40, rs_top=-.70, rs_base=-1.33,
-               windows=[(.86, -.10), (-.22, -1.20)], win_top=1.37,
-               door_lines=[.90, -.16, -1.10], deck_lines=[1.02, -1.42], handles=[.40, -.62],
-               mirror_x=.80, head_y=.64, tail_y=.80, grille_y=.55, grille_h=.055, plate_ry=.55, bump_y=.42,
-               tyre_r=.32, spokes=5)
-    sedan_like(P, (-1.25, 1.27), cab, 'sedan')
-    # the B-pillar between the windows, black, both sides
-    bvh = _bvh_of([o for o in bpy.context.collection.objects if 'col' in o])
-    for sgn in (-1, 1):
-        def fn(u, v, sgn=sgn):
-            return ((-.10 - .12 * u, .98 + .38 * v, sgn * 2), (0, 0, -sgn))
-        finish(patch(bvh, fn, 2, 4, .005), TRIM, .5, 0, 0)
-
-# ---------------------------------------------------------------- the pickup
-PICKUP_P = dict(L=2.125, W=.93, plan_e=9.0, roofw=.70, roof=1.66,
-                sill=piecewise([(-2.13, .48), (-1.90, .42), (1.85, .42), (2.13, .46)]),
-                belt=piecewise([(-2.13, 1.00), (-0.45, 1.00), (0.95, .985), (2.13, .90)]),
-                deck=piecewise([(-2.13, 1.00), (-0.46, 1.00), (-0.40, .99), (0.95, .985),
-                                (1.70, .965), (2.0, .93), (2.13, .84)]),
-                top=piecewise([(-2.2, 0), (-0.50, 1.00), (-0.42, 1.62), (-0.30, 1.655),
-                               (0.30, 1.66), (0.48, 1.62), (0.98, .98), (2.2, 0)]))
-
-def pickup():
-    """A single-cab pickup, the workhorse of every desert town: a short cab, a
-    long open bed, a ladder-frame ride height and bigger tyres."""
-    clear()
-    P = PICKUP_P
-    cab = dict(ws_base=.97, ws_top=.47, rs_top=-.41, rs_base=-.47, bed_front=-.52, bed_floor=.66,
-               windows=[(.88, -.34)], win_top=1.57,
-               door_lines=[.92, -.38], deck_lines=[1.02], handles=[-.20],
-               mirror_x=.82, head_y=.76, tail_y=.86, grille_y=.64, grille_h=.09, plate_ry=.58, bump_y=.48,
-               tyre_r=.36, wy=.37, spokes=6)
-    sedan_like(P, (-1.30, 1.32), cab, 'pickup', pickup=True)
-    bvh = _bvh_of([o for o in bpy.context.collection.objects if 'col' in o])
-    W = P['W']
-    # tailgate shut lines and its latch handle; bed rail caps; the step bumper
-    for sgn in (-1, 1):
-        finish(ribbon(bvh, lambda t, sgn=sgn: ((-3, .60 + t * .38, sgn * (W * .87)), (1, 0, 0)), 8, .006, .0012), v3s(.03), .7, 0, 0)
-        cap = box((-1.32, 1.006, sgn * (W * .90)), (.80, .008, .035))
-        finish(cap, PLASTIC, .6, 0, 0)
-    p, n = _hit(bvh, (-3, .90, 0), (1, 0, 0))
-    if p is not None: finish(oriented(rbox(.01, .025, .09, .008), p + n * .006, n), PLASTIC, .5, 0, 0)
-    # the wheel tubs inside the bed, over the rear wheelhouses
-    for sgn in (-1, 1):
-        tub = cyl_z(-1.30, .37, sgn * (W - .34), sgn * (W * .875), .46, 28)
-        cut(tub, box((-1.30, .37 - .5 + cab['bed_floor'] - .37 + .0, 0), (1, .5, 2)))
-        finish(tub, (.10, .10, .105), .85, 0, 0)
-    sb = rbox(.07, .05, W * .82, .02); sb.location = (-P['L'] + .05, .50, 0)
-    bpy.context.view_layer.objects.active = sb; sb.select_set(True)
-    bpy.ops.object.transform_apply(location=True); sb.select_set(False)
-    finish(sb, (.30, .31, .32), .45, .7, 0)
-    # a spare wheel and a jerry can in the bed, a tarp bundle at the front of it
-    finish(cyl_z(-1.55, cab['bed_floor'] + .11, -.40, -.18, .34, 24), P_RUBBER, .92, 0, 0)
-    finish(cyl_z(-1.55, cab['bed_floor'] + .11, -.18, -.17, .22, 20), ALLOY, .35, .8, 0)
-    jc = rbox(.18, .24, .08, .02); jc.location = (-.75, cab['bed_floor'] + .24, .55)
-    bpy.context.view_layer.objects.active = jc; jc.select_set(True)
-    bpy.ops.object.transform_apply(location=True); jc.select_set(False)
-    finish(jc, (.22, .30, .18), .7, 0, 0)
-    tp = rbox(.20, .14, .62, .10); tp.location = (-.78, cab['bed_floor'] + .14, -.12)
-    bpy.context.view_layer.objects.active = tp; tp.select_set(True)
-    bpy.ops.object.transform_apply(location=True); tp.select_set(False)
-    finish(tp, (.42, .40, .30), .9, 0, 0)
-
 def place_o(o, loc=(0, 0, 0), rot=(0, 0, 0)):
     o.location = loc; o.rotation_euler = rot
     bpy.context.view_layer.objects.active = o; o.select_set(True)
@@ -538,6 +285,483 @@ def tube(a, b, r, seg=10, name='tube'):
     bpy.context.view_layer.objects.active = o; o.select_set(True)
     bpy.ops.object.transform_apply(location=True, rotation=True); o.select_set(False)
     return o
+
+# ---------------------------------------------------------------------------
+# THE CARS: a compact early-90s four-door saloon and a single-cab pickup, both
+# built hard-surface. Each body is the INTERSECTION of three prisms (the side
+# profile, the plan with rounded corners and a bowed nose, the front view with
+# its tumblehome), bevelled, so every panel is flat or gently curved and every
+# edge holds a clean highlight. The glasshouse is its own prism on top; glass
+# panes are exact planar polygons on its faces, in black frames. Lamp bands are
+# recessed into nose and tail and the lenses follow the plan; bumpers are
+# separate shells standing proud; wheelhouses are walled and lined.
+# ---------------------------------------------------------------------------
+PBLK = (.025, .025, .028); PGLS = (.12, .17,.21); PPLA = (.075, .075, .08); PPNT = (.5, .5, .5)
+
+def _plan_pts(pl, g=0.0, n=10):
+    """A plan outline (x, z), grown by g. pl: Lf, Lr (nose and tail x), W (half
+    width), rf, rr (corner radii), bowf, bowr (how far the ends bow back)."""
+    Lf, Lr, W = pl['Lf'] + g, pl['Lr'] + g, pl['W'] + g
+    rf, rr = max(.02, pl['rf'] + g), max(.02, pl['rr'] + g)
+    bowf, bowr = pl['bowf'], pl['bowr']
+    bx = lambda x0, z, bow: x0 - bow * (z / W) ** 2
+    pts = []
+    zc = W - rf
+    for i in range(n + 1):
+        z = -zc + 2 * zc * i / n
+        pts.append((bx(Lf, z, bowf), z))
+    xs = bx(Lf, zc, bowf) - rf
+    for i in range(1, n + 1):
+        a = (math.pi / 2) * i / n
+        pts.append((xs + rf * math.cos(a), zc + rf * math.sin(a)))
+    zr = W - rr
+    xr = -bx(Lr, zr, bowr) + rr
+    for i in range(0, n + 1):
+        a = math.pi / 2 + (math.pi / 2) * i / n
+        pts.append((xr + rr * math.cos(a), zr + rr * math.sin(a)))
+    for i in range(1, n):
+        z = zr - 2 * zr * i / n
+        pts.append((-bx(Lr, z, bowr), z))
+    for i in range(0, n + 1):
+        a = math.pi + (math.pi / 2) * i / n
+        pts.append((xr + rr * math.cos(a), -zr + rr * math.sin(a)))
+    for i in range(0, n):
+        a = 1.5 * math.pi + (math.pi / 2) * i / n
+        pts.append((xs + rf * math.cos(a), -zc + rf * math.sin(a)))
+    return pts
+
+def _plan_prism(pl, g=0.0, y0=-.5, y1=2.5):
+    pts = _plan_pts(pl, g)
+    bm = bmesh.new()
+    a = [bm.verts.new((x, y0, z)) for x, z in pts]; b = [bm.verts.new((x, y1, z)) for x, z in pts]
+    bm.faces.new(a); bm.faces.new(b[::-1])
+    for i in range(len(pts)):
+        j = (i + 1) % len(pts)
+        bm.faces.new((a[i], a[j], b[j], b[i]))
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return from_bm(bm, 'plan')
+
+def _isect(o, c):
+    m = o.modifiers.new('is', 'BOOLEAN'); m.operation = 'INTERSECT'; m.object = c; m.solver = 'EXACT'
+    bpy.context.view_layer.objects.active = o; o.select_set(True)
+    bpy.ops.object.modifier_apply(modifier=m.name); o.select_set(False)
+    bpy.data.objects.remove(c)
+    return o
+
+def _plan_x(pl, z, front=True, g=0.0):
+    """Where the plan outline (grown by g) crosses lateral position z."""
+    pts = _plan_pts(pl, g, n=60)
+    cand = [(x, zz) for x, zz in pts if (x > 0) == front]
+    x, _ = min(cand, key=lambda p: abs(p[1] - z) - (1e-4 * p[0] if front else -1e-4 * p[0]))
+    return x
+
+def _plan_skin(pl, g, y0, y1, z0, z1, front, xlim, name='skin'):
+    """A 3 cm shell following the plan grown by g, between heights y0..y1 and
+    lateral z0..z1, on the nose (front) or the tail, beyond |x| > xlim."""
+    o = _plan_prism(pl, g, y0, y1)
+    xa, xb = (xlim, 3.5) if front else (-3.5, -xlim)
+    c = box(((xa + xb) / 2, (y0 + y1) / 2, (z0 + z1) / 2), ((xb - xa) / 2, (y1 - y0) / 2 + .01, (z1 - z0) / 2))
+    _isect(o, c)
+    cut(o, _plan_prism(pl, g - .03, y0 - 1, y1 + 1))
+    return o
+
+def _recess(body, pl, y0, y1, z0, z1, front, xlim, d=.022):
+    xa, xb = (xlim, 3.5) if front else (-3.5, -xlim)
+    c = box(((xa + xb) / 2, (y0 + y1) / 2, (z0 + z1) / 2), ((xb - xa) / 2, (y1 - y0) / 2, (z1 - z0) / 2))
+    cut(c, _plan_prism(pl, -d))
+    cut(body, c)
+
+def _car_body(pl, side, front, bev=.028):
+    o = prof_front(side, -2, 2, 'car_side')
+    _isect(o, _plan_prism(pl))
+    _isect(o, prof(front, -3, 3, 'car_front'))
+    return _bev(o, bev, 3)
+
+def _glasshouse(side, front, bev=.03):
+    g = prof_front(side, -1.5, 1.5, 'gh_side')
+    _isect(g, prof(front, -3, 3, 'gh_front'))
+    return _bev(g, bev, 3)
+
+def _pane(pts, nrm, lift, col, rough, metal, flag=0):
+    """A flat polygon (3D points) stood `lift` off along nrm, 4 mm thick."""
+    bm = bmesh.new(); n = Vector(nrm).normalized()
+    vs = [bm.verts.new(Vector(p) + n * lift) for p in pts]
+    f = bm.faces.new(vs)
+    bm.normal_update()
+    if f.normal.dot(n) < 0: f.normal_flip()
+    o = from_bm(bm, 'pane')
+    o.modifiers.new('sol', 'SOLIDIFY').thickness = .004
+    return finish(o, col, rough, metal, 0, flag=flag)
+
+def _side_pts(s, zf, x0f, x1f, y0, y1, grow=0.0, n=6):
+    """A side-window outline on the plane z = s*zf(y): front edge x0f(y), rear x1f(y)."""
+    P = []
+    for k in range(n + 1):
+        y = y0 - grow + (y1 - y0 + 2 * grow) * k / n
+        P.append((x0f(y) + grow, y, s * zf(y)))
+    for k in range(n + 1):
+        y = y1 + grow - (y1 - y0 + 2 * grow) * k / n
+        P.append((x1f(y) - grow, y, s * zf(y)))
+    return P
+
+def _screen_pts(xf, zf, y0, y1, inset, grow=0.0, n=8):
+    """A windscreen / rear-screen outline on the plane x = xf(y), between the
+    side planes less `inset`."""
+    P = []
+    for k in range(n + 1):
+        y = y0 - grow + (y1 - y0 + 2 * grow) * k / n
+        P.append((xf(y), y, zf(y) - inset + grow))
+    for k in range(n + 1):
+        y = y1 + grow - (y1 - y0 + 2 * grow) * k / n
+        P.append((xf(y), y, -(zf(y) - inset + grow)))
+    return P
+
+def _screen_n(p0, p1, sx):
+    """Outward normal of a screen whose line in side view runs p0 -> p1 (x, y)."""
+    n = Vector((p1[1] - p0[1], -(p1[0] - p0[0]), 0)).normalized()
+    if n.x * sx < 0: n = -n
+    return n
+
+def _glazed(gh, side_glass, screens, frame=.022):
+    """Panes and their black frames. side_glass: [(zf, front_f, rear_f, y0, y1,
+    [(pane front_f, pane rear_f), ...])]; screens: [(xf, zf, y0, y1, inset, nrm)]."""
+    for zf, ff, rf_, y0, y1, panes in side_glass:
+        for s in (-1, 1):
+            nn = Vector((0, -(zf(1.4) - zf(1.2)) / .2, s)).normalized()
+            _pane(_side_pts(s, zf, ff, rf_, y0, y1, frame), nn, .003, PBLK, .5, 0)
+            for pf, pr in panes:
+                _pane(_side_pts(s, zf, pf, pr, y0, y1), nn, .006, PGLS, .03, .1, F_GLASS)
+    for xf, zf, y0, y1, inset, nrm in screens:
+        _pane(_screen_pts(xf, zf, y0, y1, inset, frame), nrm, .003, PBLK, .5, 0)
+        _pane(_screen_pts(xf, zf, y0, y1, inset), nrm, .006, PGLS, .03, .1, F_GLASS)
+
+def _disc(rings, at, nrm, seg=24):
+    """Rings (dz, r) swept round +z, then turned so +z looks along nrm, at `at`."""
+    o = lathe_z(rings, 0, 0, 1, seg, 'disc')
+    q = Vector((0, 0, 1)).rotation_difference(Vector(nrm).normalized())
+    o.rotation_mode = 'QUATERNION'; o.rotation_quaternion = q; o.location = Vector(at)
+    bpy.context.view_layer.objects.active = o; o.select_set(True)
+    bpy.ops.object.transform_apply(location=True, rotation=True); o.select_set(False)
+    return o
+
+def _poly_line(pts):
+    """t in 0..1 -> point along a polyline (by length)."""
+    P = [Vector(p) for p in pts]
+    L = [0.0]
+    for a, b in zip(P, P[1:]): L.append(L[-1] + (b - a).length)
+    def f(t):
+        s = t * L[-1]
+        for k in range(len(P) - 1):
+            if s <= L[k + 1] or k == len(P) - 2:
+                u = (s - L[k]) / max(L[k + 1] - L[k], 1e-6)
+                return P[k] + (P[k + 1] - P[k]) * u
+    return f
+
+def _side_line(bvh, s, pts, w=.0055, col=(.03, .03, .03)):
+    """A shut line (or strip) on the flank along side-view points (x, y)."""
+    f = _poly_line(pts)
+    finish(ribbon(bvh, lambda t: ((f(t).x, f(t).y, s * 2.0), (0, 0, -s)), max(6, len(pts) * 8), w, .0012),
+           col, .7, 0, 0)
+
+def _top_line(bvh, pts, w=.0055, col=(.03, .03, .03)):
+    """A shut line seen from above along plan points (x, z)."""
+    f = _poly_line(pts)
+    finish(ribbon(bvh, lambda t: ((f(t).x, 3.0, f(t).y), (0, -1, 0)), 24, w, .0012), col, .7, 0, 0)
+
+def _wheelhouses(body, WX, WY, W, RA, depth=.30):
+    for xw in WX:
+        for s in (-1, 1):
+            cut(body, cyl_z(xw, WY, s * (W - depth), s * 2.0, RA, 48))
+
+def _mirror(s, xm, ym, zm, scale=1.0):
+    """A black sail at the A-pillar foot, a stalk, a painted shell and its glass."""
+    k = scale
+    finish(place_o(rbox(.07 * k, .045 * k, .012, .008), (xm, ym, zm + s * .01)), PBLK, .5, 0, 0)
+    finish(place_o(rbox(.035 * k, .015 * k, .05 * k, .008), (xm - .01, ym + .005, zm + s * .06 * k)), PBLK, .5, 0, 0)
+    sh = place_o(_bev(box((0, 0, 0), (.05 * k, .055 * k, .095 * k)), .022 * k, 3),
+                 (xm - .015, ym + .03 * k, zm + s * .15 * k), (0, math.radians(-s * 8), 0))
+    finish(sh, PPNT, .26, .1, 0, flag=F_PAINT)
+    mg = place_o(box((0, 0, 0), (.003, .045 * k, .082 * k)), (xm - .015 - .052 * k, ym + .03 * k, zm + s * .152 * k),
+                 (0, math.radians(-s * 8), 0))
+    finish(mg, (.55, .6, .65), .05, .9, 0)
+
+def _handle(bvh, s, x, y):
+    p, nn = _hit(bvh, (x, y, s * 2), (0, 0, -s))
+    if p is not None:
+        finish(oriented(rbox(.006, .014, .07, .006), p + nn * .003, nn), (.05, .05, .055), .4, .3, 0)
+        finish(oriented(rbox(.003, .006, .05, .003), p + nn * .008 + Vector((0, -.004, 0)), nn), CHROME, .2, .9, 0)
+
+def _wipers(xf, y, zs, length=.30):
+    for zz in zs:
+        x = xf(y) + .03
+        finish(place_o(box((0, 0, 0), (.008, .006, length)), (x, y, zz), (0, math.radians(8), 0)), PBLK, .55, 0, 0)
+        finish(place_o(box((0, 0, 0), (.02, .012, .02)), (x + .02, y - .004, zz + length - .02)), PBLK, .55, 0, 0)
+
+# ---------------------------------------------------------------- the saloon
+SD_PL = dict(Lf=2.12, Lr=2.13, W=.905, rf=.24, rr=.20, bowf=.05, bowr=.035)
+SD_WX, SD_WY, SD_TR, SD_RA = (1.27, -1.26), .325, .325, .385
+SD_SIDE = [(-2.06, .27), (2.06, .27), (2.11, .30), (2.12, .34), (2.12, .745), (2.105, .772), (2.05, .787),
+           (1.40, .842), (0.92, .866), (0.86, .885), (0.80, .925), (-1.38, .94), (-1.44, .945), (-1.98, .937),
+           (-2.08, .922), (-2.12, .895), (-2.13, .86), (-2.13, .34), (-2.11, .30)]
+SD_FRONT = [(0, .20), (.84, .20), (.895, .30), (.905, .40), (.905, .64), (.895, .80), (.87, .96), (.80, 1.05),
+            (-.80, 1.05), (-.87, .96), (-.895, .80), (-.905, .64), (-.905, .40), (-.895, .30), (-.84, .20)]
+SD_WS0, SD_WS1 = (.93, .86), (.20, 1.385)       # windscreen base and top (x, y)
+SD_RS0, SD_RS1 = (-1.40, .92), (-.74, 1.385)    # rear screen base and top
+def sd_ws_x(y): return SD_WS0[0] + (y - SD_WS0[1]) * (SD_WS1[0] - SD_WS0[0]) / (SD_WS1[1] - SD_WS0[1])
+def sd_rs_x(y): return SD_RS0[0] + (y - SD_RS0[1]) * (SD_RS1[0] - SD_RS0[0]) / (SD_RS1[1] - SD_RS0[1])
+def sd_gz(y):   return .855 - .155 * max(0.0, (y - .93)) / .43   # side glass plane: half width at y
+
+def sedan():
+    """A compact four-door notchback saloon in the 4.2 m footprint the game's
+    collision gives it (code/world/prefabs.c, car())."""
+    clear()
+    pl = SD_PL; W, WX, WY, TR, RA = pl['W'], SD_WX, SD_WY, SD_TR, SD_RA
+    body = _car_body(pl, SD_SIDE, SD_FRONT)
+    BF = (.585, .735, .865)        # front lamp band: y0, y1, half width
+    BR = (.755, .862, .875)        # tail lamp band
+    PR = (.585, .705, .265)        # rear plate recess
+    _recess(body, pl, BF[0], BF[1], -BF[2], BF[2], True, 1.90)
+    _recess(body, pl, BR[0], BR[1], -BR[2], BR[2], False, 1.93)
+    _recess(body, pl, PR[0], PR[1], -PR[2], PR[2], False, 1.93, .012)
+    _wheelhouses(body, WX, WY, W, RA)
+    def rules(c, n):
+        x, y, z = c.x, c.y, abs(c.z)
+        for xw in WX:
+            if (x - xw) ** 2 + (y - WY) ** 2 < (RA + .006) ** 2 and z < W - .003:
+                return (PBLK, .95, 0.0, 0)
+        for (y0, y1, zz), front in ((BF, True), (BR, False), (PR, False)):
+            if (x > 1.9 if front else x < -1.9) and y0 - .004 < y < y1 + .004 and z < zz + .004:
+                return (PBLK, .55, 0.0, 0)
+        if y < .345: return (PPLA, .8, 0.0, 0)
+        return (PPNT, .26, .1, F_PAINT)
+    parts = classify_split(body, rules, 'sd_skin')
+    gh = _glasshouse([SD_WS0, SD_WS1, (.08, 1.418), (-.62, 1.418), SD_RS1, SD_RS0, (-1.40, .80), (.93, .80)][::-1],
+                     [(-.86, .80), (.86, .80), (.855, .93), (.70, 1.36), (.62, 1.405), (0, 1.425),
+                      (-.62, 1.405), (-.70, 1.36), (-.855, .93)])
+    finish(gh, PPNT, .26, .1, 0, flag=F_PAINT)
+    bvh = _bvh_of(list(parts.values()) + [gh])
+    # GLASS: two door windows a side (the B-pillar blacked out), both screens
+    _glazed(gh, [(sd_gz, lambda y: sd_ws_x(y) - .085, lambda y: sd_rs_x(y) + .085, .955, 1.335,
+                  [(lambda y: sd_ws_x(y) - .105, lambda y: -.215), (lambda y: -.315, lambda y: sd_rs_x(y) + .105)])],
+            [(sd_ws_x, sd_gz, .905, 1.345, .075, _screen_n(SD_WS0, SD_WS1, 1)),
+             (sd_rs_x, sd_gz, .975, 1.345, .085, _screen_n(SD_RS0, SD_RS1, -1))])
+    for s in (-1, 1):                                       # roof drip rails
+        finish(tube((sd_ws_x(1.37) - .02, 1.372, s * .706), (sd_rs_x(1.37) + .02, 1.372, s * .706), .009, 8), PBLK, .5, 0, 0)
+    _wipers(sd_ws_x, .915, (-.38, .12))
+    # FLANKS: door shut lines, handles, rubbing strip, belt finisher, mirrors
+    for s in (-1, 1):
+        _side_line(bvh, s, [(.86, .93), (.865, .60), (.84, .40), (.80, .345)])
+        _side_line(bvh, s, [(-.26, .935), (-.25, .345)])
+        _side_line(bvh, s, [(-1.02, .94), (-1.0, .66), (-.92, .52), (-.86, .40), (-.84, .345)])
+        _side_line(bvh, s, [(.80, .345), (-.84, .345)])
+        for xh in (.40, -.70): _handle(bvh, s, xh, .83)
+        _side_line(bvh, s, [(.82, .60), (-.82, .60)], .038, (.05, .05, .055))
+        finish(tube((sd_ws_x(.945) - .04, .945, s * (sd_gz(.945) + .004)), (sd_rs_x(.945) + .05, .945, s * (sd_gz(.945) + .004)),
+                    .007, 8), CHROME, .2, .9, 0)
+        _mirror(s, .74, .975, s * sd_gz(.975))
+        p, nn = _hit(bvh, (1.62, .70, s * 2), (0, 0, -s))
+        if p is not None: finish(oriented(rbox(.004, .012, .028, .005), p + nn * .002, nn), LENS_A, .15, 0, 0)
+    p, nn = _hit(bvh, (-1.75, .80, 2.0), (0, 0, -1))           # fuel filler flap
+    if p is not None:
+        finish(_disc([(0, .055), (.004, .052)], p - nn * .001, nn, 24), PPNT, .26, .1, 0, flag=F_PAINT)
+        _side_line(bvh, 1, [(-1.75 + .056 * math.cos(k * math.pi / 8), .80 + .056 * math.sin(k * math.pi / 8)) for k in range(17)], .004)
+    _top_line(bvh, [(2.045, -.80), (2.045, .80)])                  # bonnet and boot
+    for s in (-1, 1):
+        _top_line(bvh, [(2.045, s * .80), (1.0, s * .815), (.86, s * .825)])
+        _top_line(bvh, [(-1.45, s * .80), (-2.06, s * .80)])
+    _top_line(bvh, [(-1.45, -.80), (-1.45, .80)])
+    # BUMPERS: painted shells 2.6 cm proud, a black rubbing strip, a black lip
+    for front in (True, False):
+        xa, xb = (1.45, 3.5) if front else (-3.5, -1.45)
+        xw = WX[0] if front else WX[1]
+        o = _plan_prism(pl, .026, .25, .545 if front else .56)
+        _isect(o, box(((xa + xb) / 2, .5, 0), ((xb - xa) / 2, .5, 2)))
+        for s in (-1, 1): cut(o, cyl_z(xw, WY, s * (W - .45), s * 2.0, RA + .012, 48))
+        finish(_bev(o, .02, 3), PPNT, .26, .1, 0, flag=F_PAINT)
+        st = _plan_prism(pl, .038, .405, .450)
+        _isect(st, box(((xa + xb) / 2, .42, 0), ((xb - xa) / 2, .1, 2)))
+        for s in (-1, 1): cut(st, cyl_z(xw, WY, s * (W - .45), s * 2.0, RA + .02, 48))
+        finish(_bev(st, .008, 2), (.05, .05, .055), .55, 0, 0)
+        lp = _plan_prism(pl, .010, .225, .27)
+        _isect(lp, box(((xa + xb) / 2, .25, 0), ((xb - xa) / 2, .1, .78)))
+        finish(_bev(lp, .01, 2), PPLA, .8, 0, 0)
+    # NOSE: twin round headlamps on chrome reflectors, corner indicators, grille
+    y0, y1 = BF[0] + .012, BF[1] - .012
+    for s in (-1, 1):
+        finish(_plan_skin(pl, -.014, y0, y1, *sorted((s * .43, s * .80)), True, 1.9), (.70, .71, .72), .18, .9, 0)
+        for zc in (.52, .70):
+            zz = s * zc; x = _plan_x(pl, zz, True, -.014); nl = (1, 0, .25 * s * (zc / .8))
+            finish(_disc([(0, .056), (.004, .054), (.006, .046)], (x - .004, (y0 + y1) / 2, zz), nl, 28), (.80, .81, .82), .15, .95, 0)
+            finish(_disc([(0, .042), (.005, .040), (.008, .030)], (x - .002, (y0 + y1) / 2, zz), nl, 24), (.97, .97, .94), .05, .1, 0)
+        finish(_plan_skin(pl, -.012, y0, y1, *sorted((s * .815, s * .862)), True, 1.9), LENS_A, .15, 0, 0)
+    for k in range(4):
+        yy = y0 + .012 + k * (y1 - y0 - .024) / 3
+        finish(_plan_skin(pl, -.010, yy - .006, yy + .006, -.40, .40, True, 1.9), (.32, .33, .35), .35, .8, 0)
+    for zz in (-.405, .405):
+        finish(_plan_skin(pl, -.008, y0 - .004, y1 + .004, zz - .008, zz + .008, True, 1.9), CHROME, .2, .9, 0)
+    finish(_disc([(0, .03), (.008, .026)], (_plan_x(pl, 0, True, -.006), (y0 + y1) / 2, 0), (1, 0, 0), 20), CHROME, .2, .95, 0)
+    x = _plan_x(pl, 0, True, .026)
+    finish(box((x - .004, .335, 0), (.006, .052, .24)), PLATE, .5, 0, 0)
+    finish(box((x - .002, .335, -.215), (.006, .045, .02)), (.15, .25, .55), .5, 0, 0)
+    for s in (-1, 1):
+        x = _plan_x(pl, s * .62, True, .026)
+        finish(_disc([(0, .035), (.006, .032)], (x - .002, .33, s * .62), (1, 0, .2 * s), 16), (.85, .85, .80), .1, .2, 0)
+    # TAIL: wrap-round clusters (red, white reverse, amber), garnish, plate, pipe
+    y0, y1 = BR[0] + .010, BR[1] - .010
+    for s in (-1, 1):
+        finish(_plan_skin(pl, -.010, y0, y1, *sorted((s * .40, s * .875)), False, 1.93), LENS_R, .12, 0, 0)
+        finish(_plan_skin(pl, -.006, y0 + .004, (y0 + y1) / 2 - .004, *sorted((s * .40, s * .54)), False, 1.93), LENS_W, .1, 0, 0)
+        finish(_plan_skin(pl, -.006, (y0 + y1) / 2 + .004, y1 - .004, *sorted((s * .76, s * .87)), False, 1.93), LENS_A, .12, 0, 0)
+        for zz in (.56, .75):
+            finish(_plan_skin(pl, -.004, y0, y1, *sorted((s * (zz - .006), s * (zz + .006))), False, 1.93), PBLK, .5, 0, 0)
+    finish(_plan_skin(pl, -.008, y0 + .01, y1 - .01, -.38, .38, False, 1.93), (.06, .06, .065), .3, .4, 0)
+    x = _plan_x(pl, 0, False, -.012)
+    finish(box((x - .003, (PR[0] + PR[1]) / 2, 0), (.004, .052, .24)), PLATE, .5, 0, 0)
+    finish(box((x - .005, (PR[0] + PR[1]) / 2, -.215), (.004, .045, .02)), (.15, .25, .55), .5, 0, 0)
+    finish(_rx(-2.19, -1.95, .235, .52, .026, 14), CHROME, .3, .9, 0)
+    finish(box((0, .265, 0), (1.95, .012, .78)), (.03, .03, .032), .9, 0, 0)          # floor pan
+    for xw in WX:
+        for s in (-1, 1):
+            road_wheel(xw, WY, s * (W - .14), s, R=TR, W=.21, spokes=5, name='w', tread=14, seg=28)
+
+# ---------------------------------------------------------------- the pickup
+PK_PL = dict(Lf=2.12, Lr=2.125, W=.91, rf=.20, rr=.07, bowf=.04, bowr=.0)
+PK_WX, PK_WY, PK_TR, PK_RA = (1.32, -1.30), .365, .365, .43
+PK_SIDE = [(-2.10, .43), (2.06, .43), (2.11, .46), (2.12, .50), (2.12, .925), (2.105, .955), (2.05, .972),
+           (1.40, 1.00), (0.98, 1.015), (0.92, 1.03), (0.86, 1.05), (-2.105, 1.05), (-2.125, 1.03),
+           (-2.125, .47), (-2.115, .44)]
+PK_FRONT = [(0, .30), (.86, .30), (.905, .40), (.91, .50), (.91, 1.0), (.895, 1.08), (.80, 1.20),
+            (-.80, 1.20), (-.895, 1.08), (-.91, 1.0), (-.91, .50), (-.905, .40), (-.86, .30)]
+PK_WS0, PK_WS1 = (.97, 1.00), (.45, 1.605)
+def pk_ws_x(y): return PK_WS0[0] + (y - PK_WS0[1]) * (PK_WS1[0] - PK_WS0[0]) / (PK_WS1[1] - PK_WS0[1])
+def pk_rw_x(y): return -.462 + (y - 1.0) * (.025 / .60)          # the cab's back wall
+def pk_gz(y):   return .875 - .135 * max(0.0, (y - 1.06)) / .52
+BED_X0, BED_X1, BED_FL, BED_Z = -2.07, -.535, .70, .835
+
+def pickup():
+    """A single-cab pickup, the workhorse of every desert town: a short cab, a
+    long open bed, a ladder-frame ride height, chrome bumper, bigger tyres."""
+    clear()
+    pl = PK_PL; W, WX, WY, TR, RA = pl['W'], PK_WX, PK_WY, PK_TR, PK_RA
+    body = _car_body(pl, PK_SIDE, PK_FRONT, .026)
+    cut(body, box(((BED_X0 + BED_X1) / 2, BED_FL + .5, 0), ((BED_X1 - BED_X0) / 2, .5, BED_Z)))
+    BF = (.68, .90, .865)
+    _recess(body, pl, BF[0], BF[1], -BF[2], BF[2], True, 1.90)
+    _wheelhouses(body, WX, WY, W, RA)
+    def rules(c, n):
+        x, y, z = c.x, c.y, abs(c.z)
+        for xw in WX:
+            if (x - xw) ** 2 + (y - WY) ** 2 < (RA + .006) ** 2 and z < W - .003:
+                return (PBLK, .95, 0.0, 0)
+        if x > 1.9 and BF[0] - .004 < y < BF[1] + .004 and z < BF[2] + .004: return (PBLK, .55, 0.0, 0)
+        if BED_X0 - .004 < x < BED_X1 + .004 and y > BED_FL - .004 and z < BED_Z + .004 and n.y < .9 or \
+           BED_X0 < x < BED_X1 and abs(y - BED_FL) < .004 and z < BED_Z:
+            return ((.10, .10, .105), .85, 0.0, 0)
+        if y < .50: return (PPLA, .8, 0.0, 0)
+        return (PPNT, .26, .1, F_PAINT)
+    parts = classify_split(body, rules, 'pk_skin')
+    gh = _glasshouse([PK_WS0, PK_WS1, (.33, 1.64), (-.36, 1.64), (pk_rw_x(1.60), 1.60), (pk_rw_x(.95), .95), (.97, .95)][::-1],
+                     [(-.88, .95), (.88, .95), (.875, 1.06), (.74, 1.58), (.66, 1.63), (0, 1.645),
+                      (-.66, 1.63), (-.74, 1.58), (-.875, 1.06)])
+    finish(gh, PPNT, .26, .1, 0, flag=F_PAINT)
+    bvh = _bvh_of(list(parts.values()) + [gh])
+    _glazed(gh, [(pk_gz, lambda y: pk_ws_x(y) - .085, lambda y: pk_rw_x(y) + .10, 1.085, 1.57,
+                  [(lambda y: pk_ws_x(y) - .105, lambda y: -.10), (lambda y: -.15, lambda y: pk_rw_x(y) + .12)])],
+            [(pk_ws_x, pk_gz, 1.045, 1.58, .075, _screen_n(PK_WS0, PK_WS1, 1)),
+             (pk_rw_x, pk_gz, 1.13, 1.555, .21, Vector((-1, .04, 0)).normalized())])
+    for s in (-1, 1):
+        finish(tube((pk_ws_x(1.59) - .02, 1.592, s * .745), (pk_rw_x(1.59) + .03, 1.592, s * .745), .009, 8), PBLK, .5, 0, 0)
+    _wipers(pk_ws_x, 1.06, (-.40, .10), .32)
+    # FLANKS: one long door, the cab/bed gap, handle, strip, mirror, flares
+    for s in (-1, 1):
+        _side_line(bvh, s, [(.90, 1.05), (.905, .70), (.88, .52), (.85, .50)])
+        _side_line(bvh, s, [(-.38, 1.05), (-.38, .50)])
+        _side_line(bvh, s, [(.85, .50), (-.38, .50)])
+        _side_line(bvh, s, [(-.495, 1.05), (-.495, .44)], .012, (.015, .015, .016))  # the gap between cab and bed
+        _handle(bvh, s, -.22, .95)
+        _side_line(bvh, s, [(.84, .72), (-.36, .72)], .04, (.05, .05, .055))
+        _mirror(s, .80, 1.12, s * pk_gz(1.12), 1.25)
+        for xw in WX:                                   # black wheel-arch flares
+            fz0, fz1 = sorted((s * (W - .05), s * (W + .028)))
+            fl2 = cyl_z(xw, WY, fz0, fz1, RA + .06, 48)
+            cut(fl2, cyl_z(xw, WY, -3, 3, RA - .004, 48))
+            cut(fl2, box((xw, 0, 0), (1, .5, 3)))
+            finish(_bev(fl2, .012, 2), PPLA, .75, 0, 0)
+        p, nn = _hit(bvh, (1.70, .86, s * 2), (0, 0, -s))
+        if p is not None: finish(oriented(rbox(.004, .014, .03, .005), p + nn * .002, nn), LENS_A, .15, 0, 0)
+        # mud flaps behind the rear wheels
+        finish(box((WX[1] - .47, .29, s * (W - .14)), (.006, .16, .13)), PBLK, .8, 0, 0)
+    _top_line(bvh, [(2.045, -.80), (2.045, .80)])
+    for s in (-1, 1): _top_line(bvh, [(2.045, s * .80), (1.0, s * .82), (.93, s * .825)])
+    # BED: rail caps, the wheel tubs, floor ribs, the tailgate
+    for s in (-1, 1):
+        finish(_bev(box(((BED_X0 + BED_X1) / 2 - .02, 1.058, s * (BED_Z + .036)), ((BED_X1 - BED_X0) / 2 + .02, .009, .046)), .006, 2),
+               PPLA, .7, 0, 0)
+        tub = cyl_z(WX[1], WY, *sorted((s * (BED_Z - .26), s * BED_Z)), RA + .035, 40)
+        cut(tub, cyl_z(WX[1], WY, *sorted((s * (BED_Z - .23), s * (BED_Z + .1))), RA + .005, 40))
+        cut(tub, box((WX[1], BED_FL - .5, 0), (1, .5, 3)))
+        finish(_bev(tub, .01, 2), (.10, .10, .105), .85, 0, 0)
+    for k in range(7):
+        zz = -.72 + k * .24
+        finish(box(((BED_X0 + BED_X1) / 2, BED_FL + .008, zz), ((BED_X1 - BED_X0) / 2 - .01, .008, .025)), (.12, .12, .125), .8, .1, 0)
+    p, nn = _hit(bvh, (-3, .92, 0), (1, 0, 0))
+    for s in (-1, 1):
+        finish(ribbon(bvh, lambda t, s=s: ((-3, .48 + t * .56, s * .76), (1, 0, 0)), 8, .006, .0012), (.03, .03, .03), .7, 0, 0)
+    finish(ribbon(bvh, lambda t: ((-3, .48, -.76 + 1.52 * t), (1, 0, 0)), 10, .006, .0012), (.03, .03, .03), .7, 0, 0)
+    if p is not None:
+        finish(oriented(rbox(.012, .03, .11, .01), p + nn * .006, nn), PPLA, .5, 0, 0)
+    for yy in (.62, .80):                                  # pressed ribs across the tailgate
+        finish(ribbon(bvh, lambda t, yy=yy: ((-3, yy, -.68 + 1.36 * t), (1, 0, 0)), 10, .022, .004), PPNT, .26, .1, 0, flag=F_PAINT)
+    # TAIL LAMPS on the corner posts, wrapping round
+    for s in (-1, 1):
+        finish(_plan_skin(pl, .004, .64, .98, *sorted((s * .775, s * .92)), False, 2.035), LENS_R, .12, 0, 0)
+        finish(_plan_skin(pl, .008, .66, .74, *sorted((s * .78, s * .86)), False, 2.035), LENS_W, .1, 0, 0)
+        finish(_plan_skin(pl, .008, .88, .96, *sorted((s * .78, s * .86)), False, 2.035), LENS_A, .12, 0, 0)
+    # REAR STEP BUMPER with a plate in it, a tow hitch, the exhaust
+    rb = _bev(box((-2.17, .43, 0), (.06, .07, .88)), .02, 3)
+    finish(rb, (.62, .63, .64), .3, .85, 0)
+    finish(box((-2.18, .502, 0), (.05, .004, .80)), PBLK, .8, 0, 0)
+    finish(box((-2.234, .43, 0), (.004, .05, .22)), PLATE, .5, 0, 0)
+    finish(box((-2.236, .43, -.20), (.004, .044, .018)), (.15, .25, .55), .5, 0, 0)
+    finish(_rx(-2.30, -2.22, .33, 0, .025, 12), (.25, .25, .27), .5, .7, 0)
+    finish(_rx(-2.15, -1.95, .30, .55, .028, 14), (.35, .34, .33), .5, .6, 0)
+    # NOSE: round headlamps in chrome bezels, a chrome grille, a chrome bumper
+    y0, y1 = BF[0] + .012, BF[1] - .012; ym = (y0 + y1) / 2
+    for s in (-1, 1):
+        finish(_plan_skin(pl, -.010, y0, y1, *sorted((s * .47, s * .80)), True, 1.9), CHROME, .2, .9, 0)
+        finish(_plan_skin(pl, -.007, y0 + .012, y1 - .012, *sorted((s * .485, s * .785)), True, 1.9), PBLK, .5, 0, 0)
+        zz = s * .635; x = _plan_x(pl, zz, True, -.010)
+        nl = (1, 0, .25 * s)
+        finish(_disc([(0, .088), (.006, .086), (.010, .074)], (x - .002, ym, zz), nl, 32), (.80, .81, .82), .15, .95, 0)
+        finish(_disc([(0, .072), (.006, .070), (.014, .055)], (x, ym, zz), nl, 32), (.95, .95, .92), .05, .1, 0)
+        finish(_plan_skin(pl, -.012, y0, y1, *sorted((s * .815, s * .862)), True, 1.9), LENS_A, .15, 0, 0)
+    finish(_plan_skin(pl, -.004, y0 - .006, y1 + .006, -.455, .455, True, 1.9), CHROME, .2, .9, 0)
+    finish(_plan_skin(pl, -.001, y0 + .012, y1 - .012, -.435, .435, True, 1.9), PBLK, .6, 0, 0)
+    for k in range(3):
+        yy = y0 + .04 + k * (y1 - y0 - .08) / 2
+        finish(_plan_skin(pl, .004, yy - .014, yy + .014, -.43, .43, True, 1.9), PPNT, .26, .1, 0, flag=F_PAINT)
+    finish(_disc([(0, .035), (.01, .03)], (_plan_x(pl, 0, True, .004), ym, 0), (1, 0, 0), 20), CHROME, .2, .95, 0)
+    fb = _plan_prism(pl, .045, .46, .625)
+    _isect(fb, box((2.6, .5, 0), (.75, .5, 2)))
+    for s in (-1, 1): cut(fb, cyl_z(WX[0], WY, s * (W - .45), s * 2.0, RA + .065, 48))
+    finish(_bev(fb, .02, 3), (.66, .67, .68), .25, .9, 0)
+    va = _plan_prism(pl, .02, .38, .46)
+    _isect(va, box((2.6, .42, 0), (.75, .2, .80)))
+    finish(_bev(va, .012, 2), PPLA, .8, 0, 0)
+    x = _plan_x(pl, 0, True, .05)
+    finish(box((x + .002, .54, 0), (.004, .052, .24)), PLATE, .5, 0, 0)
+    finish(box((x + .004, .54, -.215), (.004, .045, .02)), (.15, .25, .55), .5, 0, 0)
+    finish(box((0, .43, 0), (1.95, .012, .70)), (.03, .03, .032), .9, 0, 0)        # floor pan
+    for s in (-1, 1):                                      # the ladder frame showing under the sills
+        finish(box((0, .36, s * .45), (1.85, .06, .04)), (.06, .06, .065), .7, .3, 0)
+    # LOAD: a spare wheel, a jerry can, a tarp bundle
+    finish(cyl_z(-1.62, BED_FL + .12, -.45, -.22, .34, 28), P_RUBBER, .92, 0, 0)
+    finish(cyl_z(-1.62, BED_FL + .12, -.22, -.21, .22, 20), ALLOY, .35, .8, 0)
+    finish(place_o(rbox(.18, .24, .08, .02), (-.80, BED_FL + .24, .58)), (.22, .30, .18), .7, 0, 0)
+    finish(place_o(rbox(.20, .14, .55, .10), (-.82, BED_FL + .14, -.15)), (.42, .40, .30), .9, 0, 0)
+    for xw in WX:
+        for s in (-1, 1):
+            road_wheel(xw, WY, s * (W - .15), s, R=TR, W=.24, spokes=6, name='w', tread=16, seg=28)
 
 # ---------------------------------------------------------------- the dumpster
 def dumpster():
@@ -1323,117 +1547,158 @@ def _glass_patch(bvh, org_fn, nu, nv, lift=.006, col=(.10, .14, .17)):
     finish(patch(bvh, org_fn, nu, nv, lift), col, .04, 0, 0, flag=F_GLASS)
 
 # ---------------------------------------------------------------- the helicopter
+def _tb(secs):
+    """(x, top, bottom, half width, squareness) -> superloft sections."""
+    return [(x, (t + b_) / 2, hw, (t - b_) / 2, e) for x, t, b_, hw, e in secs]
+
+def _region(secs, grow, lo, hi, name='region', subd=1):
+    """The part of a shell `grow` metres proud of the fuselage that lies inside
+    the box lo..hi: a clean glass pane (or panel) that follows the skin."""
+    g = [(x, t + grow, b_ - grow, hw + grow, e) for x, t, b_, hw, e in secs]
+    o = superloft(_tb(g), 40, name, subd)
+    c = box(((lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2),
+            ((hi[0] - lo[0]) / 2, (hi[1] - lo[1]) / 2, (hi[2] - lo[2]) / 2))
+    m = o.modifiers.new('isect', 'BOOLEAN'); m.operation = 'INTERSECT'; m.object = c; m.solver = 'EXACT'
+    bpy.context.view_layer.objects.active = o; o.select_set(True)
+    bpy.ops.object.modifier_apply(modifier=m.name); o.select_set(False)
+    bpy.data.objects.remove(c)
+    return o
+
+HELI_SECS = [  # x, top, bottom, half width, squareness — nose to tail
+    (4.66, 1.30, 1.02, .20, 2.2), (4.55, 1.52, .90, .50, 2.5), (4.36, 1.80, .82, .76, 2.9),
+    (4.08, 2.08, .76, .95, 3.3), (3.70, 2.34, .72, 1.08, 3.9), (3.20, 2.50, .70, 1.16, 4.6),
+    (2.60, 2.55, .70, 1.18, 5.2), (0.00, 2.56, .70, 1.19, 5.4), (-1.90, 2.56, .72, 1.18, 5.2),
+    (-2.50, 2.53, .94, 1.02, 4.4), (-3.10, 2.46, 1.38, .64, 3.6), (-3.80, 2.40, 1.80, .36, 3.0),
+    (-5.00, 2.37, 2.04, .23, 2.6), (-8.00, 2.37, 2.12, .16, 2.4), (-10.50, 2.38, 2.17, .12, 2.3),
+    (-10.78, 2.38, 2.19, .10, 2.2)]
+
 def helicopter():
-    """A twin-engine utility helicopter in the instance's paint: a rounded
-    fuselage lofted from the nose through the cabin into a tapering tail boom,
-    the engine and gearbox cowling on the roof with intake screens and
-    exhausts, a glazed nose (windscreen, roof windows, chin bubbles), cockpit
-    door windows, the cabin door slid open on one side, a swept fin, a
-    stabiliser, the tail rotor gearbox and mast, skids on bowed cross tubes,
-    steps, aerials, a pitot, light housings and a yellow tail band. The main
-    and tail rotor BLADES are drawn live (they turn); the hub is here."""
+    """A utility helicopter in the instance's paint: a boxy cabin on a sloped,
+    glazed nose — two framed windscreen panes, chin windows, green-tinted roof
+    windows and cockpit door windows, all cut cleanly from a shell over the
+    skin so the paint between them reads as the frames — the cabin's sliding
+    door run open on the right (a dark cabin, seats and a bulkhead behind it),
+    closed with its window on the left; an engine deck with its intake, top
+    grille, two exhausts and the mast; wire cutters over and under the nose, a
+    searchlight, panel lines, a tapering boom with a stabiliser, the fin and the
+    tail rotor gearbox, a tail skid, skids on bowed cross tubes with steps,
+    aerials and a pitot. The rotor BLADES turn, so they are drawn live."""
     clear()
-    DK = (.06, .065, .06); STL = (.24, .25, .26); FR = (.09, .10, .08); IN = (.035, .037, .035)
-    secs = [(4.62, 1.18, .16, .20, 2.2), (4.48, 1.24, .46, .44, 2.4), (4.20, 1.36, .74, .70, 2.6),
-            (3.80, 1.50, .96, .90, 2.9), (3.30, 1.62, 1.10, 1.00, 3.2), (2.70, 1.68, 1.18, 1.04, 3.6),
-            (1.60, 1.70, 1.20, 1.05, 4.0), (0.00, 1.70, 1.21, 1.05, 4.2), (-1.80, 1.71, 1.20, 1.04, 4.0),
-            (-2.55, 1.84, 1.06, .88, 3.4), (-3.20, 2.04, .66, .56, 3.0), (-3.90, 2.18, .36, .34, 2.6),
-            (-5.50, 2.22, .24, .24, 2.4), (-8.00, 2.25, .17, .19, 2.3), (-10.30, 2.27, .12, .15, 2.2),
-            (-10.70, 2.28, .10, .13, 2.2)]
-    body = superloft(secs, 40, 'heli_body', 1)
-    finish(body, (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
-    # engine cowling and transmission fairing on the roof
-    cowl = superloft([(1.75, 2.62, .30, .10, 2.4), (1.40, 2.72, .56, .26, 3.0), (0.60, 2.76, .64, .34, 3.6),
-                      (-1.20, 2.76, .64, .34, 3.6), (-2.30, 2.70, .54, .26, 3.0), (-3.05, 2.55, .26, .10, 2.4)],
-                     28, 'cowl', 1)
-    finish(cowl, (.47, .47, .47), .6, .05, 0, flag=F_PAINT)
-    bvh = _bvh_of([body, cowl])
-    # glazing: windscreen, the chin bubbles, roof windows, cockpit door windows
-    def ws(u, v):
-        y = 1.62 + .78 * v; z = -.86 + 1.72 * u
-        return ((6.0, y, z), (-1, 0, 0))
-    _glass_patch(bvh, ws, 14, 8)
+    DK = (.06, .065, .06); STL = (.24, .25, .26); IN = (.03, .032, .03); SEAT = (.16, .15, .12)
+    GL = (.16, .23, .27); GLG = (.16, .27, .20)
+    body = superloft(_tb(HELI_SECS), 44, 'heli_body', 1)
+    finish(body, (.5, .5, .5), .58, .05, 0, flag=F_PAINT)
+    bvh = _bvh_of([body])
+    # GLAZING: panes cut from a 6 mm shell, separated by 6-8 cm of paint, each
+    # in a black rubber seal 3.5 cm wider than the pane, 4 mm proud
+    SEAL = (.025, .025, .028)
+    def seal(lo, hi, name, side_axis):
+        e = .035
+        lo2 = [lo[0] - e, lo[1] - e, lo[2]]; hi2 = [hi[0] + e, hi[1] + e, hi[2]]
+        if not side_axis:   # a nose pane grows across z too; a side pane only in x and y
+            lo2[2] -= e; hi2[2] += e
+        finish(_region(HELI_SECS, .0035, tuple(lo2), tuple(hi2), name), SEAL, .7, 0, 0)
     for sgn in (-1, 1):
-        def chin(u, v, sgn=sgn):
-            return ((6.0, .98 + .40 * v, sgn * (.14 + .50 * u)), (-1, -.15, 0))
-        _glass_patch(bvh, chin, 6, 5)
-        def door(u, v, sgn=sgn):
-            return ((2.12 + .82 * u, 1.66 + .70 * v, sgn * 3.0), (0, 0, -sgn))
-        _glass_patch(bvh, door, 8, 6)
-        def aft(u, v, sgn=sgn):
-            return ((-2.30 + .55 * u, 1.70 + .50 * v, sgn * 3.0), (0, 0, -sgn))
-        _glass_patch(bvh, aft, 5, 4)
-        # cockpit door frame and the seam behind it
-        finish(ribbon(bvh, lambda t, sgn=sgn: ((2.02, .85 + 1.6 * t, sgn * 3.0), (0, 0, -sgn)), 10, .025, .002), FR, .6, 0, 0)
-        finish(ribbon(bvh, lambda t, sgn=sgn: ((2.98, .90 + 1.5 * t, sgn * 3.0), (0, 0, -sgn)), 10, .025, .002), FR, .6, 0, 0)
-    def roofw(u, v):
-        return ((3.10 + .75 * u, 6.0, -.55 + 1.10 * v), (0, -1, 0))
-    _glass_patch(bvh, roofw, 6, 6, .006, (.08, .16, .14))
-    # the cabin door, slid back along its rail on the right: the dark cabin
-    def cab_in(u, v):
-        return ((-1.40 + 2.25 * u, .92 + 1.36 * v, 3.0), (0, 0, -1))
-    finish(patch(bvh, cab_in, 10, 8, .004), IN, .95, 0, 0)
-    finish(patch(bvh, lambda u, v: ((-3.10 + 1.55 * u, .92 + 1.38 * v, 3.0), (0, 0, -1)), 6, 6, .03),
-           (.47, .47, .47), .6, .05, 0, flag=F_PAINT)                                  # the slid door
-    finish(patch(bvh, lambda u, v: ((-2.75 + .80 * u, 1.62 + .55 * v, 3.0), (0, 0, -1)), 4, 4, .036),
-           (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
-    finish(patch(bvh, lambda u, v: ((-1.40 + 2.25 * u, .92 + 1.36 * v, -3.0), (0, 0, 1)), 8, 6, .004),
-           (.42, .42, .42), .6, .05, 0, flag=F_PAINT)                                  # the closed door, left
-    finish(patch(bvh, lambda u, v: ((-1.10 + .80 * u, 1.62 + .55 * v, -3.0), (0, 0, 1)), 4, 4, .008),
-           (.10, .14, .17), .04, 0, 0, flag=F_GLASS)
+        z0, z1 = sorted((sgn * .045, sgn * 1.00)); seal((3.05, 1.62, z0), (4.62, 2.52, z1), 'ws_s', 0)
+        z0, z1 = sorted((sgn * .16, sgn * .78)); seal((3.95, .90, z0), (4.70, 1.50, z1), 'chin_s', 0)
+        z0, z1 = sorted((sgn * 1.0, sgn * 1.4))
+        seal((2.12, 1.64, z0), (2.95, 2.40, z1), 'cd_s', 1)
+        seal((2.20, 1.00, z0), (2.86, 1.42, z1), 'cdl_s', 1)
+        seal((-2.35, 1.70, z0), (-1.90, 2.25, z1), 'aft_s', 1)
+    seal((2.80, 2.40, -.52), (3.50, 2.70, -.06), 'rw_s', 0)
+    seal((2.80, 2.40, .06), (3.50, 2.70, .52), 'rw2_s', 0)
+    # the anti-glare panel under the windscreen and a darker belly
+    finish(_region(HELI_SECS, .0025, (-2.6, .55, -1.3), (4.2, .80, 1.3), 'belly'), (.20, .22, .17), .65, .05, 0)
     for sgn in (-1, 1):
-        finish(box((-.70, 2.42, sgn * 1.22), (1.75, .022, .018)), DK, .5, .5, 0)         # door rails
-        finish(box((-.70, .90, sgn * 1.20), (1.75, .018, .018)), DK, .5, .5, 0)
-    # anti-glare panel over the nose, intake screens, cowl seams
-    finish(patch(bvh, lambda u, v: ((3.60 + .70 * u, 6.0, -.55 + 1.10 * v), (0, -1, 0)), 6, 4, .004), (.05, .05, .05), .85, 0, 0)
+        z0, z1 = sorted((sgn * .045, sgn * 1.00))
+        finish(_region(HELI_SECS, .006, (3.05, 1.62, z0), (4.62, 2.52, z1), 'ws'), GL, .03, .1, 0, flag=F_GLASS)
+        z0, z1 = sorted((sgn * .16, sgn * .78))
+        finish(_region(HELI_SECS, .006, (3.95, .90, z0), (4.70, 1.50, z1), 'chin'), GL, .03, .1, 0, flag=F_GLASS)
+        z0, z1 = sorted((sgn * 1.0, sgn * 1.4))
+        finish(_region(HELI_SECS, .006, (2.12, 1.64, z0), (2.95, 2.40, z1), 'cdoor'), GL, .03, .1, 0, flag=F_GLASS)
+        finish(_region(HELI_SECS, .006, (2.20, 1.00, z0), (2.86, 1.42, z1), 'cdoorlo'), GL, .03, .1, 0, flag=F_GLASS)
+        finish(_region(HELI_SECS, .006, (-2.35, 1.70, z0), (-1.90, 2.25, z1), 'aftwin'), GL, .03, .1, 0, flag=F_GLASS)
+    finish(_region(HELI_SECS, .006, (2.80, 2.40, -.52), (3.50, 2.70, -.06), 'roofw'), GLG, .03, .1, 0, flag=F_GLASS)
+    finish(_region(HELI_SECS, .006, (2.80, 2.40, .06), (3.50, 2.70, .52), 'roofw2'), GLG, .03, .1, 0, flag=F_GLASS)
+    # THE CABIN, door open on the right: a dark interior panel set into the
+    # side, the door run back over the boom root, seats and a bulkhead inside
+    finish(_region(HELI_SECS, .004, (-1.45, .86, 1.0), (.95, 2.36, 1.4), 'cabin_in'), IN, .95, 0, 0)
+    for k in range(3):                                                       # troop seats
+        finish(box((-1.05 + k * .62, 1.15, 1.10), (.24, .04, .06)), SEAT, .9, 0, 0)
+        finish(box((-1.05 + k * .62, 1.45, 1.13), (.24, .26, .02)), SEAT, .9, 0, 0)
+    finish(_region(HELI_SECS, .045, (-2.95, .86, 1.0), (-1.50, 2.36, 1.5), 'door_open'), (.5, .5, .5), .58, .05, 0, flag=F_PAINT)
+    finish(_region(HELI_SECS, .052, (-2.55, 1.66, 1.0), (-1.95, 2.18, 1.5), 'door_open_w'), GL, .03, .1, 0, flag=F_GLASS)
+    finish(_region(HELI_SECS, .012, (-1.05, 1.66, -1.5), (-.35, 2.18, -1.0), 'door_l_w'), GL, .03, .1, 0, flag=F_GLASS)
     for sgn in (-1, 1):
-        finish(patch(bvh, lambda u, v, sgn=sgn: ((.55 + .55 * u, 2.62 + .26 * v, sgn * 3.0), (0, 0, -sgn)), 4, 3, .004),
-               (.03, .03, .03), .9, .2, 0)
-        for k in range(5):
-            xk = -2.0 + k * .38
-            finish(ribbon(bvh, lambda t, xk=xk, sgn=sgn: ((xk, 2.55 + .40 * t, sgn * 3.0), (0, 0, -sgn)), 6, .012, .0015),
-                   (.08, .09, .07), .8, 0, 0)
-    # exhausts, angled up and out of the cowl's tail
+        finish(box((-.75, 2.36, sgn * 1.105), (2.30, .022, .016)), DK, .5, .5, 0)                 # door rails (on the skin)
+        finish(box((-.75, .88, sgn * 1.105), (2.30, .016, .016)), DK, .5, .5, 0)
+    # panel lines: cockpit door edges, the closed cabin door, boom joints
     for sgn in (-1, 1):
-        ex = tube((-2.25, 2.86, sgn * .30), (-2.95, 3.06, sgn * .48), .13, 14)
-        finish(ex, (.09, .08, .07), .85, .3, 0)
-        finish(tube((-2.94, 3.055, sgn * .475), (-2.97, 3.065, sgn * .48), .11, 14), (.02, .02, .02), .9, 0, 0)
-    # mast, swashplate, hub (the blades are drawn live)
-    finish(_ry(3.05, 3.50, 0, 0, .12, 16), STL, .35, .8, 0)
-    finish(_ry(3.18, 3.24, 0, 0, .32, 20), STL, .35, .8, 0)
-    finish(_ry(3.46, 3.62, 0, 0, .21, 16), DK, .4, .6, 0)
+        for xl in (2.05, 3.00):
+            finish(ribbon(bvh, lambda t, xl=xl, sgn=sgn: ((xl, .82 + 1.62 * t, sgn * 3), (0, 0, -sgn)), 12, .012, .0012), DK, .7, 0, 0)
+        if sgn < 0:
+            for xl in (-1.45, .95):
+                finish(ribbon(bvh, lambda t, xl=xl: ((xl, .86 + 1.50 * t, -3), (0, 0, 1)), 12, .012, .0012), DK, .7, 0, 0)
+        for xl in (-4.6, -7.4):
+            finish(ribbon(bvh, lambda t, xl=xl, sgn=sgn: ((xl, 2.05 + .32 * t, sgn * 3), (0, 0, -sgn)), 6, .010, .001), DK, .7, 0, 0)
+        finish(box((2.40, 1.52, sgn * 1.19), (.07, .018, .012)), STL, .4, .7, 0)                  # handles
+        finish(box((-.30, 1.55, -1.195), (.08, .018, .012)), STL, .4, .7, 0)
+    # ENGINE DECK: the cowl, intake, top grille, exhausts; transmission and mast
+    cowl = superloft([(1.95, 2.62, .30, .06, 3.0), (1.55, 2.78, .62, .24, 4.0), (.40, 2.84, .66, .30, 5.0),
+                      (-1.60, 2.84, .64, .30, 5.0), (-2.55, 2.76, .52, .22, 4.0), (-3.05, 2.62, .26, .06, 3.0)],
+                     32, 'cowl', 1)
+    finish(cowl, (.47, .47, .47), .55, .05, 0, flag=F_PAINT)
+    finish(box((1.54, 2.80, 0), (.06, .10, .40)), (.03, .03, .03), .9, .2, 0)                    # intake
+    for k in range(6):
+        finish(box((-1.40 + k * .26, 3.13, 0), (.07, .012, .34)), (.05, .05, .05), .8, .2, 0)      # top grille
+    for sgn in (-1, 1):
+        finish(tube((-2.55, 2.92, sgn * .26), (-3.25, 3.16, sgn * .40), .12, 16), (.10, .09, .08), .8, .3, 0)
+        finish(tube((-3.24, 3.155, sgn * .395), (-3.27, 3.165, sgn * .40), .10, 16), (.02, .02, .02), .9, 0, 0)
+    finish(_ry(3.10, 3.52, 0, 0, .13, 18), STL, .35, .8, 0)
+    finish(_ry(3.22, 3.28, 0, 0, .34, 22), STL, .35, .8, 0)
+    finish(_ry(3.46, 3.64, 0, 0, .22, 18), DK, .4, .6, 0)
     for k in range(2):
-        a_ = k * math.pi / 2
-        finish(tube((.30 * cos(a_), 3.20, .30 * sin(a_)), (.18 * cos(a_), 3.50, .18 * sin(a_)), .022, 6), STL, .4, .7, 0)
-    # the tail: fin (swept), stabiliser, the tail rotor gearbox, a yellow band
-    fin = prof_front([(-10.05, 2.20), (-10.62, 2.18), (-11.12, 4.36), (-10.90, 4.42), (-10.30, 2.95)], -.055, .055, 'fin')
-    finish(_bev(fin, .02, 2), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
-    stab = prof([(-1.45, 2.20), (1.45, 2.20), (1.45, 2.26), (-1.45, 2.26)], -7.95, -7.40, 'stab')
-    finish(_bev(stab, .02, 2), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)
-    for sgn in (-1, 1):
-        finish(box((-7.65, 2.30, sgn * 1.45), (.30, .14, .015)), (.5, .5, .5), .62, .05, 0, flag=F_PAINT)  # endplates
+        a_ = k * math.pi / 2 + .3
+        finish(tube((.32 * cos(a_), 3.24, .32 * sin(a_)), (.19 * cos(a_), 3.50, .19 * sin(a_)), .024, 6), STL, .4, .7, 0)
+    # wire cutters, the searchlight, aerials, pitot
+    finish(_ry(.66, .76, 3.55, .30, .10, 16), DK, .4, .5, 0)                                 # searchlight, on the belly
+    finish(_ry(.62, .66, 3.55, .30, .085, 16), (.90, .90, .84), .1, .3, 0)
+    finish(prof_front([(-1.70, 2.84), (-1.25, 2.84), (-1.45, 3.22), (-1.62, 3.22)], -.012, .012, 'aer'), DK, .5, .4, 0)
+    finish(prof_front([(-.70, .72), (-.45, .72), (-.55, .40), (-.66, .40)], -.012, .012, 'aer2'), DK, .5, .4, 0)
+    # THE TAIL: fin, stabiliser with end plates, gearbox, tail skid, a band
+    fin = prof_front([(-10.05, 2.30), (-10.70, 2.26), (-11.15, 4.40), (-10.92, 4.46), (-10.32, 3.00)], -.06, .06, 'fin')
+    finish(_bev(fin, .025, 2), (.5, .5, .5), .58, .05, 0, flag=F_PAINT)
+    stab = prof([(-1.45, 2.22), (1.45, 2.22), (1.45, 2.28), (-1.45, 2.28)], -7.95, -7.35, 'stab')
+    finish(_bev(stab, .02, 2), (.5, .5, .5), .58, .05, 0, flag=F_PAINT)
     finish(_rz([(-.30, .02), (-.24, .15), (-.10, .16), (-.06, .10)], -10.72, 3.42, 16, 'tgb'), STL, .45, .6, 0)
     finish(_rz([(-.36, .02), (-.30, .06), (-.24, .06)], -10.72, 3.42, 12), DK, .4, .6, 0)
-    finish(superloft([(-9.70, 2.27, .125, .155, 2.2), (-10.0, 2.27, .123, .153, 2.2)], 24, 'band', 0, False),
-           (.80, .74, .20), .5, 0, 0)
+    finish(tube((-10.30, 2.18, 0), (-10.95, 1.62, 0), .025, 8), STL, .4, .7, 0)                    # tail skid
+    finish(_region(HELI_SECS, .004, (-9.95, 1.9, -.5), (-9.65, 2.6, .5), 'band', 0), (.80, .74, .20), .5, 0, 0)
+    finish(_region(HELI_SECS, .004, (-10.55, 1.9, -.5), (-10.25, 2.6, .5), 'band2', 0), (.85, .85, .82), .5, 0, 0)
     # SKIDS: tubes with upturned toes on two bowed cross tubes, steps
     for sgn in (-1, 1):
-        bs = sgn * 1.34
-        finish(tube((-2.80, .07, bs), (2.55, .07, bs), .05, 12), STL, .4, .7, 0)
-        finish(tube((2.55, .07, bs), (3.00, .30, bs), .048, 12), STL, .4, .7, 0)
-        finish(tube((-2.80, .07, bs), (-2.92, .14, bs), .048, 12), STL, .4, .7, 0)
-        for a_ in (-1.45, 1.55):
-            finish(tube((a_, .07, bs), (a_, .50, sgn * 1.22), .05, 10), STL, .4, .7, 0)
-            finish(tube((a_, .50, sgn * 1.22), (a_, .66, sgn * .70), .05, 10), STL, .4, .7, 0)
-        finish(box((.03, .33, sgn * 1.36), (.24, .015, .07)), STL, .5, .6, 0)          # boarding step
-        finish(box((2.36, 1.50, sgn * 1.215), (.06, .02, .015)), DK, .5, .6, 0)          # door handle
-    # aerials, pitot, light housings (the lamps are drawn lit)
-    finish(prof_front([(-1.70, 2.66), (-1.20, 2.66), (-1.45, 2.95), (-1.62, 2.95)], -.012, .012, 'aer'), DK, .5, .4, 0)
-    finish(prof_front([(-.60, .66), (-.40, .66), (-.50, .40), (-.58, .40)], -.012, .012, 'aer2'), DK, .5, .4, 0)
-    finish(tube((4.40, 1.40, .30), (4.98, 1.40, .30), .016, 6), STL, .4, .7, 0)
+        bs = sgn * 1.30
+        finish(tube((-2.75, .07, bs), (2.60, .07, bs), .052, 14), STL, .4, .7, 0)
+        finish(tube((2.60, .07, bs), (3.05, .32, bs), .05, 14), STL, .4, .7, 0)
+        finish(tube((-2.75, .07, bs), (-2.88, .15, bs), .05, 14), STL, .4, .7, 0)
+        for a_ in (-1.40, 1.60):
+            finish(tube((a_, .07, bs), (a_, .52, sgn * 1.20), .055, 12), STL, .4, .7, 0)
+            finish(tube((a_, .52, sgn * 1.20), (a_, .70, sgn * .72), .055, 12), STL, .4, .7, 0)
+        finish(box((1.60, .30, sgn * 1.27), (.24, .015, .07)), STL, .5, .6, 0)                    # step, on the cross tube
+    # grab handles by the doors, roof handrails, the cargo hook, rivet lines,
+    # warning stripes on the tail rotor gearbox
     for sgn in (-1, 1):
-        finish(box((.87, 2.59, sgn * 1.17), (.09, .04, .03)), DK, .5, .4, 0)
-    finish(box((3.32, .67, 0), (.14, .02, .16)), DK, .5, .4, 0)                        # landing light housing
+        finish(tube((1.98, 1.30, sgn * 1.19), (1.98, 2.00, sgn * 1.19), .016, 8), STL, .35, .8, 0)
+        finish(tube((-1.55, 1.10, sgn * 1.175), (-1.55, 2.10, sgn * 1.175), .016, 8), STL, .35, .8, 0)
+        for xr in (-3.8, -5.6, -7.0, -8.6, -9.4):
+            finish(ribbon(bvh, lambda t, xr=xr, sgn=sgn: ((xr + .9 * t, 2.30, sgn * 3), (0, 0, -sgn)), 8, .006, .001), (.20, .21, .17), .7, 0, 0)
+    finish(box((.0, .66, 0), (.10, .04, .08)), STL, .4, .7, 0)
+    finish(tube((0, .62, 0), (.06, .52, 0), .012, 6), STL, .4, .7, 0)
+    for k in range(4):
+        finish(box((-10.82 + k * .07, 3.60, -.16), (.03, .015, .06)), (.80, .10, .08) if k % 2 == 0 else (.92, .92, .90), .5, 0, 0)
+    # light housings (the lamps themselves are drawn lit)
+    for sgn in (-1, 1):
+        finish(box((.87, 2.45, sgn * 1.05), (.09, .04, .03)), DK, .5, .4, 0)              # nav light housings, on the skin
 
 # ---------------------------------------------------------------- the truck
 def truck_cab():

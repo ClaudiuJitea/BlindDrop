@@ -2388,6 +2388,41 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_vmorb.which = wsel;
     } else if (!strcmp(t, "camaim")) {
       s->cam.blook = next_f();  // cambot look height (default .9)
+    } else if (!strcmp(t, "propcheck")) {
+      // PROPS THAT MERGE: a prop's hidden collision box (barrel, vehicle,
+      // street furniture, a supply station) cutting INTO another solid by more
+      // than 3 cm on every axis — two objects occupying one space, which reads
+      // as a barrel half inside a container. Floor films and pads (under
+      // 5 cm tall) are skipped, as are boxes of the SAME prop (one unbroken
+      // run of hidden boxes).
+      int bad = 0;
+      for (int i = 0; i < g_num_solids; i++) {
+        if (!g_solid_hide[i]) continue;
+        const solid_t *A = &g_solids[i];
+        for (int j = 0; j < g_num_solids; j++) {
+          if (j == i) continue;
+          const solid_t *B = &g_solids[j];
+          if (B->max.y - B->min.y < 0.05f || A->max.y - A->min.y < 0.05f) continue;
+          if (g_solid_hide[j]) {
+            int lo = i < j ? i : j, hi = i < j ? j : i, run = 1;
+            for (int k = lo; k <= hi; k++) if (!g_solid_hide[k]) { run = 0; break; }
+            if (run && hi - lo < 12) continue;
+            if (j < i) continue;
+          }
+          float ox = fminf(A->max.x, B->max.x) - fmaxf(A->min.x, B->min.x);
+          float oy = fminf(A->max.y, B->max.y) - fmaxf(A->min.y, B->min.y);
+          float oz = fminf(A->max.z, B->max.z) - fmaxf(A->min.z, B->min.z);
+          if (ox > 0.03f && oy > 0.03f && oz > 0.03f) {
+            bad++;
+            if (bad <= 40)
+              printf("  merge %d/%d at (%.2f %.2f %.2f) depth %.2f %.2f %.2f%s\n", i, j,
+                     (double)((A->min.x + A->max.x) * 0.5f), (double)A->min.y,
+                     (double)((A->min.z + A->max.z) * 0.5f), (double)ox, (double)oy, (double)oz,
+                     g_solid_hide[j] ? " (prop/prop)" : "");
+          }
+        }
+      }
+      printf("propcheck merges=%d\n", bad);
     } else if (!strcmp(t, "supplies")) {
       // Every supply station on this map: where, which way it faces, and
       // whether it is stocked (ready) or how long until it restocks.

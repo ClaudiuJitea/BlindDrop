@@ -18,6 +18,7 @@
 #   parity  : no MISMATCH in the shared-code rows
 #   budget  : drops = 0 and ev_drops = 0 at 20 bots hard (nothing silently
 #             dropped a triangle or an event)
+#   props   : no prop's collision cuts into another solid on any handmade map
 #   decor   : world_drops = 0 on every map (the static world mesh kept all of
 #             its decor — a truncated tail is a hole, not an error)
 # Also prints the glibc floor for the log — a rise excludes whole distros, so
@@ -461,6 +462,13 @@ for m in arena foundry bazaar outpost citadel harbor refinery compound; do
   [ "${v:-x}" = 0 ] || { say "GATE decor map=$m world_drops=$v (want 0)"; fail=1; }
 done
 rm -f "$ROOT/screenshots/_ci.png"
+
+# props on every map: no prop's collision box may cut into another solid (a
+# barrel half inside a container, a table in a wall). `propcheck` lists them.
+for m in foundry bazaar outpost citadel harbor refinery compound; do
+  v="$(run "usemap $m; restart; wait 2; propcheck" | sed -n 's/^propcheck merges=\([0-9]*\).*/\1/p' | head -1)"
+  [ "${v:-x}" = 0 ] || { say "GATE props map=$m merges=$v (want 0)"; fail=1; }
+done
 
 # glibc floor — printed, not gated (a rise silently excludes distros)
 if command -v objdump >/dev/null 2>&1; then

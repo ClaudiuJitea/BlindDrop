@@ -274,9 +274,10 @@ static void foundry_half(void) {
   KMAT(SMAT_WOOD, KB(19.8f, 0.98f, 2.3f, 20.4f, 1.45f, 2.9f, kt_(t->crate_b, 20.1f, 2.6f, 4, 0.9f, 1.0f)));
   k_pallets(21.6f, -11.5f, 1, 5);
   k_jersey(0, 10.25f, 16.0f, 21.0f);
-  barrel(g_ks * 16.2f, g_ks * -16.0f, rgb(0.62f, 0.18f, 0.12f));
-  barrel(g_ks * 16.9f, g_ks * -16.3f, rgb(0.20f, 0.30f, 0.50f));
-  barrel(g_ks * 16.2f, g_ks * -17.0f, rgb(0.74f, 0.56f, 0.16f));
+  // (clear of the other half's container stack, which ends at z -16.28)
+  barrel(g_ks * 16.0f, g_ks * -15.45f, rgb(0.62f, 0.18f, 0.12f));
+  barrel(g_ks * 16.75f, g_ks * -15.55f, rgb(0.20f, 0.30f, 0.50f));
+  barrel(g_ks * 16.35f, g_ks * -14.85f, rgb(0.74f, 0.56f, 0.16f));
   barrel(g_ks * 22.8f, g_ks * 12.6f, rgb(0.62f, 0.18f, 0.12f));
   barrel(g_ks * 22.8f, g_ks * 11.9f, rgb(0.62f, 0.18f, 0.12f));
   // THE CONVEYOR: legs, a frame, the belt and its end drums. You can shoot
@@ -1551,7 +1552,7 @@ static void citadel_extras(void) {
   stall1(4.6f, 12.0f, 1, s->awning[0]); stall1(4.6f, 22.0f, 1, s->awning[1]);
   car(-30.0f, -44.5f, 0); pickup_truck(34.0f, -44.0f, 0, 1); car(-30.0f, 32.0f, 0);
   for (float z = -10.0f; z <= 26.0f; z += 12.0f) lamp(5.6f, z + 1.0f, 0, -1);
-  barrel(-38.0f, -22.0f, s->door); barrel(-37.2f, -22.4f, s->door);
+  barrel(-38.0f, -22.35f, s->door); barrel(-37.2f, -22.75f, s->door);
   barrel(20.0f, -34.0f, s->door);
   // STREET LIFE (no g_rng below: the map's layout stays the seed's). A second
   // pickup in the north square, bins against the walls, motorbikes, a workshop's
@@ -1565,7 +1566,7 @@ static void citadel_extras(void) {
   tyre_stack(-45.3f, 1.0f, 0);
   tyre_stack(40.6f, -46.5f, 1);
   cafe_set(-2.6f, 13.5f, 0);
-  cafe_set(-4.4f, 22.5f, 3);
+  cafe_set(-4.25f, 22.5f, 3);
   genset(-37.8f, -18.5f, 1, rgb(0.76f, 0.58f, 0.22f), rgb(0.24f, 0.25f, 0.27f));
   street_spans(g_mg_rows);
   env_scatter(g_mg_rows, 14);
@@ -1683,7 +1684,7 @@ static void compound_extras(void) {
     bx(sx, 0.10f, hz + 1.48f, sx + 0.14f, 0.62f, hz + 1.56f, stl);
   }
   solids_hide(heli0);
-  prop_add(PROP_HELI, hx, hz, 0, 0, od, dk);
+  prop_add(PROP_HELI, hx, hz, 0, 0, rgb(0.43f, 0.47f, 0.34f), dk);   // faded olive: the blocks keep od
   // The pad: a concrete apron with an H painted on it.
   bx(14.0f, 0.0f, -50.0f, 30.0f, 0.02f, -40.0f, rgb(0.36f, 0.35f, 0.33f));
   v3 wh = rgb(0.86f, 0.86f, 0.82f);

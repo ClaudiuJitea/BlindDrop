@@ -1,5 +1,14 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
+## What's new in 0.8.2
+
+- **Cars and pickups rebuilt:** the saloon is now a compact early-90s four-door and the pickup a proper single cab, both built hard-surface: flat, clean panels with crisp edges, a separate glasshouse with framed panes, lined wheelhouses, recessed lamp bands, bumpers that stand proud, shut lines, mirrors and alloy wheels.
+- **Tracers:** every shot now draws a short, thin, fast streak in one pale warm white, for both sides; enemy rounds no longer burn green. Pistols draw the shortest, the sniper keeps its heat wake.
+- **The helicopter** wears a faded olive, and its navigation lights now sit on their housings, with the fin-tip and boom-end lamps moved onto the new airframe.
+- **No more merged props:** barrels by Foundry's container stack and in Citadel, and a café table, no longer sit half inside something else. A new check in the proof gate keeps every handmade map clear of it.
+
+0.8.2 plays with 0.8 and 0.8.1 (same network protocol, 22).
+
 ## What's new in 0.8.1
 
 - **The helicopter** on Compound is rebuilt: a rounded fuselage with a glazed nose, chin windows and roof windows, cockpit door windows, the cabin door slid open on its rail, an engine cowling with intake screens and exhausts, a swept fin and a stabiliser, skids on bowed cross tubes, steps, aerials and a pitot. Its rotor blades now taper and twist, with a darker leading edge.

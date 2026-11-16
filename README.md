@@ -5,7 +5,7 @@
 <h1 align="center">BlindDrop</h1>
 
 <p align="center">
-  <b>A free, private arena FPS in one C file.</b><br>
+  <b>A free, private arena FPS written from scratch in C.</b><br>
   Seven modes, eight maps, 34 weapons, team play with friends, bots that push, and no telemetry.
 </p>
 
@@ -41,24 +41,24 @@
 - **You feel every hit:** blood lands on the side the round came from, the screen edge flashes red,
   and as your health drops the colour drains, the edges close in and the frame crusts with blood in
   time with your heartbeat.
-- **Weapon handling:** realistic magazine changes, scopes, sway and inertia, tracers from the muzzle
-  to the impact, a mantle over low walls and ladders to climb.
+- **Weapon handling:** realistic magazine changes, scopes, sway and inertia, a short, fast tracer
+  on every shot (one pale colour for both sides), a mantle over low walls and ladders to climb.
 - **Movement:** air control, a slide that carries speed, and `Q`/`E` lean.
 - **Bots** hear you, remember you, flank, throw grenades and find their way around the big maps.
 - **Two forces you can tell apart by shape:** you and your side are operators (helmet, goggles,
   plate carrier, pack, a cyan armband and helmet strobe); whoever you're fighting are insurgents
   (red head wrap, dark knee-length tunic, loose trousers, AK), on every map and in every mode.
   Insurgents come in four outlines: rifleman, gunner with an ammo belt, scout in trainers, and a
-  leader with a radio. Each one fights to match its kit. Hostile tracers burn green and hostile
-  rifles sound like AKs. Team games keep their red and blue on top.
+  leader with a radio. Each one fights to match its kit, and hostile rifles sound like AKs. Team
+  games keep their red and blue on top.
 - **Third person (`V`):** your operator wears the outfit you pick, carries the rifles he isn't using
   on his back and the pistol in a thigh holster, and stows one weapon and draws the next when you switch.
 - **Armory:** five knives and eleven weapon themes; five outfit colourways with a choice of headgear,
   vest and pack for your operator; the weapon's field of view and a lower hip position.
 - **Match summary and career:** your headshots and best run each match, lifetime totals in `config.cfg`.
-- **No engine and no asset files:** maps and models are generated in code and the recorded sound bank
-  is built into the one binary, with physically based materials, soft shadows, ambient occlusion,
-  light shafts and lit windows at dusk.
+- **No engine and no asset files:** maps are generated in code, and the models and the recorded
+  sound bank are compiled into the one binary, with physically based materials, soft shadows,
+  ambient occlusion, light shafts and lit windows at dusk.
 
 ## Supplies, wounds and the world
 
@@ -66,9 +66,12 @@
   <img src="media/supply_med.jpg" alt="A medical station: a white cabinet on steel posts, door open, a red trauma bag and a first-aid box on the shelves, a green-cross sign with a lit green lamp above" width="49%">
   <img src="media/supply_ammo.jpg" alt="An ammunition crate: an olive crate with its lid propped open and grenades standing in the foam, a yellow hazard sign with a grenade on a post beside it" width="49%">
   <img src="media/wounds.jpg" alt="First person at 22 health: blood smeared round the edges of the screen and a dark red vignette closing in" width="49%">
+  <img src="media/tracers.jpg" alt="An operator firing down a Compound street at blue hour: the muzzle flash and a short pale tracer streaking away" width="49%">
+  <img src="media/sedan.jpg" alt="Citadel: an orange early-90s four-door saloon parked by a wall at dusk, framed glass, recessed headlamps, black rubbing strips and alloy wheels" width="49%">
+  <img src="media/pickup.jpg" alt="Citadel: a white single-cab pickup at sunset, a chrome-barred grille, round headlamps and amber indicators, door mirrors and alloy wheels" width="49%">
   <img src="media/outpost_bastion.jpg" alt="Outpost: a HESCO sniper bastion with a ladder and a handrail, an ammunition crate in front of it" width="49%">
-  <img src="media/harbor_forklift.jpg" alt="Harbor: a yellow counterbalance forklift with its LPG bottle and forks down beside the container yard" width="49%">
   <img src="media/truck.jpg" alt="Compound: a cab-over container truck in orange with a white side stripe, chrome grille bars, mirrors on arms and amber roof lamps" width="49%">
+  <img src="media/harbor_forklift.jpg" alt="Harbor: a yellow counterbalance forklift with its LPG bottle and forks down beside the container yard" width="49%">
 </p>
 
 Walk up to a **medical station** (a white cabinet under a green cross) when you're hurt, or an
@@ -76,7 +79,8 @@ Walk up to a **medical station** (a white cabinet under a green cross) when you'
 what it holds only if you need it, it empties, and it restocks 25 seconds later. Bots use them too
 when they pass one. Every stair and raised walkway has a handrail; narrow streets are spanned by
 covered rooms and stone arches in the old towns and pipe bridges at the docks and the refinery; the
-yards and streets have forklifts, container trucks, IBC tanks, sack pallets, benches and power cabinets; Outpost has a
+yards and streets have saloon cars and pickups, forklifts, container trucks, IBC tanks, sack pallets,
+benches and power cabinets, and none of them sits inside another; Outpost has a
 climbable HESCO bastion and barracks tents in each side lane, and Bazaar's second house a ladder to
 its roof.
 
@@ -136,7 +140,7 @@ match. A game you host has its own mode and map under **Multiplayer > Host setti
 <p align="center">
   <img src="media/rescue.jpg" alt="A guard at the pen in the sniper scope, the operator still undetected" width="49%">
   <img src="media/hostage.jpg" alt="The operator with the three freed hostages at the landing zone" width="49%">
-  <img src="media/extraction.jpg" alt="The olive utility helicopter on its pad at blue hour: glazed nose, the cabin door slid open, skids and tapered rotor blades" width="49%">
+  <img src="media/extraction.jpg" alt="The faded-olive utility helicopter on its pad at blue hour: glazed nose, the cabin door slid open, a green navigation light, skids and tapered rotor blades" width="49%">
   <img src="media/compound.jpg" alt="The compound at blue hour from above the HQ" width="49%">
 </p>
 
@@ -226,7 +230,15 @@ make build/game-x86_64
 ./build/game-x86_64
 ```
 
-`make dist-linux RELEASE_VERSION=v0.8.1` builds the redistributable binary (needs Docker). The
+The source is split by area under `code/` (`app`, `core`, `platform`, `net`, `sim`, `world`,
+`render`, `figure`, `anim`, `audio`, `ui`, `input` and the headless test `harness`), about 70
+files in all, and `code/game.c` `#include`s them in a fixed order so the compiler still builds the
+whole game as one translation unit (a "unity build"): every function stays `static`, and there are
+no headers to keep in sync. The include list in `code/game.c` is the table of contents; a part may
+only use what is included above it. `code/models.h` holds the baked meshes generated by the Blender
+scripts in `tools/`.
+
+`make dist-linux RELEASE_VERSION=v0.8.2` builds the redistributable binary (needs Docker). The
 first-person models come from `tools/build_models.py`, regenerated with
 `blender -b --factory-startup -P tools/build_models.py`; the world props (vehicles, street furniture,
 supply stations) are in `tools/props_models.py` and rebuild on their own with

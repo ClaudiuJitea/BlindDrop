@@ -83,6 +83,7 @@ static void usage(void) {
        "  cam X Y Z YAW PIT  override camera for later shots (cam off: back to player)\n"
        "  cambot DX DY DZ    camera at bot+offset looking at the bot (cambot off)\n"
        "  supplies           list the map's supply stations and their state\n"
+       "  propcheck          props whose collision cuts into another solid (merged props)\n"
        "  camorbit R H D L   orbit bot 0: radius, height, deg/s, look height\n"
        "                     (camorbit off returns to the previous player camera)\n"
        "  vmhand             wrist bend / forearm-to-bore / palm length, per hand\n"
