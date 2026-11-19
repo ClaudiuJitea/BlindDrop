@@ -1369,6 +1369,19 @@ static void ui_menu(void) {
     ui_cycle("PACK", PACK_GEAR_NAMES, PACK_GEAR_COUNT, &g_cfg.pack_gear,
              px, pw, y, click, cx, cy);
     y += 15;
+    {
+      // The forearm screen (config wrist_style). Listed in the order a player
+      // would want them: the three status layouts first, the rest after.
+      static const int WR_ORDER[9] = {6, 7, 8, 0, 1, 2, 3, 4, 5};
+      static const char *const WR_NAMES[9] = {"STATUS BARS", "STATUS ARCS", "STATUS COLUMNS",
+                                              "THREAT RING", "IR STROBE", "AMMO", "WATCH",
+                                              "PATCH", "PLAIN"};
+      int wi = 0;
+      for (int k = 0; k < 9; k++) if (WR_ORDER[k] == g_cfg.wrist_style) wi = k;
+      ui_cycle("WRIST", WR_NAMES, 9, &wi, px, pw, y, click, cx, cy);
+      g_cfg.wrist_style = WR_ORDER[wi];
+    }
+    y += 15;
     // How the weapon sits in view. Here rather than under Settings > Graphics,
     // which is already as tall as a 720p screen allows.
     y += 4;
@@ -1379,9 +1392,8 @@ static void ui_menu(void) {
   if (g_cfg.vm_pos < 0 || g_cfg.vm_pos > 2) g_cfg.vm_pos = 0;
   ui_cycle("WEAPON POSITION", VM_POS_NAMES, 3, &g_cfg.vm_pos, px, pw, y, click, cx, cy);
   y += 15;
-    y += 4;
-    ui_text("WEAPON LOOK / GEAR / VIEW: NO GAMEPLAY EFFECT", px + 16, y + 3, 0.85f, C_DIM, 1);
-    y += 14;
+    // (The WRIST row took the height of the old "NO GAMEPLAY EFFECT" footer:
+    // with both, the BACK row ran under the hint chips at 720p.)
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
     // (movement feel, weapon feel). Lives behind `dev` so an install ships
