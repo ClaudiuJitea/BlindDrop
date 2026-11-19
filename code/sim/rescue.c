@@ -673,7 +673,8 @@ typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping, 
 // The mode block: the rules a client predicts under, and LAST MAN STANDING's
 // between-rounds state for its HUD. round_win 0xFF = nobody.
 typedef struct { uint8_t mode, round_secs, round_win, rounds, round_no;
-                 uint8_t team_size, team_fill; uint16_t tscore[2]; } net_mode_t;
+                 uint8_t team_size, team_fill; uint16_t tscore[2];
+                 uint8_t rules, gg_n, gg[GG_MAX]; } net_mode_t;   // rules: teams | wrule << 1
 static size_t net_scores_build(unsigned char *buf, size_t cap,
                                const uint8_t ping[MAX_ENTS]) {
   np_wr w = {buf, cap, 0, 0};
@@ -691,6 +692,11 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
   np_w8(&w, (uint8_t)((g_cfg.sp_team_fill ? 1 : 0) | (g_cfg.sp_team_ff ? 2 : 0)));
   np_w16(&w, (uint16_t)g_team_score[0]);
   np_w16(&w, (uint16_t)g_team_score[1]);
+  // The match's rules and GUN GAME's ladder: a client predicts the weapon gate
+  // from them, and its HUD names the rung's gun.
+  np_w8(&w, (uint8_t)((g_match.teams ? 1 : 0) | (g_match.wrule & 3) << 1));
+  np_w8(&w, (uint8_t)g_match.gg_n);
+  for (int i = 0; i < g_match.gg_n && i < GG_MAX; i++) np_w8(&w, g_match.gg[i]);
   size_t cnt_at = w.at;
   np_w8(&w, 0);
   int cnt = 0;
@@ -750,9 +756,16 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   md.rounds = np_r8(&r); md.round_no = np_r8(&r);
   md.team_size = np_r8(&r); md.team_fill = np_r8(&r) & 3;
   md.tscore[0] = np_r16(&r); md.tscore[1] = np_r16(&r);
+  md.rules = np_r8(&r);
+  md.gg_n = np_r8(&r);
+  if (md.gg_n > GG_MAX) return -1;           // hostile ladder: refuse the packet
+  for (int i = 0; i < md.gg_n; i++) {
+    md.gg[i] = np_r8(&r);
+    if (!gg_rung_valid(md.gg[i])) return -1;
+  }
   if (md.mode >= GM_COUNT) return -1;        // hostile mode: refuse the packet
   if (md.team_size > TEAM_SIZE_MAX) md.team_size = TEAM_SIZE_MAX;
-  if (md.round_win != 0xFF && md.round_win >= MAX_ENTS) return -1;
+  if (md.round_win != 0xFF && md.round_win >= MAX_ENTS + 2) return -1;   // + a side
   int cnt = np_r8(&r);
   if (r.bad) return -1;
   if (cnt > out_cap) cnt = out_cap;
@@ -1128,7 +1141,7 @@ static int bot_desired_weapon(const bot_t *b, int engaging, float target_dist,
   if (cur == WPN_GR && (b->wp.gr_t > 0 || b->wp.gr_cook > 0)) return WPN_GR;
   if (engaging && b->hurt_t > 0 && b->hp <= 45 && nade_smokes(&b->wp) > 0 &&
       target_dist >= 8.0f && target_dist <= 26.0f &&
-      game_mode() != GM_GUN && game_mode() != GM_BLADES)
+      !mode_frag_only())
     return WPN_GR;
   // The sidearm and the blade are situational: back to a long gun as soon as
   // one can fire, and to the AR when nothing is loaded, because a bot reloads
@@ -1175,7 +1188,7 @@ static int bot_desired_weapon(const bot_t *b, int engaging, float target_dist,
 static int mode_bot_weapon(const bot_t *b, int bi, int desired, int engaging,
                            float tdist) {
   int ent = bi + 1;
-  if (game_mode() == GM_BLADES) {
+  if (mode_wrule() == WR_BLADES) {
     int nade_ok = b->wp.ammo[WPN_GR] > 0 && b->wp.cool[WPN_GR] == 0;
     if (engaging && nade_ok && tdist >= BOT_NADE_MIN && tdist <= BOT_NADE_MAX)
       return WPN_GR;
@@ -1621,13 +1634,13 @@ static void match_on_kill(int src, int dst, int hs) {
       }
       if (src == dst) break;
       int lvl = gg_level(src);
-      if (wpn != GG_LADDER[lvl]) break;   // a stale grenade from the rung below
-      if (lvl == GG_LEVELS - 1) { match_end(src); break; }
+      if (wpn != gg_slot(lvl)) break;     // a stale grenade from the rung below
+      if (lvl == gg_levels() - 1) { match_end(src); break; }
       g_match.mscore[src]++;
       // A promotion's weapon arrives loaded; the swap itself is the shared
       // gate in weapon_tick / bot_tick, so a live grenade finishes its throw.
       weapon_t *w = ent_weapon(src);
-      if (w && gg_level(src) != lvl) wpn_fill_mags(w);
+      if (w && gg_level(src) != lvl) { mode_gg_var(src, w); wpn_fill_mags(w); }
       break;
     }
     case GM_LMS:
@@ -1635,16 +1648,18 @@ static void match_on_kill(int src, int dst, int hs) {
     case GM_RESCUE:
       rescue_on_kill(src, dst, hs);       // the mission decides it (rescue_tick)
       break;
-    case GM_TDM:
-      // The SIDE scores. A suicide is nobody's frag; friendly fire is off, so
+    default:
+      if (!teams_on()) {
+        if (g_match.kills[src] >= sp_frag_limit()) match_end(src);
+        break;
+      }
+      // TEAMS: the SIDE scores. A suicide is nobody's frag; friendly fire is off, so
       // a teammate can never be the killer.
       if (src != dst && src >= 0 && src < MAX_ENTS && g_team[src] != g_team[dst]) {
         int t = g_team[src] ? 1 : 0;
         if (++g_team_score[t] >= sp_frag_limit()) match_end(MAX_ENTS + t);
       }
       break;
-    default:
-      if (g_match.kills[src] >= sp_frag_limit()) match_end(src);
   }
 }
 

@@ -132,7 +132,8 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   // A loadout picked after the spawn is taken at once while the weapons are
   // still untouched — a joiner's first input arrives after its first spawn,
   // and a menu change should not have to wait for a death.
-  if (w->fresh) {
+  // (Not in GUN GAME, where the ladder, not the loadout, names the gun.)
+  if (w->fresh && game_mode() != GM_GUN) {
     int lo = human_loadout_src(human_of_ent(ent));
     if (lo >= 0 && lo != loadout_pack(w->var[WPN_AR], w->var[WPN_PT], w->var[WPN_SR])) {
       loadout_take(w, lo);

@@ -1,13 +1,14 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.5
+## What's new in 0.8.6
 
-- **Rebuilt guns:** all 34 have new shaped bodies modelled on reference photos. The MAC-10, Tec-9, MP7 and P90 have their own grips and hand poses. The stock and butt pad stay on during reloads, and parts of the AK-47 that were only on one side are now on both.
-- **Foundry, rebuilt:** new architecture, gates and back doors out of the main yard into the works, and stairs up to some of the big roofs.
-- **Cleaner maps:** Citadel plays under a clear afternoon sky and Refinery on a crisp morning, with the brown haze gone; the other maps are tidied up too.
-- **A forearm status screen:** your gauntlet shows health (green, then amber, then red), your magazine and your grenades as shapes, and flashes red when you're hit. Pick its layout under Armory > Gear > Wrist.
+- **Simpler modes:** four modes (Deathmatch, Elimination, Gun Game, Hostage Rescue), plus **Teams** (on/off) and **Weapons** (all, snipers only, knives + nades) as settings. Any mix works, such as Team Elimination with snipers only. Old settings carry over.
+- **Elimination with teams:** no respawns, last side standing takes the round.
+- **Build your own Gun Game:** pick up to 10 guns in any order on the Ladder page. When you host, your ladder is the one every player climbs (`--ladder` on a dedicated server).
+- **New forearm displays:** kills this life, health and ammo bars, a radar or a compass. Pick one under Settings > HUD or Armory > Gear.
+- Ballistics moved to Host Settings and Dev > Assist.
 
-0.8.5 plays with 0.8 to 0.8.2 (same network protocol, 22).
+0.8.6 uses network protocol 23, so it can't play with older versions.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

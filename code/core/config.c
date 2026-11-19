@@ -685,6 +685,8 @@ static struct {   // consumed by the Linux server half only
   int team_size, team_fill;   // --team-size N, --team-fill 0|1 (TEAM DEATHMATCH)
   int team_ff;                // --friendly-fire 0|1
   int squad;                  // --squad N: HOSTAGE RESCUE squad size 1..3
+  int teams, wrule;           // --teams 0|1, --weapons all|snipers|blades
+  char ladder[80];            // --ladder ar1,pt0,...: GUN GAME's (gg_parse)
 // DESIGNATED, and not merely as a style preference. This was positional, and
 // adding `lobbies` to the int line above put it BEFORE `ticks` while the
 // initializer still carried the old order — so the default became lobbies = 0,
@@ -762,35 +764,101 @@ static const param_def_t SP_FRAG_DEF = {"sp_fraglimit", "FRAG LIMIT", 10, 1, 100
 // rounds" is a forty-minute match. Its own slider, its own key.
 static const param_def_t SP_ROUNDS_DEF = {"sp_rounds",  "ROUNDS TO WIN", 3, 1, 20,     1};
 
-// GAME MODES. One enum, one name table, one wire value (NP_SCORES carries it as
-// a byte, so the order is protocol: append, never reorder). Every rule a mode
-// changes is asked through the mode_* helpers next to match_t, never by
-// comparing g_match.mode at a call site — that is how the weapon gate, the
-// respawn gate and the win condition stay in one place.
-typedef enum { GM_DM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE, GM_TDM, GM_COUNT } game_mode_t;
+// GAME MODES (0.8.6: eight became four). One enum, one name table, one wire
+// value (NP_SCORES carries it as a byte, so the order is protocol). Two match
+// RULES ride beside it instead of being modes of their own: TEAMS (ALPHA vs
+// BRAVO, in DEATHMATCH and ELIMINATION) and the WEAPONS rule (all, snipers
+// only, knives + nades; same two modes). The old keys still parse
+// (gm_parse_legacy): tdm, tlms, sniper, blades, lms. Every rule a mode changes
+// is asked through the mode_* helpers in sim/modes.c, never by comparing
+// g_match.mode at a call site.
+typedef enum { GM_DM, GM_GUN, GM_LMS, GM_RESCUE, GM_COUNT } game_mode_t;
 static const char *const GM_NAMES[GM_COUNT] = {
-  "DEATHMATCH", "GUN GAME", "SNIPERS ONLY", "KNIVES + NADES", "LAST MAN STANDING",
-  "HOSTAGE RESCUE", "TEAM DEATHMATCH"};
-static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "sniper", "blades", "lms", "rescue", "tdm"};
-// TEAM DEATHMATCH: two sides, ALPHA and BRAVO. A winner >= MAX_ENTS is a TEAM
-// (MAX_ENTS + team), which is how EV_END, NP_SCORES and the banner carry it.
+  "DEATHMATCH", "GUN GAME", "ELIMINATION", "HOSTAGE RESCUE"};
+static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "elim", "rescue"};
+// The modes TEAMS and WEAPONS apply to.
+static int gm_has_rules(int m) { return m == GM_DM || m == GM_LMS; }
+static int gm_rounds(int m) { return m == GM_LMS; }   // ELIMINATION plays to rounds
+typedef enum { WR_ALL, WR_SNIPERS, WR_BLADES, WR_COUNT } wpn_rule_t;
+static const char *const WR_NAMES[WR_COUNT] = {"ALL", "SNIPERS ONLY", "KNIVES + NADES"};
+static const char *const WR_KEYS[WR_COUNT] = {"all", "snipers", "blades"};
+// TEAMS: two sides, ALPHA and BRAVO. A winner >= MAX_ENTS is a TEAM
+// (MAX_ENTS + team), which is how EV_END, NP_SCORES and the banner carry it;
+// in a team ELIMINATION a side's round is carried the same way in round_win.
 #define TEAM_SIZE_MAX 9
 // HOSTAGE RESCUE's squad: one to three operators, humans first, bots the rest.
 #define RESC_SQUAD_MAX 3
 static const char *const TEAM_NAMES[2] = {"ALPHA", "BRAVO"};
 static int won_by_me(int winner);   // with the team state, by match_t
 // GUN GAME's ladder: GG_RUNG_KILLS kills with each weapon promote you to the
-// next, and one kill with the last (the knife) wins — nine kills, about a
-// deathmatch's ten. At one kill a rung a six-bot match was over in fifteen
-// seconds. The grenade rung never runs dry (mode_nade_refill) and a KNIFE kill
-// knocks the victim back a whole rung.
-static const int GG_LADDER[] = {WPN_AR, WPN_PT, WPN_SR, WPN_GR, WPN_KN};
-#define GG_LEVELS ((int)(sizeof GG_LADDER / sizeof GG_LADDER[0]))
+// next, and one kill with the last wins. The grenade rung never runs dry
+// (mode_nade_refill) and a KNIFE kill knocks the victim back a whole rung.
+// THE LADDER IS THE PLAYER'S (0.8.6): up to GG_MAX rungs, each one gun — a
+// slot and its variant, so "AK-47" and "M4A4" are different rungs. Offline it
+// is the MATCH page's; online the server's (the host's, from --ladder), sent
+// in NP_SCORES. A rung is one byte: slot << 5 | variant.
+#define GG_MAX 10
+#define GG_RUNG(slot, var) ((slot) << 5 | (var))
+#define GG_SLOT(r) ((r) >> 5 & 7)
+#define GG_VAR(r)  ((r) & 31)
+static const uint8_t GG_DEFAULT[] = {GG_RUNG(WPN_AR, 0), GG_RUNG(WPN_PT, 0), GG_RUNG(WPN_SR, 0),
+                                     GG_RUNG(WPN_GR, 0), GG_RUNG(WPN_KN, 0)};
+#define GG_DEFAULT_N ((int)sizeof GG_DEFAULT)
+static int gg_rung_valid(int r) {
+  int s = GG_SLOT(r);
+  return r >= 0 && r < 256 && s < WPN_COUNT && GG_VAR(r) < wpn_var_n(s);
+}
+// The ladder as text, for the config and the server's command line:
+// "ar1,pt0,sr0,gr0,kn0" (slot key, variant). Unknown or bad entries are
+// skipped; an empty result is the caller's to replace with GG_DEFAULT.
+static int gg_parse(const char *s, uint8_t out[GG_MAX]) {
+  static const char *const SK[WPN_COUNT] = {"ar", "sr", "pt", "kn", "gr"};
+  int n = 0;
+  while (*s && n < GG_MAX) {
+    while (*s == ',' || *s == ' ') s++;
+    if (!*s) break;
+    for (int k = 0; k < WPN_COUNT; k++)
+      if (s[0] == SK[k][0] && s[1] == SK[k][1]) {
+        int v = (s[2] >= '0' && s[2] <= '9') ? atoi(s + 2) : 0;
+        if (gg_rung_valid(GG_RUNG(k, v))) out[n++] = (uint8_t)GG_RUNG(k, v);
+        break;
+      }
+    while (*s && *s != ',') s++;
+  }
+  return n;
+}
+static void gg_format(const uint8_t *r, int n, char *buf, size_t cap) {
+  static const char *const SK[WPN_COUNT] = {"ar", "sr", "pt", "kn", "gr"};
+  size_t at = 0;
+  buf[0] = '\0';
+  for (int i = 0; i < n && at + 8 < cap; i++)
+    at += (size_t)snprintf(buf + at, cap - at, "%s%s%d", i ? "," : "", SK[GG_SLOT(r[i]) % WPN_COUNT],
+                           GG_VAR(r[i]));
+}
 #define GG_RUNG_KILLS 2
 static int map_parse(const char *s);        // the MAP setting; both live with
 static const char *map_pick_key(int pick);  // MAP_DEFS, by map_generate
 static int gm_parse(const char *s) {
   for (int i = 0; i < GM_COUNT; i++) if (!strcmp(s, GM_KEYS[i])) return i;
+  return -1;
+}
+// A mode key, old or new, with the rules an old key implied (teams, weapons;
+// either may be NULL). -1 for an unknown key.
+static int gm_parse_legacy(const char *s, int *teams, int *wrule) {
+  int m = gm_parse(s), t = -1, w = -1;
+  if (m < 0) {
+    if (!strcmp(s, "lms"))         m = GM_LMS;
+    else if (!strcmp(s, "tdm"))    { m = GM_DM;  t = 1; }
+    else if (!strcmp(s, "tlms"))   { m = GM_LMS; t = 1; }
+    else if (!strcmp(s, "sniper")) { m = GM_DM;  t = 0; w = WR_SNIPERS; }
+    else if (!strcmp(s, "blades")) { m = GM_DM;  t = 0; w = WR_BLADES; }
+  }
+  if (m >= 0 && t >= 0 && teams) *teams = t;
+  if (m >= 0 && w >= 0 && wrule) *wrule = w;
+  return m;
+}
+static int wr_parse(const char *s) {
+  for (int i = 0; i < WR_COUNT; i++) if (!strcmp(s, WR_KEYS[i])) return i;
   return -1;
 }
 

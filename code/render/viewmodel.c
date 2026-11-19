@@ -1468,9 +1468,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
           // UV: u along the forearm reads left-to-right from the eye, v up.
           v3 U4[4] = {{{1, 1, 0}}, {{1, 0, 0}}, {{0, 0, 0}}, {{0, 1, 0}}};
           int ord[2][6] = {{0, 1, 2, 0, 2, 3}, {0, 2, 1, 0, 3, 2}};
-          // The vitals styles (6+) light the small window as a status lamp
-          // (blue = 1 tells the shader) and put the gauges on the big tan plate.
-          int vit = g_cfg.wrist_style >= 6;
+          // The display styles (9+) light the small window as a power lamp
+          // (blue = 1 tells the shader) and put the readout on the big tan plate.
+          int vit = g_cfg.wrist_style >= 9;
           if (vit) for (int k = 0; k < 4; k++) U4[k].z = 1.0f;
           for (int w2 = 0; w2 < 2; w2++)
             for (int k = 0; k < 6; k++) scene_push(P4[ord[w2][k]], on, U4[ord[w2][k]]);

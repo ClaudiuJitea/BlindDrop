@@ -1928,12 +1928,41 @@ static void run_script(char *script, sim_ctx_t *s) {
       // Sets the MATCH tab's choice; like the menu it lands on the next
       // `restart`, which is what a script follows it with.
       const char *n = next_tok();
-      int m = gm_parse(n);
+      // The old keys still work: tdm = dm + teams, tlms = elim + teams, ...
+      g_cfg.sp_teams = 0; g_cfg.sp_wrule = WR_ALL;
+      int m = gm_parse_legacy(n, &g_cfg.sp_teams, &g_cfg.sp_wrule);
       if (m < 0) {
-        fprintf(stderr, "script: unknown mode '%s' (dm|gun|sniper|blades|lms|rescue|tdm)\n", n);
+        fprintf(stderr, "script: unknown mode '%s' (dm|elim|gun|rescue, or tdm|tlms|lms|sniper|blades)\n", n);
         exit(1);
       }
       g_cfg.sp_mode = m;
+    } else if (!strcmp(t, "ladder")) {         // GUN GAME's ladder, as --ladder: next `restart`
+      g_cfg.gg_n = gg_parse(next_tok(), g_cfg.gg);
+      printf("ladder n=%d\n", g_cfg.gg_n);
+    } else if (!strcmp(t, "gg")) {             // the ladder in force, and the local rung
+      printf("gg levels=%d", gg_levels());
+      for (int i = 0; i < gg_levels(); i++) printf("%s%s", i ? "," : " ", gg_rung_name(gg_rung(i)));
+      const weapon_t *lw = g_local_ent >= 0 ? ent_weapon(g_local_ent) : NULL;
+      printf(" me=%d cur=%s\n", g_local_ent >= 0 ? gg_level(g_local_ent) : -1,
+             lw ? wvar_name(lw->cur, wvar(lw, lw->cur)) : "-");
+      ENT_FOREACH(e) {
+        const weapon_t *ew = ent_weapon(e);
+        if (ew) printf("gg ent %d rung=%d holds=%s\n", e, gg_level(e), wvar_name(ew->cur, wvar(ew, ew->cur)));
+      }
+    } else if (!strcmp(t, "netrules")) {
+      // NP_SCORES carries the match rules and GUN GAME's ladder: build one
+      // from the live match and read it back, as a client would.
+      unsigned char pk[2048];
+      size_t pn = net_scores_build(pk, sizeof pk, NULL);
+      uint8_t ov, wi; uint16_t fr; net_mode_t md = {0};
+      net_score_t rows[MAX_ENTS]; net_name_t nms[MAX_HUMANS]; int nn = 0;
+      int nr = net_scores_read(pk, pn, &ov, &wi, &fr, &md, rows, MAX_ENTS, nms, MAX_HUMANS, &nn);
+      printf("netrules rows=%d mode=%s teams=%d wrule=%s gg_n=%d ladder=", nr, GM_KEYS[md.mode % GM_COUNT],
+             md.rules & 1, WR_KEYS[(md.rules >> 1) % WR_COUNT], md.gg_n);
+      for (int i = 0; i < md.gg_n; i++) printf("%s%s", i ? "," : "", gg_rung_name(md.gg[i]));
+      int same = md.gg_n == g_match.gg_n && !memcmp(md.gg, g_match.gg, (size_t)md.gg_n) &&
+                 (md.rules & 1) == g_match.teams && (md.rules >> 1) == g_match.wrule;
+      printf(" match=%s\n", same ? "yes" : "NO");
     } else if (!strcmp(t, "teamsize")) {        // TEAM DEATHMATCH settings, like the
       g_cfg.sp_team_size = (int)next_n();       // MATCH page: next `restart`/tick
     } else if (!strcmp(t, "teamfill")) {

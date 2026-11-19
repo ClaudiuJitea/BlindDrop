@@ -197,8 +197,8 @@ static void ui_home(int click, float cx, float cy) {
   char sub[64];
   int gm = g_cfg.sp_mode >= 0 && g_cfg.sp_mode < GM_COUNT ? g_cfg.sp_mode : GM_DM;
   char goal[20];
-  if (gm == GM_GUN)      snprintf(goal, sizeof goal, "%d RUNGS", GG_LEVELS);
-  else if (gm == GM_LMS) snprintf(goal, sizeof goal, "%d ROUNDS", g_cfg.sp_rounds);
+  if (gm == GM_GUN)      snprintf(goal, sizeof goal, "%d RUNGS", g_cfg.gg_n > 0 ? g_cfg.gg_n : GG_DEFAULT_N);
+  else if (gm_rounds(gm)) snprintf(goal, sizeof goal, "%d ROUNDS", g_cfg.sp_rounds);
   else if (gm == GM_RESCUE) snprintf(goal, sizeof goal, "3 HOSTAGES");
   else                   snprintf(goal, sizeof goal, "%d FRAGS", g_cfg.sp_frag);
   // Mode, map, opponents, goal: difficulty lives on the page behind the tile,
@@ -207,6 +207,9 @@ static void ui_home(int click, float cx, float cy) {
   if (gm == GM_RESCUE)
     snprintf(sub, sizeof sub, "%s / COMPOUND / %d GUARDS / %s", GM_NAMES[gm],
              RESC_DIFF[g_cfg.sp_diff < 0 ? 0 : g_cfg.sp_diff > 2 ? 2 : g_cfg.sp_diff].guards, goal);
+  else if (g_cfg.sp_teams && gm_has_rules(gm))
+    snprintf(sub, sizeof sub, "TEAM %s / %s / %dV%d / %s", GM_NAMES[gm], MAP_PICK_NAMES[mp],
+             g_cfg.sp_team_size, g_cfg.sp_team_size, goal);
   else
   snprintf(sub, sizeof sub, "%s / %s / %d BOT%s / %s", GM_NAMES[gm], MAP_PICK_NAMES[mp],
            g_cfg.sp_bots, g_cfg.sp_bots == 1 ? "" : "S", goal);
@@ -457,6 +460,42 @@ static void ui_keyboard(int click, float cx, float cy) {
   }
 }
 
+// The forearm screen (config wrist_style; atmos.c draws it). One row, shown
+// in two places: Settings > HUD (it is a HUD readout) and Armory > Gear (the
+// operator preview beside it shows the gauntlet it sits on).
+// A mode's RULES rows, shared by SINGLEPLAYER and HOST SETTINGS: TEAMS and
+// WEAPONS where they apply (DEATHMATCH, ELIMINATION), GUN GAME's ladder as a
+// row that opens its page. Returns the next row's y.
+static float ui_rule_rows(int mode, int *teams, int *wrule, ui_page_t from, float px, float pw,
+                          float y, int click, float cx, float cy) {
+  if (gm_has_rules(mode)) {
+    ui_toggle("TEAMS", teams, px, pw, y, click, cx, cy);
+    y += 15;
+    if (*wrule < 0 || *wrule >= WR_COUNT) *wrule = WR_ALL;
+    ui_cycle("WEAPONS", WR_NAMES, WR_COUNT, wrule, px, pw, y, click, cx, cy);
+    y += 15;
+  } else if (mode == GM_GUN) {
+    char tok[24];
+    snprintf(tok, sizeof tok, "%d GUNS  >", g_cfg.gg_n > 0 ? g_cfg.gg_n : GG_DEFAULT_N);
+    if (ui_pill("LADDER", tok, px, pw, y, 0, 0, click, cx, cy)) {
+      g_ui_ladder_from = from;
+      ui_route(UI_PAGE_LADDER);
+    }
+    y += 15;
+  }
+  return y;
+}
+
+static void ui_wrist_row(float px, float pw, float y, int click, float cx, float cy) {
+  static const int WR_ORDER[5] = {10, 9, 11, 12, 5};
+  static const char *const WRIST_NAMES[5] = {"HEALTH + AMMO", "KILLS THIS LIFE", "RADAR",
+                                          "COMPASS", "OFF"};
+  int wi = 0;
+  for (int k = 0; k < 5; k++) if (WR_ORDER[k] == g_cfg.wrist_style) wi = k;
+  ui_cycle("WRIST DISPLAY", WRIST_NAMES, 5, &wi, px, pw, y, click, cx, cy);
+  g_cfg.wrist_style = WR_ORDER[wi];
+}
+
 static void ui_menu(void) {
   static int prev_down;
   static float pmx = -1e9f, pmy;
@@ -514,7 +553,7 @@ static void ui_menu(void) {
         break;
       case NAV_BACK:
         if (g_ui_page == UI_PAGE_ROOT) ui_close_menu();
-        else ui_route(g_ui_page == UI_PAGE_HOST ? UI_PAGE_ONLINE : UI_PAGE_ROOT);
+        else ui_route(ui_back_of(g_ui_page));
         break;
       default: g_nav_act = ev; break;
     }
@@ -575,7 +614,7 @@ static void ui_menu(void) {
   // vertices; ui_panel is a hundred). The height cache is per page and the
   // layout is stable per state, so the worst case is one frame of lag after a
   // row appears — invisible, and the hit-tests never read ph.
-  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344, 200, 260, 200, 300};
+  static float ph_page[UI_PAGE_COUNT] = {276, 200, 319, 344, 344, 200, 260, 200, 300, 300};
   ui_page_t drawn_page = g_ui_page;
   float pw = 340, px = g_ui_vw * 0.5f - pw * 0.5f;
   float ph = ph_page[drawn_page];
@@ -639,7 +678,7 @@ static void ui_menu(void) {
   // screen is not a form. Its slot stays so the array indexes by page.
   static const char *const PAGE_TITLE[UI_PAGE_COUNT] = {
     "", "SINGLEPLAYER", "SETTINGS", "CONTROLS", "DEV TOOLS", "ARMORY", "MULTIPLAYER",
-    "CHOOSE TEAM", "HOST SETTINGS"
+    "CHOOSE TEAM", "HOST SETTINGS", "GUN GAME LADDER"
   };
   ui_textb(PAGE_TITLE[drawn_page], px + 16, py + 9, 1.6f, C_BONE, 1);
   ui_rect(px + 16, py + 28, pw - 32, 1, C_BONE, 0.14f);
@@ -734,6 +773,8 @@ static void ui_menu(void) {
     ui_toggle("ENEMY MARKERS", &g_cfg.enemy_mark, px, pw, y, click, cx, cy);
     y += 15;
     ui_toggle("PERF STATS", &g_cfg.perf, px, pw, y, click, cx, cy);
+    y += 15;
+    ui_wrist_row(px, pw, y, click, cx, cy);
     y += 15;
   } else {
   // IDENTITY FIRST. The name field used to sit on the Singleplayer page, which
@@ -998,6 +1039,8 @@ static void ui_menu(void) {
     // RESTART button that applies it.
     ui_cycle("MODE", GM_NAMES, GM_COUNT, &g_cfg.sp_mode, px, pw, y, click, cx, cy);
     y += 15;
+    y = ui_rule_rows(g_cfg.sp_mode, &g_cfg.sp_teams, &g_cfg.sp_wrule, UI_PAGE_MATCH,
+                     px, pw, y, click, cx, cy);
     // MAP latches the same way. ROTATE steps to the next map every match.
     // HOSTAGE RESCUE is played on its own map (map_pick_apply), so the row is
     // a fixed label there, as on HOST SETTINGS: a picker that did nothing.
@@ -1008,11 +1051,11 @@ static void ui_menu(void) {
       ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
     }
     y += 15;
-    // Latches at the next restart, like MODE and MAP.
-    ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
-    y += 15;
+    // (BALLISTICS moved to HOST SETTINGS and DEV > ASSIST in 0.8.6: a match
+    // rule nearly nobody changes, and it read as an engine switch here.)
     if (!g_home && !g_online &&
-        (g_cfg.sp_mode != g_match.mode ||
+        (g_cfg.sp_mode != g_match.mode || g_cfg.sp_teams != g_match.teams ||
+         g_cfg.sp_wrule != g_match.wrule ||
          (g_cfg.sp_mode != GM_RESCUE && g_cfg.sp_map != g_map_pick))) {
       ui_text("APPLIES ON RESTART", px + 16, y + 1, 0.9f, C_BLAZE, 0.9f);
       y += 12;
@@ -1021,8 +1064,8 @@ static void ui_menu(void) {
       // A mission fields its own guards (by difficulty and squad) on its own
       // map; the squad is you and bots.
       y = ui_squad_rows(&g_cfg.sp_squad, px, pw, y, click, cx, cy);
-    } else if (g_cfg.sp_mode == GM_TDM) {
-      // TEAM DEATHMATCH offline: places per side (1v1 .. 9v9, bots fill them
+    } else if (g_cfg.sp_teams && gm_has_rules(g_cfg.sp_mode)) {
+      // A TEAM game offline: places per side (1v1 .. 9v9, bots fill them
       // all) and which side this player starts on. Bot fill and friendly fire
       // are a HOST's choices: they live on MULTIPLAYER > HOST SETTINGS.
       static const char *const TSZ[TEAM_SIZE_MAX] = {
@@ -1049,7 +1092,7 @@ static void ui_menu(void) {
     // The win condition is the mode's: frags, rounds, or (GUN GAME) the ladder,
     // which has no knob. The rounds slider borrows DRAG_FRAG — the two rows are
     // never on screen together.
-    if (g_cfg.sp_mode == GM_LMS) {
+    if (gm_rounds(g_cfg.sp_mode)) {
       float v = (float)g_cfg.sp_rounds;
       y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
       g_cfg.sp_rounds = (int)v;
@@ -1064,7 +1107,10 @@ static void ui_menu(void) {
       g_cfg.sp_frag = (int)v;
     } else {
       ui_text("WIN", px + 16, y + 3, 1, C_TEXT, 1);
-      const char *gw = "KNIFE KILL ON LAST RUNG";
+      char gw[40];
+      int ln = g_cfg.gg_n > 0 ? g_cfg.gg_n : GG_DEFAULT_N;
+      snprintf(gw, sizeof gw, "A KILL WITH THE %s",
+               gg_rung_name(g_cfg.gg_n > 0 ? g_cfg.gg[ln - 1] : GG_DEFAULT[ln - 1]));
       ui_text(gw, px + pw - 16 - ui_text_width(gw, 1), y + 4, 1, C_HAZE, 1);
       y += 15;
     }
@@ -1149,8 +1195,9 @@ static void ui_menu(void) {
       y += 22;
       // The game this player would host, in one line; the row opens its page.
       char hs[80];
-      if (gm == GM_TDM)
-        snprintf(hs, sizeof hs, "TEAM DM / %s / %dV%d%s%s", MAP_PICK_NAMES[mi],
+      if (g_cfg.host_teams && gm_has_rules(gm))
+        snprintf(hs, sizeof hs, "TEAM %s / %s / %dV%d%s%s", gm == GM_DM ? "DM" : "ELIM",
+                 MAP_PICK_NAMES[mi],
                  g_cfg.host_team_size, g_cfg.host_team_size,
                  g_cfg.host_team_fill ? " + BOTS" : "", g_cfg.host_team_ff ? " / FF" : "");
       else if (gm == GM_RESCUE)
@@ -1184,7 +1231,7 @@ static void ui_menu(void) {
       char info[48];
       if (g->proto != NET_PROTO) snprintf(info, sizeof info, "UPDATE NEEDED");
       else snprintf(info, sizeof info, "%s / %s  %d/%d",
-                    GM_NAMES[g->mode < GM_COUNT ? g->mode : 0],
+                    mode_label(g->mode & 3, g->mode >> 4 & 1, 0, (char[32]){0}, 32),
                     MAP_PICK_NAMES[g->map <= MAP_COUNT ? g->map : 0], g->humans, g->cap);
       if (ui_pill(g->name, info, px, pw, y, 0, 0, click, cx, cy) && !busy && !g_online &&
           g->proto == NET_PROTO) {
@@ -1245,19 +1292,13 @@ static void ui_menu(void) {
     // Apart from SINGLEPLAYER's mode/map/bots, so setting up a team game for
     // friends never rewrites the solo match (and the reverse). Difficulty,
     // the frag limit / rounds and ballistics are the shared match rules.
-    static const int HMODES[] = {GM_DM, GM_TDM, GM_GUN, GM_SNIPER, GM_BLADES, GM_LMS, GM_RESCUE};
-    enum { NHM = (int)(sizeof HMODES / sizeof HMODES[0]) };
-    const char *hmn[NHM];
-    int hi = 0;
-    for (int i = 0; i < NHM; i++) {
-      hmn[i] = GM_NAMES[HMODES[i]];
-      if (HMODES[i] == g_cfg.host_mode) hi = i;
-    }
     ui_section("GAME", px, pw, y);
     y += 14;
-    ui_cycle("MODE", hmn, NHM, &hi, px, pw, y, click, cx, cy);
-    g_cfg.host_mode = HMODES[hi];
+    if (g_cfg.host_mode < 0 || g_cfg.host_mode >= GM_COUNT) g_cfg.host_mode = GM_DM;
+    ui_cycle("MODE", GM_NAMES, GM_COUNT, &g_cfg.host_mode, px, pw, y, click, cx, cy);
     y += 15;
+    y = ui_rule_rows(g_cfg.host_mode, &g_cfg.host_teams, &g_cfg.host_wrule, UI_PAGE_HOST,
+                     px, pw, y, click, cx, cy);
     if (g_cfg.host_mode == GM_RESCUE) {          // the mission has its own map
       ui_text("MAP", px + 16, y + 3, 1, C_TEXT, 1);
       ui_text("COMPOUND", px + pw - 16 - ui_text_width("COMPOUND", 1), y + 4, 1, C_HAZE, 1);
@@ -1270,7 +1311,7 @@ static void ui_menu(void) {
     static const char *const DIFF_OPTS[3] = {"EASY", "NORMAL", "HARD"};
     ui_cycle("BOT DIFFICULTY", DIFF_OPTS, 3, &g_cfg.sp_diff, px, pw, y, click, cx, cy);
     y += 15;
-    if (g_cfg.host_mode == GM_LMS) {
+    if (gm_rounds(g_cfg.host_mode)) {
       float v = (float)g_cfg.sp_rounds;
       y = ui_param_row(&SP_ROUNDS_DEF, &v, DRAG_FRAG, px, y, click, cx, cy);
       g_cfg.sp_rounds = (int)v;
@@ -1285,7 +1326,7 @@ static void ui_menu(void) {
       g_cfg.sp_frag = (int)v;
     }
     y += 4;
-    if (g_cfg.host_mode == GM_TDM) {
+    if (g_cfg.host_teams && gm_has_rules(g_cfg.host_mode)) {
       ui_section("TEAMS", px, pw, y);
       y += 14;
       static const char *const TSZ[TEAM_SIZE_MAX] = {
@@ -1369,18 +1410,7 @@ static void ui_menu(void) {
     ui_cycle("PACK", PACK_GEAR_NAMES, PACK_GEAR_COUNT, &g_cfg.pack_gear,
              px, pw, y, click, cx, cy);
     y += 15;
-    {
-      // The forearm screen (config wrist_style). Listed in the order a player
-      // would want them: the three status layouts first, the rest after.
-      static const int WR_ORDER[9] = {6, 7, 8, 0, 1, 2, 3, 4, 5};
-      static const char *const WR_NAMES[9] = {"STATUS BARS", "STATUS ARCS", "STATUS COLUMNS",
-                                              "THREAT RING", "IR STROBE", "AMMO", "WATCH",
-                                              "PATCH", "PLAIN"};
-      int wi = 0;
-      for (int k = 0; k < 9; k++) if (WR_ORDER[k] == g_cfg.wrist_style) wi = k;
-      ui_cycle("WRIST", WR_NAMES, 9, &wi, px, pw, y, click, cx, cy);
-      g_cfg.wrist_style = WR_ORDER[wi];
-    }
+    ui_wrist_row(px, pw, y, click, cx, cy);   // also under Settings > HUD
     y += 15;
     // How the weapon sits in view. Here rather than under Settings > Graphics,
     // which is already as tall as a 720p screen allows.
@@ -1394,6 +1424,65 @@ static void ui_menu(void) {
   y += 15;
     // (The WRIST row took the height of the old "NO GAMEPLAY EFFECT" footer:
     // with both, the BACK row ran under the hint chips at 720p.)
+  } else if (drawn_page == UI_PAGE_LADDER) {
+    // GUN GAME'S LADDER: the guns, in order, one row each. SINGLEPLAYER and
+    // HOST SETTINGS edit the same list (g_cfg.gg); a hosted game sends it to
+    // the server (--ladder), which sends it to every player.
+    if (g_cfg.gg_n <= 0) {                     // start editing from the default
+      memcpy(g_cfg.gg, GG_DEFAULT, GG_DEFAULT_N);
+      g_cfg.gg_n = GG_DEFAULT_N;
+    }
+    // Every gun once: the primaries, the pistols, the snipers, the grenade, the knife.
+    static const int GSLOT[5] = {WPN_AR, WPN_PT, WPN_SR, WPN_GR, WPN_KN};
+    enum { NG = RV_N + PV_N + SV_N + 2 };
+    static uint8_t gcode[NG];
+    static const char *gname[NG];
+    if (!gname[0]) {
+      int k = 0;
+      for (int si = 0; si < 5; si++)
+        for (int v = 0; v < wpn_var_n(GSLOT[si]); v++) {
+          gcode[k] = (uint8_t)GG_RUNG(GSLOT[si], v);
+          gname[k++] = gg_rung_name(GG_RUNG(GSLOT[si], v));
+        }
+    }
+    ui_section("RUNGS", px, pw, y);
+    y += 14;
+    for (int i = 0; i < g_cfg.gg_n; i++) {
+      int gi = 0;
+      for (int k = 0; k < NG; k++) if (gcode[k] == g_cfg.gg[i]) gi = k;
+      char lb[16];
+      snprintf(lb, sizeof lb, "RUNG %d", i + 1);
+      ui_cycle(lb, gname, NG, &gi, px, pw, y, click, cx, cy);
+      g_cfg.gg[i] = gcode[gi];
+      y += 15;
+    }
+    y += 4;
+    float bw = (pw - 32 - 8) / 3.0f;
+    if (ui_button("ADD", px + 16, y, bw, 16, click, cx, cy, 0) && g_cfg.gg_n < GG_MAX) {
+      // A new rung goes in BEFORE the last, which is usually the finisher.
+      int n = g_cfg.gg_n;
+      g_cfg.gg[n] = g_cfg.gg[n - 1];
+      g_cfg.gg[n - 1] = (uint8_t)GG_RUNG(WPN_AR, 1);
+      g_cfg.gg_n = n + 1;
+    }
+    if (ui_button("REMOVE", px + 20 + bw, y, bw, 16, click, cx, cy, 0) && g_cfg.gg_n > 1) {
+      int n = g_cfg.gg_n;                     // drop the one before the finisher
+      if (n >= 2) g_cfg.gg[n - 2] = g_cfg.gg[n - 1];
+      g_cfg.gg_n = n - 1;
+    }
+    if (ui_button("DEFAULT", px + 24 + 2 * bw, y, bw, 16, click, cx, cy, 0)) {
+      memcpy(g_cfg.gg, GG_DEFAULT, GG_DEFAULT_N);
+      g_cfg.gg_n = GG_DEFAULT_N;
+    }
+    y += 22;
+    char hint[64];
+    snprintf(hint, sizeof hint, "%d KILLS A RUNG; A KILL ON THE LAST ONE WINS", GG_RUNG_KILLS);
+    ui_text_ex(hint, px + 16, y, 0.8f, TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
+    y += 10;
+    ui_text_ex(g_ui_ladder_from == UI_PAGE_HOST ? "SENT TO EVERY PLAYER WHEN YOU HOST"
+                                                : "APPLIES ON RESTART",
+               px + 16, y, 0.8f, TXT_REG, 1.0f, C4(C_HAZE, 0.75f));
+    y += 10;
   } else if (drawn_page == UI_PAGE_DEV) {
     // DEV — the developer tuning workbench: every knob a PLAYER never touches
     // (movement feel, weapon feel). Lives behind `dev` so an install ships
@@ -1469,6 +1558,13 @@ static void ui_menu(void) {
     y = ui_pad_row(PAD_AS_FRIC, px, y, click, cx, cy);
     y = ui_pad_row(PAD_AS_BUBBLE, px, y, click, cx, cy);
     y = ui_pad_row(PAD_AS_DIST, px, y, click, cx, cy);
+    y += 4;
+    // Rounds that fly (drag, drop, ricochet): latches at the next restart.
+    // Also on HOST SETTINGS, for a hosted game.
+    ui_section("BALLISTICS", px, pw, y);
+    y += 14;
+    ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);
+    y += 15;
     }
   }
 
@@ -1492,7 +1588,7 @@ static void ui_menu(void) {
   if (drawn_page != UI_PAGE_ROOT) {
     y += 8;
     if (ui_button("BACK", px + 16, y, pw - 32, 16, click, cx, cy, 0))
-      ui_route(drawn_page == UI_PAGE_HOST ? UI_PAGE_ONLINE : UI_PAGE_ROOT);
+      ui_route(ui_back_of(drawn_page));
     y += 18;
   }
 
@@ -1630,7 +1726,7 @@ static void ui_scoreboard(void) {
   // The mode's own number ranks first where it IS the score: the GUN GAME
   // rung, LAST MAN STANDING rounds. A deathmatch board is unchanged.
   int gm = game_mode();
-  int mcol = gm == GM_GUN || gm == GM_LMS;
+  int mcol = gm == GM_GUN || (gm == GM_LMS && !teams_on());
   const int *ms = g_match.mscore;
   for (int i = 1; i < n; i++) {  // insertion sort: [mode desc,] kills desc, deaths asc
     int v = idx[i], j = i;
@@ -1698,11 +1794,11 @@ static void ui_scoreboard(void) {
   // (added in the UI phase); here the composition is what matters.
   int nh = 0, nb = 0;
   ENT_FOREACH(e) { if (human_of_ent(e) >= 0) nh++; else nb++; }
-  if (gm == GM_TDM) snprintf(sub, sizeof sub, "ALPHA %d \x05 BRAVO %d",
+  if (teams_on()) snprintf(sub, sizeof sub, "ALPHA %d \x05 BRAVO %d",
                             g_team_score[0] & 0xFFFF, g_team_score[1] & 0xFFFF);
   else if (nh > 1) snprintf(sub, sizeof sub, "%d PLAYERS \x05 %d BOTS", nh & 63, nb & 63);
-  else if (gm == GM_GUN) snprintf(sub, sizeof sub, "KNIFE KILL WINS");
-  else if (gm == GM_LMS) snprintf(sub, sizeof sub, "FIRST TO %d ROUNDS", mode_round_goal());
+  else if (gm == GM_GUN) snprintf(sub, sizeof sub, "%s KILL WINS", gg_rung_name(gg_rung(gg_levels() - 1)));
+  else if (gm_rounds(gm)) snprintf(sub, sizeof sub, "FIRST TO %d ROUNDS", mode_round_goal());
   else        snprintf(sub, sizeof sub, "FIRST TO %d",
                        g_online && g_net_fraglimit ? g_net_fraglimit
                                                    : g_cfg.sp_frag);
@@ -1791,7 +1887,7 @@ static void ui_scoreboard(void) {
       ui_text(buf, xp - ui_text_width(buf, 1), y, 1, C_HAZE, 1);
     }
     if (mcol) {
-      if (gm == GM_GUN) snprintf(buf, sizeof buf, "%d/%d", gg_level(e) + 1, GG_LEVELS);
+      if (gm == GM_GUN) snprintf(buf, sizeof buf, "%d/%d", gg_level(e) + 1, gg_levels());
       else              snprintf(buf, sizeof buf, "%d", g_match.mscore[e]);
       ui_textb(buf, xm - ui_text_width(buf, 1), y, 1, C_BONE, 1);
     }

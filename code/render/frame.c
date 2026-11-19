@@ -26,7 +26,7 @@ static void hud_carousel(const player_t *p, float rxe, float ybot) {
   float y = ybot;
   for (int s = SEL_COUNT - 1; s >= 0; s--) {
     int allowed = s < WPN_GR ? mode_allowed(ent, s) : mode_allowed(ent, WPN_GR) &&
-                  (s == WPN_GR + NADE_FRAG || (game_mode() != GM_GUN && game_mode() != GM_BLADES));
+                  (s == WPN_GR + NADE_FRAG || !mode_frag_only());
     if (!allowed) continue;
     int have = sel_avail(ent, &p->wp, s), on = s == cur;
     y -= 10.0f;
@@ -834,53 +834,72 @@ static void render_frame(const player_t *p, float alpha, int fps,
     // The weapon's own frame, uploaded AFTER vm_build so it describes the pose
     // that was just emitted rather than the previous frame's.
     {
-      // THE WRIST THREAT RING (0.8.3; it was a two-digit kill counter): a ring
-      // with the wearer's facing at its top that lights toward danger — amber
-      // toward the last hostile shot fired within 60 m (fading over 3 s), red
-      // toward where he was last hit from (the damage arcs' g_dmg, fading with
-      // them). Bearings are relative to his facing, clockwise; forward is
-      // (sin yaw, 0, -cos yaw), right (cos yaw, 0, sin yaw). A kill still
-      // flashes the screen for a beat.
+      // THE WRIST DISPLAY (atmos.c mf -8; config wrist_style, Settings > HUD).
+      // KILLS counts this life: the baseline moves to the current total each
+      // time the death count changes (a death, or a match reset to zero). A
+      // kill still flashes the screen for a beat; a hit flashes the lamp red.
       int kills = g_local_ent >= 0 ? g_match.kills[g_local_ent] : 0;
+      int deaths = g_local_ent >= 0 ? g_match.deaths[g_local_ent] : 0;
       static float t_prev = -1.0f, k_fl = 0.0f;
-      static int k_last = 0;
+      static int k_last = 0, d_last = -1, k_base = 0;
       float dt = t_prev < 0.0f ? 0.0f : f_clamp(g_ui_time - t_prev, 0.0f, 0.1f);
       t_prev = g_ui_time;
       if (kills > k_last) k_fl = 1.0f;
       k_last = kills;
+      if (deaths != d_last || kills < k_base) { k_base = kills; d_last = deaths; }
       k_fl = fmaxf(0.0f, k_fl - dt * 2.5f);
       v3 fw = {{sinf(p->yaw), 0.0f, -cosf(p->yaw)}}, rg = {{cosf(p->yaw), 0.0f, sinf(p->yaw)}};
-      float sb = 0.0f, ss = 0.0f, hb = 0.0f, hs = 0.0f;
+      float hs = 0.0f;
       {
-        float age = g_ui_time - g_threat_shot_t;
-        if (age >= 0.0f && age < 3.0f && p->alive) {
-          v3 d = v3_sub(g_threat_shot, p->pos);
-          sb = atan2f(v3_dot(d, rg), v3_dot(d, fw)) * (180.0f / F_PI);
-          ss = 1.0f - age / 3.0f;
-        }
         int best = -1;
         for (int i = 0; i < DMG_SLOTS; i++)
           if (g_dmg[i].life > 0 && (best < 0 || g_dmg[i].life > g_dmg[best].life)) best = i;
-        if (best >= 0 && p->alive) {
-          v3 d = v3_sub(g_dmg[best].from, p->pos);
-          hb = atan2f(v3_dot(d, rg), v3_dot(d, fw)) * (180.0f / F_PI);
-          hs = (float)g_dmg[best].life / (float)DMG_TICKS;
+        if (best >= 0 && p->alive) hs = (float)g_dmg[best].life / (float)DMG_TICKS;
+      }
+      // North is -z (yaw 0 faces it), so its bearing clockwise from facing is -yaw.
+      glUniform4f(uloc(R.prog_world, "uWrist"), (float)(kills - k_base), -p->yaw, 0.0f, 0.0f);
+      // THE RADAR: the nearest eight live enemies inside 40 m that the wearer
+      // can SEE (a clear, smoke-free line from his eye: the same rule as the
+      // enemy markers) or has HEARD fire in the last 2.5 s (fading). It shows
+      // nothing the player could not know, only where it was.
+      float RB[8][4] = {{0}};
+      if (g_cfg.wrist_style == 11 && p->alive && !g_match.over) {
+        const float RR = 40.0f;
+        v3 reye = {{p->pos.x, p->pos.y + p->eye, p->pos.z}};
+        float bd[8];
+        int nb = 0;
+        ENT_FOREACH(e) {
+          if (e == g_local_ent || !ent_alive(e) || team_mates(g_local_ent, e)) continue;
+          v3 ep = ent_aimpoint(e);
+          v3 d = v3_sub(ep, p->pos);
+          float dx = v3_dot(d, rg), dz = v3_dot(d, fw), dist = sqrtf(dx * dx + dz * dz);
+          if (dist > RR) continue;
+          float heard = 0.0f, seen = 0.0f;
+          float age = g_ui_time - g_ent_shot_t[e];
+          if (g_ent_shot_t[e] > 0.0f && age >= 0.0f && age < 2.5f) heard = 1.0f - age / 2.5f;
+          if (los_clear(reye, ep) && !smoke_blocks(reye, ep)) seen = 1.0f;
+          if (seen <= 0.0f && heard <= 0.0f) continue;
+          int slot = nb < 8 ? nb++ : -1;
+          if (slot < 0) {
+            int far = 0;
+            for (int i = 1; i < 8; i++) if (bd[i] > bd[far]) far = i;
+            if (bd[far] <= dist) continue;
+            slot = far;
+          }
+          bd[slot] = dist;
+          RB[slot][0] = dx / RR; RB[slot][1] = dz / RR;
+          RB[slot][2] = seen > 0.0f ? 1.0f : heard; RB[slot][3] = seen;
         }
       }
-      glUniform4f(uloc(R.prog_world, "uWrist"), sb, ss, hb, hs);
-      // The style (config wrist_style) and what the non-ring styles read: the
-      // magazine's fill and the three grenade counts (out of WPN_DEF's carry).
+      glUniform4fv(uloc(R.prog_world, "uRadar"), 8, &RB[0][0]);
+      // The style (config wrist_style) and the magazine's fill.
       float mg = 0.0f;
       {
         int cw = p->wp.cur, mag = wdef(&p->wp, cw)->mag;
         mg = (cw == WPN_KN || cw == WPN_GR || mag <= 0) ? 1.0f
            : f_clamp((float)p->wp.ammo[cw] / (float)mag, 0.0f, 1.0f);
       }
-      float gcap = (float)(WPN_DEF[WPN_GR].mag > 0 ? WPN_DEF[WPN_GR].mag : 3);
-      glUniform4f(uloc(R.prog_world, "uWrist3"), mg,
-                  (float)nade_count(&p->wp, NADE_FRAG) / gcap,
-                  (float)nade_count(&p->wp, NADE_SMOKE) / gcap,
-                  (float)nade_count(&p->wp, NADE_INC) / gcap);
+      glUniform4f(uloc(R.prog_world, "uWrist3"), mg, 0.0f, 0.0f, 0.0f);
       {
         int cw = p->wp.cur;
         const wpn_def_t *wd = wdef(&p->wp, cw);
@@ -891,8 +910,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
         glUniform4f(uloc(R.prog_world, "uWrist4"), f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f),
                     rp, msz, hs);
       }
-      glUniform4f(uloc(R.prog_world, "uWrist2"), k_fl, g_ui_time, (float)g_cfg.wrist_style,
-                  g_ui_time - g_wrist_fire_t);
+      glUniform4f(uloc(R.prog_world, "uWrist2"), k_fl, g_ui_time, (float)g_cfg.wrist_style, 0.0f);
     }
     {
       // The armory: the weapon theme's paint and the gear's LED colour, which
@@ -906,7 +924,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
       glUniform3fv(uloc(R.prog_world, "uSkinD"), 1, th->d);
       // The display's "on" colour at the shipped amber is (1, .55, .12): the
       // LED's authored colour pushed redder the way the inlay shader does.
-      // The wrist DISPLAY is the kill counter, not a gear accent: it keeps the
+      // The wrist DISPLAY is a readout, not a gear accent: it keeps the
       // lit per-outfit colour the `led` column had before v5 dimmed the inlays.
       static const float WRIST_ON[GEAR_THEME_COUNT][3] = {
         {1.00f, 0.62f, 0.10f}, {1.00f, 0.62f, 0.10f}, {0.45f, 1.00f, 0.30f},
@@ -1432,7 +1450,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
           // outline, lit when carried — and ringed in BLAZE when it is the
           // grenade the slot will draw.
           int nsm = nade_smokes(&p->wp);
-          int sm_mode = game_mode() != GM_GUN && game_mode() != GM_BLADES;
+          int sm_mode = !mode_frag_only();
           if (sm_mode) {
             // The incendiary rightmost: a tall narrow bar (its short fat can
             // reads as a block at this size, so it is coloured, not shaped),
@@ -1625,7 +1643,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
 #undef HUD_SC
       // TEAM DEATHMATCH: my side against theirs.
       int mt = team_of(g_local_ent) == 1;
-      if (hgm == GM_TDM) { me = g_team_score[mt]; lead = g_team_score[!mt]; }
+      if (teams_on()) { me = g_team_score[mt]; lead = g_team_score[!mt]; }
       char msc[8], lsc[8];
       snprintf(msc, sizeof msc, "%d", me);
       snprintf(lsc, sizeof lsc, "%d", lead);
@@ -1644,12 +1662,12 @@ static void render_frame(const player_t *p, float alpha, int fps,
       {
         float ms = 1.15f + 0.30f * pk * pk;
         int ahead = me >= lead && me > 0;
-        const char *ll = hgm == GM_TDM ? TEAM_NAMES[mt] : "YOU";
-        const char *rl = hgm == GM_TDM ? TEAM_NAMES[!mt] : "LEAD";
+        const char *ll = teams_on() ? TEAM_NAMES[mt] : "YOU";
+        const char *rl = teams_on() ? TEAM_NAMES[!mt] : "LEAD";
         float pw = 132.0f, ph = 17.0f, px = ccx - pw * 0.5f, py = 4.0f;
         ui_panel(px, py, pw, ph, 0, 0.62f);
         float lc[3] = {C_SIGNAL}, rc[3] = {C_THREAT};
-        if (hgm == GM_TDM) {
+        if (teams_on()) {
           float a3[3] = {TEAM_RGB(mt)}, b3[3] = {TEAM_RGB(!mt)};
           memcpy(lc, a3, sizeof lc);
           memcpy(rc, b3, sizeof rc);
@@ -1668,39 +1686,51 @@ static void render_frame(const player_t *p, float alpha, int fps,
         ui_text_ex(rl, px + pw - 8 - rw2, ty + 1.6f, 0.6f, TXT_REG, 1.4f, C4(C_HAZE, 0.9f));
       }
       // ...and the one line of mode state a player needs under it.
-      char cap[40];
+      char cap[48];
       cap[0] = '\0';
+      int tms = teams_on(), wr = mode_wrule();
       if (hgm == GM_GUN && g_local_ent >= 0) {
-        int l = gg_level(g_local_ent);
-        if (l == GG_LEVELS - 1)
+        int l = gg_level(g_local_ent), nl = gg_levels();
+        if (l == nl - 1)
           snprintf(cap, sizeof cap, "%s \x05 RUNG %d/%d \x05 KILL TO WIN",
-                   WPN_DEF[GG_LADDER[l]].name, l + 1, GG_LEVELS);
+                   gg_rung_name(gg_rung(l)), l + 1, nl);
         else
           snprintf(cap, sizeof cap, "%s \x05 RUNG %d/%d \x05 %d/%d KILLS",
-                   WPN_DEF[GG_LADDER[l]].name, l + 1, GG_LEVELS,
+                   gg_rung_name(gg_rung(l)), l + 1, nl,
                    gg_progress(g_local_ent), GG_RUNG_KILLS);
+      } else if (hgm == GM_LMS && tms) {
+        int al[2] = {0, 0};
+        ENT_FOREACH(e) if (ent_alive(e)) al[team_of(e) == 1]++;
+        snprintf(cap, sizeof cap, "ROUND %d \x05 %d V %d \x05 FIRST TO %d",
+                 g_match.round_no, al[mt], al[!mt], mode_round_goal());
       } else if (hgm == GM_LMS) {
         int al = 0;
         ENT_FOREACH(e) if (ent_alive(e)) al++;
         snprintf(cap, sizeof cap, "ROUND %d \x05 %d ALIVE \x05 FIRST TO %d",
                  g_match.round_no, al, mode_round_goal());
-      } else if (hgm == GM_SNIPER || hgm == GM_BLADES) {
-        snprintf(cap, sizeof cap, "%s", GM_NAMES[hgm]);
-      } else if (hgm == GM_TDM) {
+      } else if (hgm == GM_DM && tms) {
         snprintf(cap, sizeof cap, "TEAM %s \x05 FIRST TO %d", TEAM_NAMES[mt],
                  g_online && g_net_fraglimit ? g_net_fraglimit : g_cfg.sp_frag);
       }
-      if (cap[0] && hgm == GM_TDM)
+      // The WEAPONS rule rides on the end of the line, or is the line.
+      if (wr != WR_ALL) {
+        size_t cl = strlen(cap);
+        snprintf(cap + cl, sizeof cap - cl, "%s%s", cl ? " \x05 " : "", WR_NAMES[wr]);
+      }
+      if (cap[0] && tms)
         ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 25, 0.7f,
                    TXT_REG, 1.2f, C4(TEAM_RGB(mt), 0.9f));
       else if (cap[0])
         ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 25, 0.7f,
                    TXT_REG, 1.2f, C4(C_HAZE, 0.8f));
       // LAST MAN STANDING intermission: who took the round, and when the next.
-      if (hgm == GM_LMS && g_match.round_t > 0) {
+      if (gm_rounds(hgm) && g_match.round_t > 0) {
         char rb[40], rs[24];
         int rw = g_match.round_win;
         if (rw < 0) snprintf(rb, sizeof rb, "ROUND DRAWN");
+        else if (rw >= MAX_ENTS) snprintf(rb, sizeof rb, "%s", won_by_me(rw) ? "ROUND WON"
+                                          : rw - MAX_ENTS == 0 ? "ALPHA TAKES THE ROUND"
+                                                               : "BRAVO TAKES THE ROUND");
         else if (rw == g_local_ent) snprintf(rb, sizeof rb, "ROUND WON");
         else snprintf(rb, sizeof rb, "%s TAKES THE ROUND", ent_name(rw));
         snprintf(rs, sizeof rs, "NEXT ROUND IN %d",

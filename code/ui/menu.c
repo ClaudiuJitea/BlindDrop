@@ -321,8 +321,16 @@ static int mp_host_start(void) {
   snprintf(capp, sizeof capp, "%d", MAX_HUMANS);
   snprintf(tsz, sizeof tsz, "%d", g_cfg.host_team_size);
   snprintf(tfl, sizeof tfl, "%d", g_cfg.host_team_fill ? 1 : 0);
+  // The match rules and GUN GAME's ladder (the LADDER page's, shared).
+  char tms[4], lad[GG_MAX * 6 + 1];
+  snprintf(tms, sizeof tms, "%d", g_cfg.host_teams ? 1 : 0);
+  if (g_cfg.gg_n > 0) gg_format(g_cfg.gg, g_cfg.gg_n, lad, sizeof lad);
+  else gg_format(GG_DEFAULT, GG_DEFAULT_N, lad, sizeof lad);
+  int wr = g_cfg.host_wrule >= 0 && g_cfg.host_wrule < WR_COUNT ? g_cfg.host_wrule : WR_ALL;
   char *argv[] = {"blinddrop", "--server", "--port", port,
-                  "--mode", (char *)GM_KEYS[mode], "--map", (char *)map_pick_key(g_cfg.host_map),
+                  "--mode", (char *)GM_KEYS[mode], "--teams", tms,
+                  "--weapons", (char *)WR_KEYS[wr], "--ladder", lad,
+                  "--map", (char *)map_pick_key(g_cfg.host_map),
                   "--cap-public", capp, "--cap-bots", bots, "--skill", skill,
                   "--fraglimit", frag, "--rounds", rounds, "--name", name,
                   "--team-size", tsz, "--team-fill", tfl, "--friendly-fire", tff,
@@ -347,7 +355,7 @@ static void mp_host_stop(void) {
 
 typedef enum { UI_PAGE_ROOT, UI_PAGE_MATCH, UI_PAGE_SETTINGS,
                UI_PAGE_CONTROLS, UI_PAGE_DEV, UI_PAGE_ARMORY, UI_PAGE_ONLINE,
-               UI_PAGE_TEAM, UI_PAGE_HOST, UI_PAGE_COUNT } ui_page_t;
+               UI_PAGE_TEAM, UI_PAGE_HOST, UI_PAGE_LADDER, UI_PAGE_COUNT } ui_page_t;
 
 static ui_page_t g_ui_page = UI_PAGE_ROOT;
 
@@ -489,11 +497,18 @@ static void ui_kb_nav(int ev) {
 
 [[maybe_unused]] static const char *ui_page_name(ui_page_t page) {
   static const char *const NAME[UI_PAGE_COUNT] = {
-    "root", "match", "settings", "controls", "dev", "armory", "online", "team", "host"
+    "root", "match", "settings", "controls", "dev", "armory", "online", "team", "host", "ladder"
   };
   return page >= 0 && page < UI_PAGE_COUNT ? NAME[page] : "root";
 }
 
+// GUN GAME's LADDER page is opened from SINGLEPLAYER or HOST SETTINGS, and
+// BACK returns there; HOST SETTINGS itself backs out to MULTIPLAYER.
+static ui_page_t g_ui_ladder_from = UI_PAGE_MATCH;
+static ui_page_t ui_back_of(ui_page_t page) {
+  return page == UI_PAGE_HOST ? UI_PAGE_ONLINE : page == UI_PAGE_LADDER ? g_ui_ladder_from
+       : UI_PAGE_ROOT;
+}
 static void ui_route(ui_page_t page) {
   if (page < 0 || page >= UI_PAGE_COUNT) page = UI_PAGE_ROOT;
   if (UI_TEXT_EDIT) ui_name_key("enter");

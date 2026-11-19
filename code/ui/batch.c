@@ -36,7 +36,7 @@ static int spec_target(void) {
   static float dead_since = -1.0f;
   int me = g_local_ent;
   int gm = game_mode();
-  if (me < 0 || (gm != GM_LMS && gm != GM_RESCUE) || g_match.over || ent_alive(me)) {
+  if (me < 0 || (!gm_rounds(gm) && gm != GM_RESCUE) || g_match.over || ent_alive(me)) {
     dead_since = -1.0f;
     return -1;
   }
@@ -51,6 +51,9 @@ static int spec_target(void) {
           return e;
     return -1;
   }
+  // A team game watches a living teammate first, then the rest.
+  if (teams_on())
+    ENT_FOREACH(e) if (e != me && ent_alive(e) && team_mates(me, e)) return e;
   int lk = g_match.last_killer;
   if (lk >= 0 && lk < MAX_ENTS && lk != me && ent_alive(lk)) return lk;
   ENT_FOREACH(e) if (e != me && ent_alive(e)) return e;

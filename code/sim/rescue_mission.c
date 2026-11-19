@@ -461,7 +461,7 @@ static void match_tick(void) {
 
 static void match_init(void) {
   memset(&g_match, 0, sizeof g_match);
-  g_match.mode = g_cfg.sp_mode;
+  match_rules_latch();
   g_match.round_win = -1;
   g_match.round_no = 1;
   memset(g_bots, 0, sizeof g_bots);

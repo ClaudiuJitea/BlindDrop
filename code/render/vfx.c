@@ -567,11 +567,9 @@ static int        g_dmg_t;                     // incoming-damage flash ticks
 // timer, which is what keeps "I am being hit" a single unmistakable state.
 #define DMG_SLOTS 4
 static struct { v3 from; int life; } g_dmg[DMG_SLOTS];
-// THE WRIST'S THREAT RING (frame.c, atmos.c mf -8): where the last hostile shot
-// within earshot was fired from, and when (g_ui_time). Hits come from g_dmg.
-static v3 g_threat_shot;
-static float g_threat_shot_t = -100.0f;
-static float g_wrist_fire_t = -100.0f;   // the wearer's own last shot (the strobe's flare)
+// THE WRIST RADAR (frame.c, atmos.c mf -8): when each entity last fired
+// (g_ui_time; 0 = not yet). An enemy heard firing shows on it for a few seconds.
+static float g_ent_shot_t[MAX_ENTS];
 // WOUND FEEDBACK beyond the arcs. A hit is a SHOCK (g_hurt_kick, 0..1, scaled
 // by the damage and decaying over ~0.4 s) that the composite turns into a
 // red, desaturated, aberrated edge; and it leaves BLOOD on the lens — a few
@@ -1021,15 +1019,7 @@ static void vfx_on_event(const event_t *e) {
     break;
   case EV_FIRE: {
     if (e->src == g_local_ent) g_vfx_wpn = e->wpn;   // the hitmarker's arming delay
-    if (e->src == g_local_ent) g_wrist_fire_t = g_ui_time;
-    // A HOSTILE SHOT IN EARSHOT marks the wrist's threat ring: the muzzle is
-    // `a - b*f` (the fly-by crack's reconstruction). A teammate's is not a threat.
-    if (e->src >= 0 && e->src != g_local_ent && g_local_ent >= 0 && !team_mates(g_local_ent, e->src)) {
-      v3 md = v3_norm(e->b);
-      v3 mz = v3_sub(e->a, v3_scale(md, e->f > 0.0f ? e->f : 1.0f));
-      v3 dd = v3_sub(mz, g_listen);
-      if (v3_dot(dd, dd) < 60.0f * 60.0f) { g_threat_shot = mz; g_threat_shot_t = g_ui_time; }
-    }
+    if (e->src >= 0 && e->src < MAX_ENTS) g_ent_shot_t[e->src] = fmaxf(g_ui_time, 1e-3f);
     if (e->src == g_local_ent) {
       // The muzzle is `a - b*f`, exactly as the fly-by crack reconstructs it —
       // one expression, no new geometry query. `right` is the shot direction

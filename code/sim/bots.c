@@ -714,6 +714,10 @@ typedef struct {
   // per entity — the GUN GAME rung, or LAST MAN STANDING rounds won — and is a
   // replicated counter like kills (match_counters_clear owns it too).
   int  mode;
+  // ...and its rules, latched with it: TEAMS (0/1), the WEAPONS rule
+  // (wpn_rule_t) and the GUN GAME ladder (gg_n rungs; 0 = GG_DEFAULT).
+  int  teams, wrule, gg_n;
+  uint8_t gg[GG_MAX];
   int  mscore[MAX_ENTS];
   // LAST MAN STANDING between rounds: round_t counts the intermission down
   // (0 = a round is live), round_win is who took the last one (-1 = nobody).

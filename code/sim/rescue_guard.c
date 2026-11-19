@@ -566,7 +566,7 @@ static void bot_tick(int bi) {
   if (!mode_allowed(bi + 1, b->wp.cur) && b->wp.gr_t == 0) emergency_swap = 1;
   // The policy asks for the grenade only to smoke: put the canister in the slot.
   if (desired == WPN_GR && b->wp.gr_kind != NADE_SMOKE && nade_smokes(&b->wp) > 0 &&
-      b->wp.gr_t == 0 && b->wp.gr_cook == 0 && game_mode() != GM_BLADES && game_mode() != GM_GUN)
+      b->wp.gr_t == 0 && b->wp.gr_cook == 0 && !mode_frag_only())
     nade_swap_to(&b->wp, NADE_SMOKE);
   if (b->wp.switch_t == 0 && (b->swap_cd == 0 || emergency_swap) &&
       bot_request_weapon(b, bi, desired))
@@ -1380,7 +1380,7 @@ static void match_restart(void) {
   inferno_reset();                          // ...and cold ground
   memset(&g_match, 0, sizeof g_match);   // the human roster lives OUTSIDE
   g_match.nbots = n;                     // g_match and survives this on purpose
-  g_match.mode = g_cfg.sp_mode;          // the MATCH tab's choice lands HERE
+  match_rules_latch();                   // the MATCH tab's choice lands HERE
   g_team_score[0] = g_team_score[1] = 0;
   // A team game started from a deathmatch roster: deal the bots that are
   // already standing to their sides before anyone spawns.
@@ -1497,7 +1497,8 @@ static int lms_alive(int *last) {
 }
 
 static void lms_tick(void) {
-  if (game_mode() != GM_LMS || g_match.over) return;
+  if (!gm_rounds(game_mode()) || g_match.over) return;
+  int tm = teams_on();
   if (g_match.round_t > 0) {
     if (--g_match.round_t == 0) lms_round_reset();
     return;
@@ -1506,6 +1507,13 @@ static void lms_tick(void) {
   ENT_FOREACH(e) { (void)e; total++; }
   int last = -1;
   int alive = lms_alive(&last);
+  // TEAM LAST MAN STANDING counts SIDES: who is on each, and who still stands.
+  int on[2] = {0, 0}, up[2] = {0, 0};
+  if (tm) ENT_FOREACH(e) {
+    int t = team_of(e) == 1;
+    on[t]++;
+    if (ent_alive(e)) up[t]++;
+  }
   g_match.round_clock++;
   // THE HUNT. Two survivors on opposite sides of the arena patrol past each
   // other indefinitely — measured, a 6-bot round sat at two alive for minutes.
@@ -1517,7 +1525,9 @@ static void lms_tick(void) {
   // target gets the occluded-target tactics instead (search, flank, the
   // deadlock push/break). A round that still will not end is drawn at
   // LMS_MAX_TICKS.
-  if (alive > 1 && (alive <= LMS_HUNT_ALIVE || g_match.round_clock > LMS_HUNT_TICKS) &&
+  // (A team round hunts once either side is down to its last man.)
+  int endgame = tm ? (up[0] <= 1 || up[1] <= 1) : alive <= LMS_HUNT_ALIVE;
+  if (alive > 1 && (endgame || g_match.round_clock > LMS_HUNT_TICKS) &&
       g_match.round_clock % (TICK_HZ / 4) == 0) {
     nav_ready();
     const uint16_t *field = NULL;
@@ -1559,6 +1569,19 @@ static void lms_tick(void) {
   }
   if (alive > 1 && g_match.round_clock > LMS_MAX_TICKS) {
     g_match.round_win = -1;
+    g_match.round_t = LMS_INTERMISSION_TICKS;
+    return;
+  }
+  if (tm) {
+    // A round needs both sides fielded; it ends when one (or both) is down.
+    // The surviving side scores it (round_win MAX_ENTS + side, like winner).
+    if (!on[0] || !on[1] || (up[0] && up[1])) return;
+    int ws = up[0] ? 0 : up[1] ? 1 : -1;
+    g_match.round_win = ws < 0 ? -1 : MAX_ENTS + ws;
+    if (ws >= 0 && ++g_team_score[ws] >= g_cfg.sp_rounds) {
+      match_end(MAX_ENTS + ws);
+      return;
+    }
     g_match.round_t = LMS_INTERMISSION_TICKS;
     return;
   }

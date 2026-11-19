@@ -43,6 +43,9 @@ static int server_main(uint32_t seed) {
   g_cfg.sp_diff = g_srv.skill < 0 ? 0 : g_srv.skill > 2 ? 2 : g_srv.skill;
   g_cfg.sp_frag = g_srv.fraglimit;
   g_cfg.sp_mode = g_srv.mode;
+  g_cfg.sp_teams = g_srv.teams;
+  g_cfg.sp_wrule = g_srv.wrule;
+  g_cfg.gg_n = g_srv.ladder[0] ? gg_parse(g_srv.ladder, g_cfg.gg) : 0;
   g_cfg.sp_map = g_srv.map;
   g_cfg.sp_rounds = parse_int_def(g_srv.rounds, &SP_ROUNDS_DEF);
   g_cfg.sp_team_size = g_srv.team_size;
@@ -51,7 +54,7 @@ static int server_main(uint32_t seed) {
   g_cfg.sp_squad = g_srv.squad;
   // A team game seats exactly two teams' worth of humans; bots are the
   // team math's, not the --cap-bots fill's (see tdm_bot_want).
-  if (g_srv.mode == GM_TDM)
+  if (g_srv.teams && gm_has_rules(g_srv.mode))
     g_srv.cap_public = 2 * g_srv.team_size < MAX_HUMANS ? 2 * g_srv.team_size : MAX_HUMANS;
   // A mission seats its squad and no more; the guards and the squad's bots
   // are the mission's own (rescue_bot_count).
@@ -192,12 +195,25 @@ int main(int argc, char **argv) {
       g_srv.map = m;
     }
     else if (arg && !strcmp(a, "--mode")) {
-      int m = gm_parse(argv[++i]);
+      int m = gm_parse_legacy(argv[++i], &g_srv.teams, &g_srv.wrule);   // "tdm" still works
       if (m < 0) {
-        fprintf(stderr, "unknown --mode '%s' (dm|gun|sniper|blades|lms|rescue|tdm)\n", argv[i]);
+        fprintf(stderr, "unknown --mode '%s' (dm|elim|gun|rescue)\n", argv[i]);
         return 1;
       }
       g_srv.mode = m;
+    }
+    else if (arg && !strcmp(a, "--teams"))      g_srv.teams = atoi(argv[++i]) ? 1 : 0;
+    else if (arg && !strcmp(a, "--weapons")) {
+      int wr = wr_parse(argv[++i]);
+      if (wr < 0) { fprintf(stderr, "unknown --weapons '%s' (all|snipers|blades)\n", argv[i]); return 1; }
+      g_srv.wrule = wr;
+    }
+    else if (arg && !strcmp(a, "--ladder")) {
+      snprintf(g_srv.ladder, sizeof g_srv.ladder, "%s", argv[++i]);
+      uint8_t chk[GG_MAX];
+      if (!gg_parse(g_srv.ladder, chk)) {
+        fprintf(stderr, "--ladder needs guns like ar1,pt0,sr0,gr0,kn0\n"); return 1;
+      }
     }
     else if (arg && !strcmp(a, "--squad")) {
       g_srv.squad = atoi(argv[++i]);

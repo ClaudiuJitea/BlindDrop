@@ -35,6 +35,9 @@ typedef struct {
   int   sp_diff;             // bot difficulty: 0 easy, 1 normal, 2 hard
   int   sp_frag;             // frag limit, range in SP_FRAG_DEF
   int   sp_mode;             // game_mode_t; applies at the next (re)start
+  int   sp_teams, sp_wrule;  // ...its rules: TEAMS 0/1, the WEAPONS rule (wpn_rule_t)
+  int   gg_n;                // GUN GAME's ladder (both pages edit it): gg_n rungs
+  uint8_t gg[GG_MAX];        // ...GG_RUNG codes; 0 rungs = GG_DEFAULT
   int   sp_rounds;           // LAST MAN STANDING rounds to win, SP_ROUNDS_DEF
   int   sp_map;              // a MAP_DEFS index, or MAP_ROTATE; next (re)start
   int   sp_team_size;        // TEAM DEATHMATCH: places per side, 1..TEAM_SIZE_MAX
@@ -47,6 +50,7 @@ typedef struct {
   // choices for a game they host live in the host_* fields, on the
   // MULTIPLAYER page's HOST SETTINGS, apart from the SINGLEPLAYER rules.
   int   host_mode, host_map, host_bots;
+  int   host_teams, host_wrule;
   int   host_team_size, host_team_fill, host_team_ff;
   int   sp_squad, host_squad;  // HOSTAGE RESCUE: squad size 1..RESC_SQUAD_MAX
   char  name[12];            // player name; glyph policy lives in name_glyph
@@ -62,7 +66,7 @@ typedef struct {
   // matches both add to them; the boot screen's showcase match never does.
   int   st_matches, st_wins, st_kills, st_deaths, st_hs, st_best;
   int   hints;               // first-match control prompts still to show (1 = yes)
-  int   wrist_style;         // the forearm display: 6 vitals bars (default), 7 twin arcs, 8 columns; 0 threat ring, 1 IR strobe, 2 ammo, 3 watch, 4 patch, 5 plain
+  int   wrist_style;         // the forearm display: 9 kills this life, 10 health + ammo bars (default), 11 radar, 12 compass, 5 plain
   // HUD (Settings > HUD): crosshair shape / colour / size and HUD opacity.
   // Index 0 / 1.0 of each is the shipped HUD exactly.
   int   ch_style, ch_color;
@@ -140,14 +144,14 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .hints = 1, .wrist_style = 6, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .hud_scale = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .wrist_style = 10, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .hud_scale = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
                 .sp_frag = (int)SP_FRAG_DEF.def, .name = "PLAYER",
                 .sp_mode = GM_DM, .sp_rounds = (int)SP_ROUNDS_DEF.def, .sp_map = 0,
                 .sp_team_size = 5, .sp_team_fill = 1, .sp_team = 0, .sp_team_ff = 0,
-                .host_mode = GM_TDM, .host_map = 0, .host_bots = 3,
+                .host_mode = GM_DM, .host_teams = 1, .host_map = 0, .host_bots = 3,
                 .host_team_size = 5, .host_team_fill = 1, .host_team_ff = 0,
                 .sp_squad = 3, .host_squad = 3,
                 // LINEAR (0), changed from STANDARD 2026-08-19. The power curve
@@ -214,11 +218,20 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "sp_mode %s\n%s %d\n", GM_KEYS[c->sp_mode >= 0 && c->sp_mode < GM_COUNT
                                              ? c->sp_mode : GM_DM],
           SP_ROUNDS_DEF.key, c->sp_rounds);
+  fprintf(f, "sp_teams %d\nsp_weapons %s\n", c->sp_teams,
+          WR_KEYS[c->sp_wrule >= 0 && c->sp_wrule < WR_COUNT ? c->sp_wrule : 0]);
+  {
+    char lad[GG_MAX * 6 + 1];
+    gg_format(c->gg, c->gg_n, lad, sizeof lad);
+    if (c->gg_n > 0) fprintf(f, "gun_ladder %s\n", lad);
+  }
   fprintf(f, "sp_map %s\n", map_pick_key(c->sp_map));
   fprintf(f, "sp_team_size %d\nsp_team %d\n", c->sp_team_size, c->sp_team);
   fprintf(f, "host_mode %s\nhost_map %s\nhost_bots %d\n",
           GM_KEYS[c->host_mode >= 0 && c->host_mode < GM_COUNT ? c->host_mode : GM_DM],
           map_pick_key(c->host_map), c->host_bots);
+  fprintf(f, "host_teams %d\nhost_weapons %s\n", c->host_teams,
+          WR_KEYS[c->host_wrule >= 0 && c->host_wrule < WR_COUNT ? c->host_wrule : 0]);
   fprintf(f, "host_team_size %d\nhost_team_fill %d\nhost_friendly_fire %d\n",
           c->host_team_size, c->host_team_fill, c->host_team_ff);
   fprintf(f, "sp_squad %d\nhost_squad %d\n", c->sp_squad, c->host_squad);
@@ -429,7 +442,8 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "hints")) c->hints = parse_long(val, c->hints) ? 1 : 0;
     else if (!strcmp(key, "wrist_style")) {
       long v = parse_long(val, c->wrist_style);
-      c->wrist_style = v < 0 ? 0 : v > 8 ? 8 : (int)v;
+      // 0.8.6 retired the busier styles (0-4, 6-8): they read as the bars.
+      c->wrist_style = (v == 5 || (v >= 9 && v <= 12)) ? (int)v : 10;
     }
     else if (!strcmp(key, "crosshair_style")) c->ch_style = parse_int(val, c->ch_style, 0, CH_STYLE_COUNT - 1);
     else if (!strcmp(key, "crosshair_color")) c->ch_color = parse_int(val, c->ch_color, 0, CH_COLOR_COUNT - 1);
@@ -466,13 +480,24 @@ static void config_load_or_create(const char *path, config_t *c) {
                                                          &SP_FRAG_DEF);
     }
     else if (!strcmp(key, "sp_mode")) {
-      int m = gm_parse(val);
+      int m = gm_parse_legacy(val, &c->sp_teams, &c->sp_wrule);   // "tdm" = dm + teams
       if (m >= 0) c->sp_mode = m;
     }
     else if (!strcmp(key, "host_mode")) {
-      int m = gm_parse(val);
+      int m = gm_parse_legacy(val, &c->host_teams, &c->host_wrule);
       if (m >= 0) c->host_mode = m;
     }
+    else if (!strcmp(key, "sp_teams"))   c->sp_teams = parse_int(val, c->sp_teams, 0, 1);
+    else if (!strcmp(key, "host_teams")) c->host_teams = parse_int(val, c->host_teams, 0, 1);
+    else if (!strcmp(key, "sp_weapons")) {
+      int w = wr_parse(val);
+      if (w >= 0) c->sp_wrule = w;
+    }
+    else if (!strcmp(key, "host_weapons")) {
+      int w = wr_parse(val);
+      if (w >= 0) c->host_wrule = w;
+    }
+    else if (!strcmp(key, "gun_ladder")) c->gg_n = gg_parse(val, c->gg);
     else if (!strcmp(key, "sp_map")) {
       int m = map_parse(val);
       if (m >= 0) c->sp_map = m;

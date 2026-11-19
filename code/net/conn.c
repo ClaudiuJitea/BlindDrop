@@ -478,7 +478,8 @@ static void net_srv_scan_reply(uint32_t ip, uint16_t port) {
   np_w32(&w, g_srv_uid);
   np_w8(&w, (uint8_t)humans);
   np_w8(&w, (uint8_t)(g_srv.cap_public * g_srv.lobbies));
-  np_w8(&w, (uint8_t)g_srv.mode);
+  // The mode byte: bits 0-1 the mode, 2-3 the WEAPONS rule, 4 TEAMS.
+  np_w8(&w, (uint8_t)((g_srv.mode & 3) | (g_srv.wrule & 3) << 2 | (g_srv.teams ? 16 : 0)));
   np_w8(&w, (uint8_t)map);
   for (int i = 0; i < 24; i++) np_w8(&w, (uint8_t)g_srv.name[i]);
   net_udp_send(g_srv_fd, ip, port, out, NET_HERE_LEN);
@@ -1434,7 +1435,11 @@ static int net_cl_poll(void) {
         g_team_score[1] = nm.tscore[1];
         // FIRST WORD OF A TEAM GAME: the player picks a side. The server has
         // already put us on one (team_auto), so this is a choice, not a gate.
-        if (nm.mode == GM_TDM && !g_cl_team_asked) { g_cl_team_asked = 1; g_ui_team_prompt = 1; }
+        g_match.teams = nm.rules & 1;
+        g_match.wrule = (nm.rules >> 1) % WR_COUNT;
+        g_match.gg_n = nm.gg_n;
+        memcpy(g_match.gg, nm.gg, sizeof g_match.gg);
+        if (g_match.teams && gm_has_rules(nm.mode) && !g_cl_team_asked) { g_cl_team_asked = 1; g_ui_team_prompt = 1; }
         g_match.round_t = nm.round_secs * TICK_HZ;   // display only on a client
         g_match.round_win = nm.round_win == 0xFF ? -1 : nm.round_win;
         g_match.round_no = nm.round_no;

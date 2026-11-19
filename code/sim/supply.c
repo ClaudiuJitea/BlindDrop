@@ -25,7 +25,7 @@ static int *supply_hp(int e) {
 // client topping up its own prediction.
 static int supply_give_nades(int e, weapon_t *w) {
   if (!mode_allowed(e, WPN_GR)) return 0;
-  int m = game_mode(), frag_only = m == GM_GUN || m == GM_BLADES;
+  int frag_only = mode_frag_only();
   static const int CAP[NADE_KINDS] = {[NADE_FRAG] = 3, [NADE_SMOKE] = SMOKE_CARRY, [NADE_INC] = INC_CARRY};
   int gave = 0;
   for (int k = 0; k < NADE_KINDS; k++) {
@@ -40,7 +40,7 @@ static int supply_wants(int e, int kind) {
   if (kind == SUP_HEALTH) return *supply_hp(e) < PLAYER_HP;
   weapon_t *w = ent_weapon(e);
   if (!mode_allowed(e, WPN_GR)) return 0;
-  int m = game_mode(), frag_only = m == GM_GUN || m == GM_BLADES;
+  int frag_only = mode_frag_only();
   for (int k = 0; k < NADE_KINDS; k++) {
     if (frag_only && k != NADE_FRAG) continue;
     int cap = k == NADE_FRAG ? WPN_DEF[WPN_GR].mag : k == NADE_SMOKE ? SMOKE_CARRY : INC_CARRY;
