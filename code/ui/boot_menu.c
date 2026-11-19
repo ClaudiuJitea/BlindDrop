@@ -1887,7 +1887,7 @@ static void ui_scoreboard(void) {
       ui_text(buf, xp - ui_text_width(buf, 1), y, 1, C_HAZE, 1);
     }
     if (mcol) {
-      if (gm == GM_GUN) snprintf(buf, sizeof buf, "%d/%d", gg_level(e) + 1, gg_levels());
+      if (gm == GM_GUN) snprintf(buf, sizeof buf, "%d/%d", (gg_level(e) + 1) % 100, gg_levels() % 100);
       else              snprintf(buf, sizeof buf, "%d", g_match.mscore[e]);
       ui_textb(buf, xm - ui_text_width(buf, 1), y, 1, C_BONE, 1);
     }
