@@ -881,10 +881,10 @@ static void render_frame(const player_t *p, float alpha, int fps,
           if (seen <= 0.0f && heard <= 0.0f) continue;
           int slot = nb < 8 ? nb++ : -1;
           if (slot < 0) {
-            int far = 0;
-            for (int i = 1; i < 8; i++) if (bd[i] > bd[far]) far = i;
-            if (bd[far] <= dist) continue;
-            slot = far;
+            int worst = 0;
+            for (int i = 1; i < 8; i++) if (bd[i] > bd[worst]) worst = i;
+            if (bd[worst] <= dist) continue;
+            slot = worst;
           }
           bd[slot] = dist;
           RB[slot][0] = dx / RR; RB[slot][1] = dz / RR;
