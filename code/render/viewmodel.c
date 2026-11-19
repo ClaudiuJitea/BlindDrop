@@ -4,6 +4,7 @@
 // origin at the receiver rear) and placed by the pose + spring offsets. -----
 
 // Rotate a onto b's plane by ang (small-rotation compose for the gun basis).
+static int g_vm_stock_ads = 0;   // harness: draw the stock while aiming too
 static void rot2(v3 *a, v3 *b, float ang) {
   float c = cosf(ang), s = sinf(ang);
   v3 na = v3_add(v3_scale(*a, c), v3_scale(*b, s));
@@ -802,8 +803,13 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     if (pin_on) { if (sp_draw) model_draw(mv, mp, mn, 2, sp_o, sp_x, sp_y, sp_z); }
     // The SCAR-20's stock stays through the reload: its cheek riser and buttpad
     // are most of what the reload frames show, and they stay clear of the lens.
-    else if (ads < 0.5f && (rl < 0.2f || (cur == WPN_SR && sr_semi(vvar))) && !nade_gone &&
-             ga_.spoon < 0.5f) model_draw(mv, mp, mn, 2, org, gx, gy, gz);
+    // 0.8.3: EVERY STOCK STAYS. Leaving it out of the reload showed the back of
+    // every receiver open (the buttpad gone, the tube ending in air), and the
+    // pose keeps it clear of the lens through the whole reload. Aiming still
+    // drops it (VM_STOCK_ADS): under the cheek it would fill the bottom of the
+    // sight picture.
+    else if ((ads < 0.5f || g_vm_stock_ads) && !nade_gone && ga_.spoon < 0.5f)
+      model_draw(mv, mp, mn, 2, org, gx, gy, gz);
     float md = mag_k * mdrop * GUN_MAG_TRAVEL[cur][0], mx = mag_k * mdrop * -GUN_MAG_TRAVEL[cur][1];
     {
       // Old and fresh magazines (see gun_anim_t.pair): each sits at the well's
@@ -1327,6 +1333,19 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                     v3_add(v3_scale(rgt, -0.05f * a7), v3_scale(fwd, -0.06f * a7))));
       }
       v3 or_p = v3_add(org, ro);
+      // THE GUN'S OWN GRIP: a variant with its own grip angle carries the firing
+      // hand onto it — rotated about the wrist and shifted (VM_VAR grip_*), and
+      // the forearm with it, since the arm below is built from this same frame.
+      if ((cur == WPN_AR || cur == WPN_PT) && vv && !dual &&
+          (vv->grip_rot != 0.0f || vv->grip_dy != 0.0f || vv->grip_dz != 0.0f)) {
+        float gc_ = cosf(vv->grip_rot), gs_ = sinf(vv->grip_rot);
+        v3 ry2 = v3_add(v3_scale(ry, gc_), v3_scale(rz, gs_));
+        v3 rz2 = v3_sub(v3_scale(rz, gc_), v3_scale(ry, gs_));
+        or_p = v3_add(or_p, v3_sub(v3_add(v3_scale(ry, HAND_WRIST_Y + vv->grip_dy),
+                                          v3_scale(rz, HAND_WRIST_Z + vv->grip_dz)),
+                                   v3_add(v3_scale(ry2, HAND_WRIST_Y), v3_scale(rz2, HAND_WRIST_Z))));
+        ry = ry2; rz = rz2;
+      }
       int knf = fistw;
       // THE KNIFE FIST IS SMALLER THAN THE RIFLE HAND IT WAS CUT FROM. Sculpted
       // round a rifle grip in a padded glove, it read twice the girth of the
@@ -1449,8 +1468,25 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
           // UV: u along the forearm reads left-to-right from the eye, v up.
           v3 U4[4] = {{{1, 1, 0}}, {{1, 0, 0}}, {{0, 0, 0}}, {{0, 1, 0}}};
           int ord[2][6] = {{0, 1, 2, 0, 2, 3}, {0, 2, 1, 0, 3, 2}};
+          // The vitals styles (6+) light the small window as a status lamp
+          // (blue = 1 tells the shader) and put the gauges on the big tan plate.
+          int vit = g_cfg.wrist_style >= 6;
+          if (vit) for (int k = 0; k < 4; k++) U4[k].z = 1.0f;
           for (int w2 = 0; w2 < 2; w2++)
             for (int k = 0; k < 6; k++) scene_push(P4[ord[w2][k]], on, U4[ord[w2][k]]);
+          if (vit) {
+            // Module 2's sand plate: centre x 94 mm, half 13.4 x 16.8 mm, its top
+            // 44.4 mm up and tilted with the shell (rise 2.45 mm per 36 mm).
+            v3 al = v3_norm(v3_add(v3_scale(ax, 0.036f), v3_scale(on, 0.00245f)));
+            v3 nn = v3_norm(v3_sub(v3_scale(on, 0.036f), v3_scale(ax, 0.00245f)));
+            v3 c1 = v3_add(wr, v3_add(v3_scale(ax, 0.0940f), v3_scale(on, 0.0452f)));
+            v3 fu = v3_scale(al, 0.0128f), fv = v3_scale(az, 0.0158f);
+            v3 Q4[4] = {v3_sub(v3_sub(c1, fu), fv), v3_sub(v3_add(c1, fu), fv),
+                        v3_add(v3_add(c1, fu), fv), v3_add(v3_sub(c1, fu), fv)};
+            v3 W4[4] = {{{1, 1, 0}}, {{1, 0, 0}}, {{0, 0, 0}}, {{0, 1, 0}}};
+            for (int w2 = 0; w2 < 2; w2++)
+              for (int k = 0; k < 6; k++) scene_push(Q4[ord[w2][k]], nn, W4[ord[w2][k]]);
+          }
           mat_set(MAT_PARK_R, MAT_PARK_M);
         }
       }

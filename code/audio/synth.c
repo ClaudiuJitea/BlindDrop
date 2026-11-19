@@ -24,6 +24,14 @@
   #define GUN_TAKE_NAME(id, name) "fire_" name "1", "fire_" name "2", "fire_" name "3",
   GUN_TAKE_LIST(GUN_TAKE_NAME)
   #undef GUN_TAKE_NAME
+  #define RL_GUN_NAME(id, name) "rlg_" name, "rlt_" name,
+  RL_GUN_LIST(RL_GUN_NAME)
+  #undef RL_GUN_NAME
+  "step_conc1", "step_conc2", "step_conc3", "step_conc4",
+  "step_metal1", "step_metal2", "step_metal3", "step_sand1", "step_sand2", "step_sand3",
+  "step_wood1", "step_wood2", "rl_shell",
+  "amb_arena", "amb_foundry", "amb_bazaar", "amb_outpost", "amb_citadel", "amb_harbor",
+  "amb_refinery", "amb_compound",
 };
 
 #define SFX_HZ 48000

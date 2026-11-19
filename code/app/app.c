@@ -447,6 +447,7 @@ static void audio_frame_drain(const player_t *p) {
   g_listen_r = (v3){{cosf(p->yaw), 0, sinf(p->yaw)}};
   for (int e = 0; e < g_num_events; e++) audio_event(&g_events[e]);
   g_num_events = 0;
+  audio_ambience();
 }
 
 // Advances the sim by `dt` seconds and renders one frame; the backend swaps.

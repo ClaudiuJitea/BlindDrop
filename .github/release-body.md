@@ -1,39 +1,13 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.2
+## What's new in 0.8.5
 
-- **Cars and pickups rebuilt:** the saloon is now a compact early-90s four-door and the pickup a proper single cab, both built hard-surface: flat, clean panels with crisp edges, a separate glasshouse with framed panes, lined wheelhouses, recessed lamp bands, bumpers that stand proud, shut lines, mirrors and alloy wheels.
-- **Tracers:** every shot now draws a short, thin, fast streak in one pale warm white, for both sides; enemy rounds no longer burn green. Pistols draw the shortest, the sniper keeps its heat wake.
-- **The helicopter** wears a faded olive, and its navigation lights now sit on their housings, with the fin-tip and boom-end lamps moved onto the new airframe.
-- **No more merged props:** barrels by Foundry's container stack and in Citadel, and a café table, no longer sit half inside something else. A new check in the proof gate keeps every handmade map clear of it.
+- **Rebuilt guns:** all 34 have new shaped bodies modelled on reference photos. The MAC-10, Tec-9, MP7 and P90 have their own grips and hand poses. The stock and butt pad stay on during reloads, and parts of the AK-47 that were only on one side are now on both.
+- **Foundry, rebuilt:** new architecture, gates and back doors out of the main yard into the works, and stairs up to some of the big roofs.
+- **Cleaner maps:** Citadel plays under a clear afternoon sky and Refinery on a crisp morning, with the brown haze gone; the other maps are tidied up too.
+- **A forearm status screen:** your gauntlet shows health (green, then amber, then red), your magazine and your grenades as shapes, and flashes red when you're hit. Change the layout with `wrist_style` in `config.cfg`.
 
-0.8.2 plays with 0.8 and 0.8.1 (same network protocol, 22).
-
-## What's new in 0.8.1
-
-- **The helicopter** on Compound is rebuilt: a rounded fuselage with a glazed nose, chin windows and roof windows, cockpit door windows, the cabin door slid open on its rail, an engine cowling with intake screens and exhausts, a swept fin and a stabiliser, skids on bowed cross tubes, steps, aerials and a pitot. Its rotor blades now taper and twist, with a darker leading edge.
-- **The container truck** is rebuilt: a rounded cab-over cab with a split windscreen, a white side stripe and a dark lower skirt, a chrome-barred grille, headlamps, fog lamps, mirrors on arms, a roof visor with amber markers, ten-spoke wheels (dual at the rear), a chrome fuel tank, air tanks, side guards, mud flaps and an exhaust stack.
-- **Cars and pickups:** treaded tyres on smoother wheels, a chrome strip under the side windows, black rubbing strips down the flanks and clearer glass.
-
-0.8.1 plays with 0.8 (same network protocol, 22).
-
-## What's new in 0.8
-
-- **The full arsenal:** Armory > Loadout now picks from **20 primaries** (M4A4, AK-47, FAMAS, M4A1-S, Galil AR, SG 553, AUG, MAC-10, MP9, MP7, MP5-SD, UMP-45, P90, PP-Bizon, Nova, XM1014, Sawed-Off, MAG-7, M249, Negev), **10 pistols** (P2000, Glock-18, Desert Eagle, USP-S, P250, Five-SeveN, Tec-9, CZ75-Auto, R8 Revolver, Dual Berettas) and **4 snipers** (AWP, SCAR-20, SSG 08, G3SG1), each with its own model, handling and recorded report. `B` switches fire mode where a gun has one.
-- **Smoke and incendiary grenades:** the smoke (`6`) blooms into a cloud that fills the space it lands in; the incendiary (`7`) lays a spreading pool of fire. You start every life with **3 frags, 3 smokes and 3 incendiaries**, and the incendiary is now the same size as the smoke.
-- **Supply stations** on every handmade map: medical stations give +50 health, ammunition crates restock your grenades. Each empties when used and restocks after 25 seconds; a lamp on its sign shows which.
-- **Wounds you can feel:** blood lands on the side a round came from, the screen edge flashes red, and as your health drops the colour drains and the edges crust with blood in time with your heartbeat.
-- **Maps rebuilt and dressed:**
-  - **Stairs and walkways:** every one now has a proper handrail.
-  - **Narrow streets:** covered rooms and stone arches span them in Citadel; pipe bridges in Harbor and Refinery.
-  - **New props:** a forklift, oil tanks, sack pallets, benches and power cabinets in the yards and streets.
-  - **Outpost:** a climbable HESCO sniper bastion and a barracks tent in each side lane.
-  - **Bazaar:** a ladder to the second house's roof.
-- **Better-looking props:** a new forklift, and black tyres on every vehicle (they had rendered pale grey).
-- **Figures:** no more sagging seat on running or crouching soldiers; hips and thighs now join properly in a stride; heads move with the body instead of hanging still.
-- **Face gear:** six new masks in Armory > Gear.
-
-0.8 uses a new network protocol (22): everyone in a game needs 0.8.
+0.8.5 plays with 0.8 to 0.8.2 (same network protocol, 22).
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

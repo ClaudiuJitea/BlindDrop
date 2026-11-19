@@ -253,6 +253,25 @@ static int var_takes(int wpn, int var, int *own) {
   if (vs[1] >= 0 && g_sfx_buf[vs[1]]) return vs[1];
   return -1;
 }
+// EVERY GUN ITS OWN RELOAD (samples.c): the (slot, variant) -> its reload id;
+// the slot's when the gun's own was not built (no clips of its own in the pack).
+static const int RL_GUN_VAR[3][WPN_VARS] = {
+  {SFX_RL_M4A4, SFX_RL_AK, SFX_RL_FAMAS, SFX_RL_M4A1S, SFX_RL_GALIL, SFX_RL_SG553, SFX_RL_AUG,
+   SFX_RL_MAC10, SFX_RL_MP9, SFX_RL_MP7, SFX_RL_MP5SD, SFX_RL_UMP45, SFX_RL_P90, SFX_RL_BIZON,
+   SFX_RL_NOVA, SFX_RL_XM1014, SFX_RL_SAWEDOFF, SFX_RL_MAG7, SFX_RL_M249, SFX_RL_NEGEV},
+  {SFX_RL_P2000, SFX_RL_GLOCK, SFX_RL_DEAGLE, SFX_RL_USPS, SFX_RL_P250, SFX_RL_FIVESEVEN,
+   SFX_RL_TEC9, SFX_RL_CZ75, SFX_RL_R8, SFX_RL_ELITES},
+  {SFX_RL_AWP, SFX_RL_SCAR20, SFX_RL_SSG08, SFX_RL_G3SG1},
+};
+static int reload_id(int wpn, int var, int tac) {
+  int slot = (tac && wpn == WPN_AR) ? SFX_RELOAD_AR_TAC : WPN_DEF[wpn].sfx_reload;
+  int row = wpn_var_row(wpn);
+  if (row < 0 || var < 0 || var >= wpn_var_n(wpn)) return slot;
+  int id = RL_GUN_VAR[row][var];
+  if (id <= 0) return slot;
+  if (tac && wpn == WPN_AR) id += 1;                 // SFX_RLT_<gun> follows SFX_RL_<gun>
+  return g_sfx_buf[id] ? id : slot;
+}
 static int var_has_takes(int wpn, int var) {
   int own;
   var_takes(wpn, var, &own);
@@ -386,6 +405,57 @@ static int audio_take(const int *ids, int n, int *last) {
   *last = k;
   return ids[k];
 }
+// WHAT IS UNDERFOOT: the solid whose top is at the boot (a catwalk, a crate, a
+// deck) by its material, else the map's ground by its theme's surface. Steel
+// rings, wood knocks, sand hushes, concrete and stone crunch.
+enum { STEPS_CONC, STEPS_METAL, STEPS_SAND, STEPS_WOOD };
+static int audio_step_surface(v3 at) {
+  for (int i = 0; i < g_num_solids; i++) {
+    const solid_t *b = &g_solids[i];
+    if (at.x < b->min.x || at.x > b->max.x || at.z < b->min.z || at.z > b->max.z) continue;
+    if (b->max.y < at.y - 0.12f || b->max.y > at.y + 0.06f) continue;
+    switch (g_solid_mat[i]) {
+      case SMAT_STEEL: case SMAT_HAZARD: case SMAT_CONTAINER: case SMAT_CLAD: return STEPS_METAL;
+      case SMAT_WOOD: return STEPS_WOOD;
+      default: return STEPS_CONC;
+    }
+  }
+  return g_theme.surf == SURF_SAND ? STEPS_SAND : STEPS_CONC;
+}
+static int audio_step_id(v3 at) {
+  static const int FIRST[4] = {SFX_STEP_CONC1, SFX_STEP_METAL1, SFX_STEP_SAND1, SFX_STEP_WOOD1};
+  static const int N[4] = {4, 3, 3, 2};
+  int k = audio_step_surface(at);
+  // the takes the pack carries for it (sand and wood borrow concrete's); none:
+  // the synth boot, and the audio stream is not drawn from, so a bank without
+  // step takes routes exactly as it always did
+  int ids[4], n = 0;
+  for (int j = 0; j < N[k]; j++) if (g_sfx_buf[FIRST[k] + j]) ids[n++] = FIRST[k] + j;
+  if (!n && (k == STEPS_SAND || k == STEPS_WOOD))
+    for (int j = 0; j < 4; j++) if (g_sfx_buf[SFX_STEP_CONC1 + j]) ids[n++] = SFX_STEP_CONC1 + j;
+  if (!n) return SFX_STEP;
+  return ids[rng_next(&g_rng_audio) % (uint32_t)n];
+}
+
+// A MAP'S OWN AIR. One long loop per map (wind over the yard, the market's
+// murmur, the harbour's water and gulls, the refinery's hum), restarted a
+// little before its end so the faded ends overlap. Window only, never in the
+// harness (its audio proofs measure the events, not a bed under them).
+static uint32_t g_amb_next;
+static void audio_ambience(void) {
+#ifndef _WIN32
+  if (g_headless) return;
+#endif
+  int m = map_id_valid(g_map_id), id = SFX_AMB_ARENA + m;
+  if (id < SFX_AMB_ARENA || id > SFX_AMB_COMPOUND || !g_sfx_buf[id]) return;
+  uint32_t now = (uint32_t)g_tick;
+  if (g_amb_next && (int32_t)(now - g_amb_next) < 0 && now + 10u * (uint32_t)TICK_HZ > g_amb_next) return;
+  float len = (float)g_sfx_len[id] / (float)SFX_HZ;
+  audio_play(id, 0.55f, 1.0f, 0.0f, 0.0f);
+  float step = len > 6.0f ? len - 2.0f : len;
+  g_amb_next = now + (uint32_t)(step * (float)TICK_HZ);
+}
+
 static void audio_on_event(const event_t *e) {
   switch (e->type) {
   case EV_FIRE: {
@@ -578,8 +648,10 @@ static void audio_on_event(const event_t *e) {
     // (0.30 x 0.45 x the clamped speed term = 0.046, always under 0.10), which
     // is a stealth buff smuggled in as a mix fix.
     if (e->src != g_local_ent && g < 0.10f) break;
-    audio_play(SFX_STEP, g, rng_rangef(&g_rng_audio, 0.86f, 1.16f),
-               e->src == g_local_ent ? 0.0f : pan, dist / 343.0f);
+    int sid = audio_step_id(e->a);
+    float sr = rng_rangef(&g_rng_audio, 0.86f, 1.16f);
+    if (sid != SFX_STEP) sr = 0.94f + (sr - 0.86f) * 0.4f;   // a take varies by itself
+    audio_play(sid, g, sr, e->src == g_local_ent ? 0.0f : pan, dist / 343.0f);
     break;
   }
   case EV_NADE: {
@@ -628,6 +700,7 @@ static void audio_on_event(const event_t *e) {
     break;
   }
   case EV_FLAME: {
+#define FIRE_BURN_TAKES ((int)(FIRE_LIFE / 1.8f + 0.5f))
     // THE INCENDIARY: the whoomp as it catches, then the crackle for the life
     // of the pool (FIRE_LIFE), takes overlapping a little so it never gaps. A
     // wasted air burst is the whoomp alone, thinner and shorter.
@@ -636,8 +709,8 @@ static void audio_on_event(const event_t *e) {
     float t = dist / 343.0f;
     audio_play(SFX_FLAME_POP, att * (e->k ? 1.0f : 0.6f), rng_rangef(&g_rng_audio, 0.93f, 1.06f) * (e->k ? 1.0f : 1.25f), pan, t);
     if (e->k)
-      for (int k = 0; k < 4; k++)
-        audio_play(SFX_FLAME_BURN, att * 0.75f * (k == 3 ? 0.6f : 1.0f),
+      for (int k = 0; k < FIRE_BURN_TAKES; k++)
+        audio_play(SFX_FLAME_BURN, att * 0.75f * (k == FIRE_BURN_TAKES - 1 ? 0.6f : 1.0f),
                    rng_rangef(&g_rng_audio, 0.92f, 1.08f), pan, t + 0.25f + 1.8f * (float)k);
     break;
   }
@@ -699,14 +772,15 @@ static void audio_on_event(const event_t *e) {
       // one per shell (a magazine's reload buffer would play a whole mag change).
       float sd = 0.0f, sp = e->src == g_local_ent ? -0.12f : audio_place(e->a, &sd);
       float sa = e->src == g_local_ent ? 1.0f : f_clamp(1.0f - sd / 14.0f, 0.0f, 1.0f);
-      if (sa > 0.0f) {
+      if (sa > 0.0f && g_sfx_buf[SFX_RL_SHELL]) {          // the recorded shell, when the pack has it
+        audio_play(SFX_RL_SHELL, 0.95f * sa, rng_rangef(&g_rng_audio, 0.96f, 1.04f), sp, 0.0f);
+      } else if (sa > 0.0f) {
         audio_play(SFX_BRASS, 0.85f * sa, rng_rangef(&g_rng_audio, 0.58f, 0.64f), sp, 0.0f);
         audio_play(SFX_DRY, 0.45f * sa, rng_rangef(&g_rng_audio, 0.80f, 0.86f), sp, 0.03f);
       }
       break;
     }
-    int rid = (e->k && e->wpn == WPN_AR) ? SFX_RELOAD_AR_TAC
-                                         : WPN_DEF[e->wpn].sfx_reload;
+    int rid = reload_id(e->wpn, ev_var(e), e->k && e->wpn == WPN_AR);
     if (e->src == g_local_ent) {
       // tag 1 = player-owned: the cancel's audio_kill fades only this voice.
       audio_play_tag(rid, 0.9f,
@@ -729,6 +803,9 @@ static void audio_on_event(const event_t *e) {
       int tag = e->src == g_local_ent ? 1 : e->src + 2;
       audio_kill(WPN_DEF[e->wpn].sfx_reload, tag);
       if (e->wpn == WPN_AR) audio_kill(SFX_RELOAD_AR_TAC, tag);
+      int v_ = ev_var(e), r0 = reload_id(e->wpn, v_, 0), r1 = reload_id(e->wpn, v_, 1);
+      if (r0 != WPN_DEF[e->wpn].sfx_reload) audio_kill(r0, tag);
+      if (e->wpn == WPN_AR && r1 != SFX_RELOAD_AR_TAC) audio_kill(r1, tag);
     }
     break;
   case EV_END:

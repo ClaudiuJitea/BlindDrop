@@ -833,8 +833,67 @@ static void render_frame(const player_t *p, float alpha, int fps,
     }
     // The weapon's own frame, uploaded AFTER vm_build so it describes the pose
     // that was just emitted rather than the previous frame's.
-    glUniform3f(uloc(R.prog_world, "uWrist"), (float)p->wp.ammo[p->wp.cur],
-                (float)wdef(&p->wp, p->wp.cur)->mag, g_ui_time);
+    {
+      // THE WRIST THREAT RING (0.8.3; it was a two-digit kill counter): a ring
+      // with the wearer's facing at its top that lights toward danger — amber
+      // toward the last hostile shot fired within 60 m (fading over 3 s), red
+      // toward where he was last hit from (the damage arcs' g_dmg, fading with
+      // them). Bearings are relative to his facing, clockwise; forward is
+      // (sin yaw, 0, -cos yaw), right (cos yaw, 0, sin yaw). A kill still
+      // flashes the screen for a beat.
+      int kills = g_local_ent >= 0 ? g_match.kills[g_local_ent] : 0;
+      static float t_prev = -1.0f, k_fl = 0.0f;
+      static int k_last = 0;
+      float dt = t_prev < 0.0f ? 0.0f : f_clamp(g_ui_time - t_prev, 0.0f, 0.1f);
+      t_prev = g_ui_time;
+      if (kills > k_last) k_fl = 1.0f;
+      k_last = kills;
+      k_fl = fmaxf(0.0f, k_fl - dt * 2.5f);
+      v3 fw = {{sinf(p->yaw), 0.0f, -cosf(p->yaw)}}, rg = {{cosf(p->yaw), 0.0f, sinf(p->yaw)}};
+      float sb = 0.0f, ss = 0.0f, hb = 0.0f, hs = 0.0f;
+      {
+        float age = g_ui_time - g_threat_shot_t;
+        if (age >= 0.0f && age < 3.0f && p->alive) {
+          v3 d = v3_sub(g_threat_shot, p->pos);
+          sb = atan2f(v3_dot(d, rg), v3_dot(d, fw)) * (180.0f / F_PI);
+          ss = 1.0f - age / 3.0f;
+        }
+        int best = -1;
+        for (int i = 0; i < DMG_SLOTS; i++)
+          if (g_dmg[i].life > 0 && (best < 0 || g_dmg[i].life > g_dmg[best].life)) best = i;
+        if (best >= 0 && p->alive) {
+          v3 d = v3_sub(g_dmg[best].from, p->pos);
+          hb = atan2f(v3_dot(d, rg), v3_dot(d, fw)) * (180.0f / F_PI);
+          hs = (float)g_dmg[best].life / (float)DMG_TICKS;
+        }
+      }
+      glUniform4f(uloc(R.prog_world, "uWrist"), sb, ss, hb, hs);
+      // The style (config wrist_style) and what the non-ring styles read: the
+      // magazine's fill and the three grenade counts (out of WPN_DEF's carry).
+      float mg = 0.0f;
+      {
+        int cw = p->wp.cur, mag = wdef(&p->wp, cw)->mag;
+        mg = (cw == WPN_KN || cw == WPN_GR || mag <= 0) ? 1.0f
+           : f_clamp((float)p->wp.ammo[cw] / (float)mag, 0.0f, 1.0f);
+      }
+      float gcap = (float)(WPN_DEF[WPN_GR].mag > 0 ? WPN_DEF[WPN_GR].mag : 3);
+      glUniform4f(uloc(R.prog_world, "uWrist3"), mg,
+                  (float)nade_count(&p->wp, NADE_FRAG) / gcap,
+                  (float)nade_count(&p->wp, NADE_SMOKE) / gcap,
+                  (float)nade_count(&p->wp, NADE_INC) / gcap);
+      {
+        int cw = p->wp.cur;
+        const wpn_def_t *wd = wdef(&p->wp, cw);
+        float rp = (p->wp.reload_t > 0 && wd->reload_ticks > 0)
+                 ? 1.0f - (float)p->wp.reload_t / (float)wd->reload_ticks : 0.0f;
+        if (rp > 0.0f && rp < 0.02f) rp = 0.02f;
+        float msz = (cw == WPN_KN || cw == WPN_GR) ? 1.0f : (float)wd->mag;
+        glUniform4f(uloc(R.prog_world, "uWrist4"), f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f),
+                    rp, msz, hs);
+      }
+      glUniform4f(uloc(R.prog_world, "uWrist2"), k_fl, g_ui_time, (float)g_cfg.wrist_style,
+                  g_ui_time - g_wrist_fire_t);
+    }
     {
       // The armory: the weapon theme's paint and the gear's LED colour, which
       // the wrist display shares with the gauntlet's inlays.
@@ -847,7 +906,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
       glUniform3fv(uloc(R.prog_world, "uSkinD"), 1, th->d);
       // The display's "on" colour at the shipped amber is (1, .55, .12): the
       // LED's authored colour pushed redder the way the inlay shader does.
-      // The wrist DISPLAY is an ammo readout, not a gear accent: it keeps the
+      // The wrist DISPLAY is the kill counter, not a gear accent: it keeps the
       // lit per-outfit colour the `led` column had before v5 dimmed the inlays.
       static const float WRIST_ON[GEAR_THEME_COUNT][3] = {
         {1.00f, 0.62f, 0.10f}, {1.00f, 0.62f, 0.10f}, {0.45f, 1.00f, 0.30f},

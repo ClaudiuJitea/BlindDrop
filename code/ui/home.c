@@ -468,11 +468,19 @@ static int home_calm(void) {
 }
 
 // How fast the world runs under the current shot; see the forward declaration.
+// THE REEL'S OWN PACE. At game speed the soldier on this screen moved like a
+// player does — 100 ms to full run, a sidestep that is a lunge, bursts of fire
+// a frame apart — and on a screen nobody is playing that reads as a fast-
+// forward, not as a man. The whole world under the director runs at HOME_PACE,
+// and a slow-motion shot's own rate is a further fraction of THAT, so the
+// ramps below keep their shape. The director's clock is still real time: only
+// what happens inside a shot slows, never the length of the reel.
+#define HOME_PACE 0.62f
 static float home_timescale(void) {
   if (!g_home) return 1.0f;
   float u;
   float r = HOME_SHOT[home_where(&u)].rate;
-  if (r <= 0.01f) return 1.0f;
+  if (r <= 0.01f) return HOME_PACE;
   // THE RAMP IS THE POINT. A shot that opens in slow motion has nothing to slow
   // DOWN from, and the movement this one opens with — a man leaning out of cover
   // — reads as a stumble at half speed. Full speed until the lean has committed,
@@ -481,7 +489,7 @@ static float home_timescale(void) {
   float in_ = smooth01(f_clamp((u - 0.09f) / 0.09f, 0.0f, 1.0f));
   float out = smooth01(f_clamp((0.97f - u) / 0.10f, 0.0f, 1.0f));
   float k = in_ * out;
-  return 1.0f + (r - 1.0f) * k;
+  return HOME_PACE * (1.0f + (r - 1.0f) * k);
 }
 
 // Read by frame_input_keys, which is where every other key is read.

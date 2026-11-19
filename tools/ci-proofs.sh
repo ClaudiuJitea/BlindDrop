@@ -177,7 +177,14 @@ n="$(run "bots 0; warp 0 0 -10; fire 0 0 -10; wait 200" | grep -c '^hit ')"
 # vertex-pressure table was re-measured with them). The far thigh and shin are
 # the plain trouser chains again, and one more thigh/shin pair lands in the
 # 1 mm tier at the 6-gon; every invariant 0 at every tier and gear.
-WANT_NEAR="36 36 45 36"
+# 0 0 -1 0 with the ONE-MASS SEAT (2026-11-16, see WANT_CROSS): the seat-to-
+# belt roll node sits 3 mm forward and 5 mm shallower, so the lower back no
+# longer lies along the glute ring at the 12 m profile.
+# 0 0 +1 0 with the SEAT PANELS (2026-11-17), see WANT_CROSS.
+# +19 +19 +16 +16 with the BLENDER HOLSTER and the shifted seat (2026-11-17),
+# see WANT_CROSS.
+# 0 0 -1 0 with the TUCKED CROTCH (2026-11-17, see WANT_CROSS).
+WANT_NEAR="55 55 60 52"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -438,7 +445,35 @@ WANT_NEAR="36 36 45 36"
 # hip joint (close tiers only) so a thigh swung back no longer pokes its tube
 # end out through the seat. Narrower than the thigh across and deeper behind
 # it, so every seat/thigh meeting is a steep crossing; far tiers unchanged.
-WANT_CROSS="177 177 80 56"
+# +1 +1 0 0 with the ONE-MASS SEAT (2026-11-16): the hip seats shrink inside
+# the thigh while the leg is under the body and only come out as it swings
+# back; the glute ring sits 2 cm lower and the crotch is tucked to an inseam,
+# so the seat rolls into the thighs instead of ending in a shelf with two balls
+# under it. One more seat/thigh pair in the shallow tier at the stride's peak;
+# every hard invariant 0 for the operator and all four insurgents.
+# +41 +41 +42 +31 with the SEAT PANELS AND BELT KIT (2026-11-17). The hips
+# were rebuilt: a seat panel per leg from under the belt over the hip into the
+# thigh (replacing the two buttock balls), a battle-belt band, belt pouches
+# seated on that surface instead of at guessed offsets, and a holster built
+# round the pistol's measured box with a thigh platform and a belt hanger. Each
+# of those is a cloth surface lying ALONG another (panel on thigh, belt on
+# waist, platform on leg), which is what this tier counts, and the panel now
+# exists at every distance tier. open/flip/zfight/degen 0 at every tier for the
+# operator and all four insurgents.
+# +42 +42 +57 +53 with the BLENDER HOLSTER (2026-11-17): the drop-leg holster
+# is now a molded Blender mesh (props_models.py `holster`, FIG_HOLSTER) whose
+# platform lies flat along the thigh and whose shell, lip and hood lie along
+# one another, and each leg's seat panel sits further back of the hip (so its
+# front no longer meets the other leg's in a mound between the thighs) where
+# it lies closer along the torso's glute ring. open/flip/zfight/degen 0 at
+# every tier for the operator and the insurgents.
+# -1 -1 -7 0 with the TUCKED CROTCH (2026-11-17): the torso's closing end
+# (builder.c crotch_p) hung under the seat between the thighs and showed in a
+# running stride as a round lump between the legs; it now ends 6 cm under the
+# pelvis node and a quarter slimmer, inside the seat panels and the thighs, so
+# fewer surfaces cross it. open/flip/zfight/degen 0 at every tier for the
+# operator and the insurgents.
+WANT_CROSS="260 260 172 140"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

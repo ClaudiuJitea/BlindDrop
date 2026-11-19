@@ -62,6 +62,7 @@ typedef struct {
   // matches both add to them; the boot screen's showcase match never does.
   int   st_matches, st_wins, st_kills, st_deaths, st_hs, st_best;
   int   hints;               // first-match control prompts still to show (1 = yes)
+  int   wrist_style;         // the forearm display: 6 vitals bars (default), 7 twin arcs, 8 columns; 0 threat ring, 1 IR strobe, 2 ammo, 3 watch, 4 patch, 5 plain
   // HUD (Settings > HUD): crosshair shape / colour / size and HUD opacity.
   // Index 0 / 1.0 of each is the shipped HUD exactly.
   int   ch_style, ch_color;
@@ -139,7 +140,7 @@ static config_t config_defaults(void) {
   //     silhouette edges, which is the one content that MSAA is cheap on and
   //     that crawls visibly without it. llvmpipe never sees this (the harness
   //     renders into an FBO), and a GPU that cannot afford 8 has the slider.
-  config_t c = {.post_fx = 1, .hints = 1, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .hud_scale = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
+  config_t c = {.post_fx = 1, .hints = 1, .wrist_style = 6, .vm_fov = 58.0f, .ch_size = 1.0f, .hud_alpha = 1.0f, .hud_scale = 1.0f, .sense = 1.0f, .ads_sense = 1.0f, .fov = 100.0f, .vsync = 0, .fps_cap = 120, .show_fps = 1, .msaa = 8,
                 // sp_diff 2 = HARD. The bot count came down to 1, so difficulty
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
@@ -229,6 +230,7 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "head_gear %d\nvest_gear %d\npack_gear %d\nface_gear %d\n",
           c->head_gear, c->vest_gear, c->pack_gear, c->face_gear);
   fprintf(f, "hints %d\n", c->hints);
+  fprintf(f, "wrist_style %d\n", c->wrist_style);
   fprintf(f, "crosshair_style %d\ncrosshair_color %d\ncrosshair_size %.2f\nhud_opacity %.2f\nhud_scale %.2f\nenemy_markers %d\nperf_overlay %d\n",
           c->ch_style, c->ch_color, (double)c->ch_size, (double)c->hud_alpha, (double)c->hud_scale,
           c->enemy_mark, c->perf);
@@ -425,6 +427,10 @@ static void config_load_or_create(const char *path, config_t *c) {
     else if (!strcmp(key, "pack_gear"))
       c->pack_gear = parse_int(val, c->pack_gear, 0, PACK_GEAR_COUNT - 1);
     else if (!strcmp(key, "hints")) c->hints = parse_long(val, c->hints) ? 1 : 0;
+    else if (!strcmp(key, "wrist_style")) {
+      long v = parse_long(val, c->wrist_style);
+      c->wrist_style = v < 0 ? 0 : v > 8 ? 8 : (int)v;
+    }
     else if (!strcmp(key, "crosshair_style")) c->ch_style = parse_int(val, c->ch_style, 0, CH_STYLE_COUNT - 1);
     else if (!strcmp(key, "crosshair_color")) c->ch_color = parse_int(val, c->ch_color, 0, CH_COLOR_COUNT - 1);
     else if (!strcmp(key, "crosshair_size"))  c->ch_size = parse_float(val, c->ch_size, 0.5f, 2.0f);

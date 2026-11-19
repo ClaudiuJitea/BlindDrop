@@ -108,7 +108,7 @@ static sfx_sample_rule_t sfx_rule(int id) {
   // for, the snipers to the sniper's, the pistols to the pistol's. A SUPPRESSED
   // gun gets none of the synth's crack laid under it — the crack is exactly
   // what a can removes — and its level is the variant's job (WPN_VAR.level).
-  if (id >= SFX_T_M4A1S && id < SFX_COUNT) {
+  if (id >= SFX_T_M4A1S && id < SFX_RL_FIRST) {
     int g = (id - SFX_T_M4A1S) / 3;   // GUN_TAKE_LIST order
     enum { G_M4A1S, G_GALIL, G_SG553, G_AUG, G_MAC10, G_MP9, G_MP7, G_MP5SD, G_UMP45,
            G_P90, G_BIZON, G_USPS, G_P250, G_FIVESEVEN, G_TEC9, G_CZ75, G_R8,
@@ -152,6 +152,21 @@ static sfx_sample_rule_t sfx_rule(int id) {
     case SFX_KILL_HEAD3: return (sfx_sample_rule_t){-1, 0.8f, 0.0f};
     case SFX_BODYFALL1: case SFX_BODYFALL2: case SFX_BODYFALL3:
       return (sfx_sample_rule_t){SFX_STEP, 6.0f, 0.0f};
+    // The surface takes stand in for the synth boot, matched to it: the step's
+    // level is the routing's business (its speed and crouch terms), not theirs.
+    case SFX_STEP_CONC1: case SFX_STEP_CONC2: case SFX_STEP_CONC3: case SFX_STEP_CONC4:
+    case SFX_STEP_SAND1: case SFX_STEP_SAND2: case SFX_STEP_SAND3:
+    case SFX_STEP_WOOD1: case SFX_STEP_WOOD2:
+      return (sfx_sample_rule_t){SFX_STEP, 0.0f, 0.0f};
+    case SFX_STEP_METAL1: case SFX_STEP_METAL2: case SFX_STEP_METAL3:
+      return (sfx_sample_rule_t){SFX_STEP, 1.5f, 0.0f};          // a deck rings louder
+    case SFX_RL_SHELL:
+      return (sfx_sample_rule_t){SFX_BRASS, 2.0f, 0.0f};
+    // An ambience is a bed, far under everything: matched to the smoke's hiss,
+    // 14 dB down, before the routing's own ambience gain.
+    case SFX_AMB_ARENA: case SFX_AMB_FOUNDRY: case SFX_AMB_BAZAAR: case SFX_AMB_OUTPOST:
+    case SFX_AMB_CITADEL: case SFX_AMB_HARBOR: case SFX_AMB_REFINERY: case SFX_AMB_COMPOUND:
+      return (sfx_sample_rule_t){SFX_SMOKE_HISS, -14.0f, 0.0f};
     default: return (sfx_sample_rule_t){-1, 0.0f, 0.0f};
   }
 }
@@ -164,10 +179,18 @@ static sfx_sample_rule_t sfx_rule(int id) {
 // so that transient, not the clip's first sample, lands on the beat: the sniper's
 // bolt locks 430 ms into its cycle, so placing by onset put that beat late.
 // Every value was checked against the built buffer (transient vs beat, +-5 ms).
-typedef struct { const char *name; float frac; float gain; float hit; } rl_ev_t;
+// alt: the slot's clip to fall back on when `name` (a gun's own) is not in the pack
+typedef struct { const char *name; float frac; float gain; float hit; const char *alt; } rl_ev_t;
+static void sfx_build_reload_ref(int id, const float *syn, int len, float t, const rl_ev_t *ev,
+                                 int nev, float db, int need_own);
 static void sfx_build_reload(int id, float t, const rl_ev_t *ev, int nev, float db) {
-  float *syn = g_sfx_buf[id];
-  int len = g_sfx_len[id];
+  sfx_build_reload_ref(id, g_sfx_buf[id], g_sfx_len[id], t, ev, nev, db, 0);
+}
+// The same, over a REFERENCE synth buffer (the slot's, for a gun's own reload):
+// with need_own, only built when at least one event's clip is the gun's own
+// (ev[k].own), so a gun with no clips of its own keeps the slot's reload.
+static void sfx_build_reload_ref(int id, const float *syn, int len, float t, const rl_ev_t *ev,
+                                 int nev, float db, int need_own) {
   if (!syn || len <= 0) return;
   float *b = malloc((size_t)len * SFX_CH * sizeof(float));
   if (!b) return;
@@ -175,10 +198,12 @@ static void sfx_build_reload(int id, float t, const rl_ev_t *ev, int nev, float 
   // filtered-noise "handling" was most of what a reload sounded like, and it is
   // what read as synthetic. The real handling is the rl_handle rustle below.
   for (int i = 0; i < len * SFX_CH; i++) b[i] = syn[i] * 0.15f;
-  int placed = 0;
+  int placed = 0, own = 0;
   for (int k = 0; k < nev; k++) {
     int fr = 0;
     float *s = sfxpack_load(ev[k].name, &fr);
+    if (!s && ev[k].alt) s = sfxpack_load(ev[k].alt, &fr);
+    else if (s && ev[k].alt) own++;
     if (!s) continue;
     float pk = 1e-6f;
     for (int i = 0; i < fr * SFX_CH; i++) pk = fmaxf(pk, fabsf(s[i]));
@@ -190,11 +215,12 @@ static void sfx_build_reload(int id, float t, const rl_ev_t *ev, int nev, float 
     free(s);
     placed++;
   }
-  if (!placed) { free(b); return; }
+  if (!placed || (need_own && !own)) { free(b); return; }
   float want = sfx_aw_rms(syn, len) * powf(10.0f, db / 20.0f), got = sfx_aw_rms(b, len);
   float g = got > 1e-6f ? want / got : 1.0f;
   for (int i = 0; i < len * SFX_CH; i++) b[i] = sfx_knee(b[i] * g);
   g_sfx_buf[id] = b;   // the synth buffer is freed by the caller's sweep
+  g_sfx_len[id] = len;
 }
 
 static void sfx_apply_samples(void) {
@@ -209,6 +235,7 @@ static void sfx_apply_samples(void) {
   for (int id = 0; id < SFX_COUNT; id++) {
     if (id == SFX_SLAP || id == SFX_RELOAD_AR || id == SFX_RELOAD_AR_TAC
         || id == SFX_RELOAD_SR || id == SFX_RELOAD_PT || !SFX_NAME[id]) continue;
+    if (id >= SFX_RL_FIRST && id < SFX_STEP_CONC1) continue;   // assembled below
     sfx_sample_rule_t r = sfx_rule(id);
     int ref = r.ref >= 0 ? r.ref : id;
     if (!syn[ref]) continue;                       // nothing to match against
@@ -255,22 +282,22 @@ static void sfx_apply_samples(void) {
   float t_tac = (float)WPN_DEF[WPN_AR].reload_tac_ticks / hz;
   float t_sr = (float)WPN_DEF[WPN_SR].reload_ticks / hz;
   float t_pt = (float)WPN_DEF[WPN_PT].reload_ticks / hz;
-  const rl_ev_t AR[] = {{"rl_handle", 0.030f, 0.30f, 0.0f}, {"rl_ar_out", 0.175f, 0.8f, 0.008f},
-                        {"rl_handle", 0.330f, 0.25f, 0.0f},
-                        {"rl_ar_in", RELOAD_BEAT[WPN_AR][0], 1.0f, 0.012f},
-                        {"rl_ar_bolt", RELOAD_BEAT[WPN_AR][1], 1.0f, 0.003f}};
-  const rl_ev_t TAC[] = {{"rl_handle", 0.030f, 0.30f, 0.0f}, {"rl_ar_out", 0.185f, 0.8f, 0.008f},
-                         {"rl_handle", 0.520f, 0.25f, 0.0f}, {"rl_ar_in", 0.880f, 1.0f, 0.012f}};
+  const rl_ev_t AR[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {"rl_ar_out", 0.175f, 0.8f, 0.008f, 0},
+                        {"rl_handle", 0.330f, 0.25f, 0.0f, 0},
+                        {"rl_ar_in", RELOAD_BEAT[WPN_AR][0], 1.0f, 0.012f, 0},
+                        {"rl_ar_bolt", RELOAD_BEAT[WPN_AR][1], 1.0f, 0.003f, 0}};
+  const rl_ev_t TAC[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {"rl_ar_out", 0.185f, 0.8f, 0.008f, 0},
+                         {"rl_handle", 0.520f, 0.25f, 0.0f, 0}, {"rl_ar_in", 0.880f, 1.0f, 0.012f, 0}};
   // The bolt one-shot is a whole cycle (lift, draw, forward, down): placed by
   // its LOCK (hit 0.430), so the lock lands on the second beat and the lift and
   // draw run in the 0.43 s before it, where the pose works the bolt.
-  const rl_ev_t SR[] = {{"rl_handle", 0.030f, 0.30f, 0.0f}, {"rl_sr_out", 0.185f, 0.8f, 0.004f},
-                        {"rl_handle", 0.340f, 0.25f, 0.0f},
-                        {"rl_sr_in", RELOAD_BEAT[WPN_SR][0], 1.0f, 0.015f},
-                        {"rl_sr_bolt", RELOAD_BEAT[WPN_SR][1], 1.0f, 0.430f}};
-  const rl_ev_t PT[] = {{"rl_handle", 0.020f, 0.22f, 0.0f}, {"rl_pt_out", 0.120f, 0.8f, 0.002f},
-                        {"rl_pt_in", RELOAD_BEAT[WPN_PT][0], 1.0f, 0.002f},
-                        {"rl_pt_slide", RELOAD_BEAT[WPN_PT][1], 1.0f, 0.020f}};
+  const rl_ev_t SR[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {"rl_sr_out", 0.185f, 0.8f, 0.004f, 0},
+                        {"rl_handle", 0.340f, 0.25f, 0.0f, 0},
+                        {"rl_sr_in", RELOAD_BEAT[WPN_SR][0], 1.0f, 0.015f, 0},
+                        {"rl_sr_bolt", RELOAD_BEAT[WPN_SR][1], 1.0f, 0.430f, 0}};
+  const rl_ev_t PT[] = {{"rl_handle", 0.020f, 0.22f, 0.0f, 0}, {"rl_pt_out", 0.120f, 0.8f, 0.002f, 0},
+                        {"rl_pt_in", RELOAD_BEAT[WPN_PT][0], 1.0f, 0.002f, 0},
+                        {"rl_pt_slide", RELOAD_BEAT[WPN_PT][1], 1.0f, 0.020f, 0}};
   // Louder than the synth's: a reload is the one moment the player is told the
   // weapon is not ready, and it has to read over a firefight. The pistol's synth
   // sat at -30 dBA, 10 dB under the AR's, which is why it seemed absent.
@@ -278,6 +305,56 @@ static void sfx_apply_samples(void) {
   sfx_build_reload(SFX_RELOAD_AR_TAC, t_tac, TAC, 4, 4.0f);
   sfx_build_reload(SFX_RELOAD_SR, t_sr, SR, 5, 4.0f);
   sfx_build_reload(SFX_RELOAD_PT, t_pt, PT, 4, 10.0f);
+  // EVERY GUN ITS OWN RELOAD: the slot's timeline, the gun's own clips
+  // (rl_<name>_out, _in, _bolt / _slide), the slot's clip wherever the gun has
+  // none, the slot's synth as the level reference. Skipped outright for a gun
+  // with no clip of its own (it keeps the slot's buffer: same sound, no copy).
+  {
+    static const struct { int id, tac, row; const char *n; } G[] = {
+      #define RL_GUN_ROW(id_, name_) {SFX_RL_##id_, SFX_RLT_##id_, -1, name_},
+      RL_GUN_LIST(RL_GUN_ROW)
+      #undef RL_GUN_ROW
+    };
+    static char nm[sizeof G / sizeof G[0]][4][32];
+    for (int i = 0; i < (int)(sizeof G / sizeof G[0]); i++) {
+      const char *n = G[i].n;
+      int row = !strcmp(n, "p2000") || !strcmp(n, "glock") || !strcmp(n, "deagle") || !strcmp(n, "usps") ||
+                !strcmp(n, "p250") || !strcmp(n, "fiveseven") || !strcmp(n, "tec9") || !strcmp(n, "cz75") ||
+                !strcmp(n, "r8") || !strcmp(n, "elites") ? 1
+              : !strcmp(n, "awp") || !strcmp(n, "ssg08") || !strcmp(n, "g3sg1") || !strcmp(n, "scar20") ? 2 : 0;
+      const char *sl = row == 1 ? "pt" : row == 2 ? "sr" : "ar";
+      snprintf(nm[i][0], 32, "rl_%s_out", n);
+      snprintf(nm[i][1], 32, "rl_%s_in", n);
+      snprintf(nm[i][2], 32, row == 1 ? "rl_%s_slide" : "rl_%s_bolt", n);
+      static char al[3][3][32];
+      snprintf(al[row][0], 32, "rl_%s_out", sl);
+      snprintf(al[row][1], 32, "rl_%s_in", sl);
+      snprintf(al[row][2], 32, row == 1 ? "rl_%s_slide" : "rl_%s_bolt", sl);
+      int base = row == 1 ? SFX_RELOAD_PT : row == 2 ? SFX_RELOAD_SR : SFX_RELOAD_AR;
+      if (row == 0) {
+        const rl_ev_t E[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {nm[i][0], 0.175f, 0.8f, 0.008f, al[0][0]},
+                             {"rl_handle", 0.330f, 0.25f, 0.0f, 0},
+                             {nm[i][1], RELOAD_BEAT[WPN_AR][0], 1.0f, 0.012f, al[0][1]},
+                             {nm[i][2], RELOAD_BEAT[WPN_AR][1], 1.0f, 0.003f, al[0][2]}};
+        const rl_ev_t T[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {nm[i][0], 0.185f, 0.8f, 0.008f, al[0][0]},
+                             {"rl_handle", 0.520f, 0.25f, 0.0f, 0}, {nm[i][1], 0.880f, 1.0f, 0.012f, al[0][1]}};
+        sfx_build_reload_ref(G[i].id, syn[base], syn_len[base], t_ar, E, 5, 4.0f, 1);
+        sfx_build_reload_ref(G[i].tac, syn[SFX_RELOAD_AR_TAC], syn_len[SFX_RELOAD_AR_TAC], t_tac, T, 4, 4.0f, 1);
+      } else if (row == 2) {
+        const rl_ev_t E[] = {{"rl_handle", 0.030f, 0.30f, 0.0f, 0}, {nm[i][0], 0.185f, 0.8f, 0.004f, al[2][0]},
+                             {"rl_handle", 0.340f, 0.25f, 0.0f, 0},
+                             {nm[i][1], RELOAD_BEAT[WPN_SR][0], 1.0f, 0.015f, al[2][1]},
+                             {nm[i][2], RELOAD_BEAT[WPN_SR][1], 1.0f, 0.430f, al[2][2]}};
+        sfx_build_reload_ref(G[i].id, syn[base], syn_len[base], t_sr, E, 5, 4.0f, 1);
+      } else {
+        const rl_ev_t E[] = {{"rl_handle", 0.020f, 0.22f, 0.0f, 0}, {nm[i][0], 0.120f, 0.8f, 0.002f, al[1][0]},
+                             {nm[i][1], RELOAD_BEAT[WPN_PT][0], 1.0f, 0.002f, al[1][1]},
+                             {nm[i][2], RELOAD_BEAT[WPN_PT][1], 1.0f, 0.020f, al[1][2]}};
+        sfx_build_reload_ref(G[i].id, syn[base], syn_len[base], t_pt, E, 4, 10.0f, 1);
+      }
+      (void)G[i].row;
+    }
+  }
   // ONE owner for the replaced synth buffers: freed here and only here.
   for (int i = 0; i < SFX_COUNT; i++)
     if (syn[i] && syn[i] != g_sfx_buf[i]) free(syn[i]);

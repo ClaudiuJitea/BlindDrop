@@ -327,6 +327,13 @@ static v3 vm_pouch_disp(v3 wc, v3 eye, v3 rgt, v3 upv, v3 fwd, float t) {
 //   ads_push   how much further from the eye the gun sits when aimed (a
 //              bullpup's cheek weld is on its butt)
 //   mag_k      1 the magazine drops out below; -1 it lifts out above (P90)
+//   grip_rot   THE GUN'S OWN GRIP (0.8.3). The firing hand was sculpted round the
+//   grip_dy    AR's grip, and every gun wore that grip at that rake. A gun with
+//   grip_dz    its own — the MAC-10's near-vertical magwell, the P90's thumbhole
+//              bar — sets the rotation (radians about the hand's x axis, through
+//              the WRIST, HAND_WRIST_Y/Z) and the shift (y, z) that carry the hand
+//              and forearm onto it; build_models.py poses the grip, the trigger
+//              and the grip magazine by the same numbers (guns_rebuild.py POSES).
 typedef struct {
   float muz_y, muz_z;
   int   sight;
@@ -334,63 +341,67 @@ typedef struct {
   float mag_y, mag_z;
   float reld_y, reld_z, reld_ay, reld_az;
   float fore_dz, ads_push, mag_k;
+  float grip_rot, grip_dy, grip_dz;
 } vm_var_t;
+#define HAND_WRIST_Y (-0.080f)   // the firing hand's wrist (hand_r's W_R), its pose pivot
+#define HAND_WRIST_Z (-0.066f)
 #define VM_HOLO_Y_ 0.0741f   // (VM_HOLO_Y, below)
 #define VM_HOLO_Z_ 0.1680f
 #define VM_HOLO_R_ 0.0133f
 static const vm_var_t VM_VAR[3][WPN_VARS] = {
-  { {0.022f, 0.492f, 0, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1},       // M4A4
-    {0.022f, 0.492f, 1, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1},       // AK-47 (Kobra)
+  { {0.022f, 0.492f, 0, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},       // M4A4
+    {0.022f, 0.492f, 1, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},       // AK-47 (Kobra)
     {0.022f, 0.500f, 2, 0.0600f, -0.1400f, 0.0026f, -0.076f, -0.146f,                       // FAMAS
-     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, 0.070f, 1},
-    {0.022f, 0.640f, 2, 0.0600f, -0.0080f, 0.0024f, 0, 0, 0, 0, 0, 0, 0, 0, 1},              // M4A1-S
-    {0.020f, 0.500f, 2, 0.0600f, -0.0180f, 0.0024f, -0.100f, 0.128f, 0, 0, 0, 0, 0, 0, 1},   // GALIL AR
-    {0.019f, 0.490f, 3, 0.0750f, 0.1500f, 0.0136f, 0, 0, 0, 0, 0, 0, 0, -0.090f, 1},         // SG 553 (objective)
+     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, 0.070f, 1, 0, 0, 0},
+    {0.022f, 0.640f, 2, 0.0600f, -0.0080f, 0.0024f, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},              // M4A1-S
+    {0.020f, 0.500f, 2, 0.0600f, -0.0180f, 0.0024f, -0.100f, 0.128f, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},   // GALIL AR
+    {0.019f, 0.490f, 3, 0.0750f, 0.1500f, 0.0136f, 0, 0, 0, 0, 0, 0, 0, -0.090f, 1, 0, 0, 0},         // SG 553 (objective)
     {0.020f, 0.480f, 3, 0.0780f, 0.1260f, 0.0126f, -0.076f, -0.146f,                        // AUG (objective)
-     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, -0.060f, 1},
-    {0.019f, 0.225f, 2, 0.0460f, -0.0480f, 0.0022f, -0.120f, -0.035f,                       // MAC-10
-     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.104f, 0, 1},
+     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, -0.060f, 1, 0, 0, 0},
+    {0.019f, 0.225f, 2, 0.0460f, -0.0480f, 0.0022f, -0.1354f, 0.0047f,                      // MAC-10
+     -0.1413f, 0.0009f, 0.983f, 0.176f, -0.104f, 0, 1, -0.22f, -0.0231f, 0.0317f},         //   its own near-vertical grip
     {0.019f, 0.235f, 2, 0.0520f, -0.0450f, 0.0022f, -0.115f, -0.032f,                       // MP9
-     -0.1200f, -0.0360f, 0.921f, 0.386f, -0.114f, 0, 1},
-    {0.019f, 0.235f, 2, 0.0580f, -0.0550f, 0.0024f, -0.120f, -0.036f,                       // MP7
-     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.116f, 0, 1},
+     -0.1200f, -0.0360f, 0.921f, 0.386f, -0.114f, 0, 1, 0, 0, 0},
+    {0.019f, 0.235f, 2, 0.0580f, -0.0550f, 0.0024f, -0.1288f, -0.0202f,                     // MP7
+     -0.1342f, -0.0236f, 0.955f, 0.292f, -0.116f, 0, 1, -0.10f, -0.0120f, 0.0120f},        //   its own hooked grip
     {0.019f, 0.420f, 2, 0.0600f, -0.0400f, 0.0026f, -0.090f, 0.095f,                        // MP5-SD
-     -0.0600f, 0.0920f, 0.990f, 0.140f, 0, 0, 1},
+     -0.0600f, 0.0920f, 0.990f, 0.140f, 0, 0, 1, 0, 0, 0},
     {0.019f, 0.240f, 2, 0.0620f, -0.0400f, 0.0026f, -0.085f, 0.095f,                        // UMP-45
-     -0.0620f, 0.0950f, 1.0f, 0.0f, -0.104f, 0, 1},
+     -0.0620f, 0.0950f, 1.0f, 0.0f, -0.104f, 0, 1, 0, 0, 0},
     {0.019f, 0.230f, 1, 0.0840f, 0.0900f, 0.0100f, 0.052f, -0.030f,                         // P90
-     0.0620f, -0.0300f, 0.0f, 1.0f, -0.136f, 0, -1},
+     0.0620f, -0.0300f, 0.0f, 1.0f, -0.136f, 0, -1, -0.22f, -0.0251f, 0.0197f},            //   the thumbhole bar
     {0.019f, 0.440f, 2, 0.0580f, 0.2000f, 0.0024f, -0.020f, 0.205f,                         // PP-BIZON
-     -0.0200f, 0.2050f, 0.0f, 1.0f, 0, 0, 1},
+     -0.0200f, 0.2050f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
     // THE SHOTGUNS: group 1 is ONE SHELL at the loading port, the support hand
     // thumbs it in along the bore (hold axis along z); group 3 the pump.
     {0.036f, 0.550f, 2, 0.0520f, -0.0300f, 0.0022f, -0.014f, 0.085f,                        // NOVA
-     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1},
+     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
     {0.036f, 0.540f, 2, 0.0560f, -0.0300f, 0.0024f, -0.014f, 0.085f,                        // XM1014
-     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1},
+     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
     {0.036f, 0.360f, 2, 0.0520f, 0.0000f, 0.0022f, -0.014f, 0.085f,                         // SAWED-OFF
-     -0.0380f, 0.0850f, 0.0f, 1.0f, -0.030f, 0, 1},
+     -0.0380f, 0.0850f, 0.0f, 1.0f, -0.030f, 0, 1, 0, 0, 0},
     {0.030f, 0.420f, 2, 0.0560f, -0.0400f, 0.0022f, -0.120f, -0.035f,                       // MAG-7 (box in the grip)
-     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.020f, 0, 1},
+     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.020f, 0, 1, 0, 0, 0},
     // THE MACHINE GUNS: the ammunition box hangs at the magwell.
     {0.022f, 0.560f, 2, 0.0640f, 0.0200f, 0.0026f, -0.075f, 0.118f,                         // M249
-     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1},
+     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1, 0, 0, 0},
     {0.022f, 0.580f, 2, 0.0640f, 0.0100f, 0.0026f, -0.075f, 0.118f,                         // NEGEV
-     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1} },
-  { {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // P2000
-    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // GLOCK-18
-    {0.006f, 0.196f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // DESERT EAGLE
-    {0.006f, 0.300f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // USP-S (the can)
-    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // P250
-    {0.006f, 0.152f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // FIVE-SEVEN
-    {0.006f, 0.215f, 2, 0, 0, 0, 0, 0, -0.1100f, 0.1050f, 1.0f, 0.0f, 0, 0, 1},  // TEC-9: mag ahead of the guard
-    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // CZ75-AUTO
-    {0.006f, 0.205f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // R8 REVOLVER
-    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1} },  // DUAL BERETTAS (the right gun)
-  { {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // AWP
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // SCAR-20
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},    // SSG 08
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1} },  // G3SG1
+     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1, 0, 0, 0} },
+  { {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // P2000
+    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // GLOCK-18
+    {0.006f, 0.196f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // DESERT EAGLE
+    {0.006f, 0.300f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // USP-S (the can)
+    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // P250
+    {0.006f, 0.152f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // FIVE-SEVEN
+    {0.006f, 0.215f, 2, 0, 0, 0, 0, 0, -0.1100f, 0.1050f, 1.0f, 0.0f, 0, 0, 1,   // TEC-9: mag ahead of the guard,
+     -0.10f, -0.0140f, 0.0200f},                                                 //   its own fat grip
+    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // CZ75-AUTO
+    {0.006f, 0.205f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // R8 REVOLVER
+    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0} },  // DUAL BERETTAS (the right gun)
+  { {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // AWP
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // SCAR-20
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // SSG 08
+    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0} },  // G3SG1
 };
 static const vm_var_t *vm_var(int cur, int var) {
   int row = wpn_var_row(cur);
@@ -689,9 +700,13 @@ static const wpn_theme_t VAR_DIGITAL_DESERT = {
 static const wpn_theme_t VAR_DIGITAL_DESERT_PT = {
   3, 30.0f, 0, {0.70f, 0.60f, 0.45f}, {0.53f, 0.43f, 0.31f}, {0.36f, 0.29f, 0.21f},
   {0.21f, 0.195f, 0.18f}};
+// v6 (0.8.3): FACTORY IS THE GUN'S OWN FINISH. Every model now ships in its real
+// colours (tools/build_models.py PALETTES: black anodised M4, polymer Glock, OD
+// AUG, stainless Desert Eagle...), so the desert-digital default above is no
+// longer applied to the loadout variants; it stays defined for a future theme.
 static const wpn_theme_t *vm_theme(int cur, int var) {
-  if (!armory_idx(g_cfg.wpn_theme, WPN_THEME_COUNT) && (cur == WPN_AR || cur == WPN_PT) && var > 0)
-    return cur == WPN_PT ? &VAR_DIGITAL_DESERT_PT : &VAR_DIGITAL_DESERT;
+  (void)cur; (void)var;
+  (void)VAR_DIGITAL_DESERT; (void)VAR_DIGITAL_DESERT_PT;
   return armory_theme();
 }
 static const gear_theme_t *armory_gear(void) {
@@ -757,6 +772,12 @@ static int g_md_matte;
 // to its colours: the light family takes the theme's primary paint, the dark
 // furniture its tint, each scaled to the part's own value.
 static const wpn_theme_t *g_tp_theme;
+static int wpn_part_marked(const model_part_t *p) {
+  return p->flag >= 4 && p->flag <= 6 && fabsf(p->metal - 0.123f) < 0.0005f;
+}
+static int wpn_part_light(const model_part_t *p) {
+  return wpn_part_marked(p) || p->r > p->b * 1.3f;
+}
 static v3 tp_theme_dye(v3 c) {
   const wpn_theme_t *t = g_tp_theme;
   float lum = (c.x + c.y + c.z) * (1.0f / 3.0f);
@@ -782,10 +803,19 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
     // The theme's two families, as a fraction on the finish flag the shader
     // already branches on (-4.3 is still polymer, -6.2 still painted alloy):
     // .3 the light primary paint (the tan family), .2 the dark furniture.
-    if (g_md_skin && P[i].flag >= 4 && P[i].flag <= 6)
-      mtl -= P[i].r > P[i].b * 1.3f ? 0.3f : 0.2f;
+    // The light family is the tan parts — or, on a gun in its real factory
+    // colours, the parts build_models.py marked (metal LIGHT_MARK .123 on a
+    // flagged part, which is never metal). A theme paints those over the house
+    // tan they were authored against, so a black M4 takes a skin as brightly
+    // as the tan guns did.
+    int light = wpn_part_light(&P[i]);
+    if (g_md_skin && P[i].flag >= 4 && P[i].flag <= 6) {
+      mtl -= light ? 0.3f : 0.2f;
+      if (light && wpn_part_marked(&P[i])) c = (v3){{0.63f, 0.53f, 0.39f}};
+    }
     if (g_md_gear) c = gear_dye(P[i].flag, c);
-    if (g_md_matte && g_tp_theme && P[i].flag >= 4 && P[i].flag <= 6) c = tp_theme_dye(c);
+    if (g_md_matte && g_tp_theme && P[i].flag >= 4 && P[i].flag <= 6)
+      c = tp_theme_dye(light && wpn_part_marked(&P[i]) ? (v3){{0.63f, 0.53f, 0.39f}} : c);
     if (P[i].flag == 3 && (g_md_led || g_md_matte)) {
       if (g_md_led) c = (v3){{g_md_led[0], g_md_led[1], g_md_led[2]}};
       else {

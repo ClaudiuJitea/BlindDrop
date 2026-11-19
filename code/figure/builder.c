@@ -462,6 +462,11 @@ static int g_fig_head = -1, g_fig_vest = -1, g_fig_pack = -1, g_fig_face = -1;
 // Read only by the sling (fig_sling), which needs the mode's weapon rules.
 static int g_fig_ent = -1;
 static int g_fig_free;   // fig_arms: bit i = hand i closes on nothing (weapon swap)
+// fig_arms: bit i = hand i closes round the cylinder g_fig_grab_c/a/r[i] instead
+// of the weapon's own grip (the weapon swap's hand on a stock)
+static int g_fig_grab;
+static v3 g_fig_grab_c[2], g_fig_grab_a[2];
+static float g_fig_grab_r[2];
 // THE DUAL BERETTAS in third person: 1 while the figure holds the pair, and its
 // left hand then closes on the SECOND pistol, DUAL3P to the left of the first.
 static int g_fig_dual;
@@ -849,8 +854,8 @@ static kit_t fig_kit(int palette, float flash01, v3 flash_col) {
 // (the bandolier, the radio) asks here instead of guessing a radius.
 #define FIG_TORSO_N 9
 static const float FIG_TORSO_ST[FIG_TORSO_N][5] = {   // T, F, rx, rz, twist
-  {-0.120f, -0.008f, 0.112f, 0.096f, 0.00f}, {-0.026f, -0.020f, 0.180f, 0.142f, 0.10f},
-  { 0.020f, -0.014f, 0.172f, 0.131f, 0.19f},
+  {-0.120f,  0.012f, 0.058f, 0.070f, 0.00f}, {-0.046f, -0.004f, 0.140f, 0.100f, 0.10f},
+  { 0.020f, -0.002f, 0.148f, 0.096f, 0.19f},
   { 0.062f, -0.004f, 0.158f, 0.114f, 0.28f}, { 0.128f,  0.004f, 0.146f, 0.106f, 0.45f},
   { 0.205f,  0.010f, 0.158f, 0.122f, 0.66f}, { 0.285f,  0.016f, 0.172f, 0.136f, 0.86f},
   { 0.352f,  0.018f, 0.184f, 0.134f, 0.94f}, { 0.472f,  0.006f, 0.156f, 0.108f, 1.00f}};
@@ -881,6 +886,56 @@ static v3 fig_torso_front(const pose_t *P, v3 spine, v3 prt, v3 Rc, float tw,
   if (fw_out) *fw_out = cfw;
   return v3_add(P->pelvis, v3_add(v3_scale(spine, T), v3_add(v3_scale(crt, x),
                 v3_add(v3_scale(cfw, d + off), v3_scale(cfw0, F)))));
+}
+
+// THE SEAT PANELS, standing (draw.c builds them per leg from the live hip
+// joint; these are the same nodes at rest): T up the spine, L out to the side,
+// F fore/aft, rx across, rz deep. hip_surf reads them so belt kit can sit ON
+// the trousers rather than at a guessed radius.
+#define FIG_SEAT_N 3
+// THE BATTLE BELT: a band 46 mm tall standing proud of the waist and of the
+// tops of both seat panels, which end inside it — the trousers' top edge is
+// under the belt, as it is on a man.
+#define FIG_BELT_T0 0.012f
+#define FIG_BELT_T1 0.066f
+#define FIG_BELT_F (-0.006f)
+#define FIG_BELT_RX 0.172f
+#define FIG_BELT_RZ 0.130f
+static const float FIG_SEAT_ST[FIG_SEAT_N][5] = {   // T, L, F, rx, rz
+  {-0.070f, 0.095f, -0.022f, 0.101f, 0.112f},
+  {-0.020f, 0.072f, -0.028f, 0.112f, 0.114f},
+  { 0.040f, 0.048f, -0.013f, 0.088f, 0.087f}};
+// Farthest root t of the ray t*(c, s) on an ellipse centred (cx, cf), radii a, b;
+// -1 when the ray misses it.
+static float hip_ray_ellipse(float c, float s, float cx, float cf, float a, float b) {
+  float ia = 1.0f / (a * a), ib = 1.0f / (b * b);
+  float A = c * c * ia + s * s * ib, B = -2.0f * (c * cx * ia + s * cf * ib);
+  float C = cx * cx * ia + cf * cf * ib - 1.0f;
+  float D = B * B - 4.0f * A * C;
+  if (D < 0.0f) return -1.0f;
+  return (-B + sqrtf(D)) / (2.0f * A);
+}
+// How far the trouser/shirt surface stands from the spine at height T, in the
+// direction phi round the hips (0 = the right hip, +pi/2 = straight ahead, as
+// prt cos + pfw sin): the larger of the torso ring and either seat panel there.
+static float hip_surf(float T, float phi) {
+  float c = cosf(phi), s = sinf(phi);
+  float F, rx, rz, twf;
+  fig_torso_at(T, &F, &rx, &rz, &twf);
+  float best = hip_ray_ellipse(c, s, 0.0f, F, rx, rz);
+  if (T >= FIG_BELT_T0 && T <= FIG_BELT_T1)
+    best = fmaxf(best, hip_ray_ellipse(c, s, 0.0f, FIG_BELT_F, FIG_BELT_RX, FIG_BELT_RZ));
+  if (T >= FIG_SEAT_ST[0][0] && T <= FIG_SEAT_ST[FIG_SEAT_N - 1][0]) {
+    int i = 0;
+    while (i < FIG_SEAT_N - 2 && T > FIG_SEAT_ST[i + 1][0]) i++;
+    const float *a = FIG_SEAT_ST[i], *b = FIG_SEAT_ST[i + 1];
+    float k = f_clamp((T - a[0]) / (b[0] - a[0]), 0.0f, 1.0f);
+    float L = a[1] + (b[1] - a[1]) * k, Fs = a[2] + (b[2] - a[2]) * k;
+    float ax = a[3] + (b[3] - a[3]) * k, az = a[4] + (b[4] - a[4]) * k;
+    for (int sd = -1; sd <= 1; sd += 2)
+      best = fmaxf(best, hip_ray_ellipse(c, s, (float)sd * L, Fs, ax, az));
+  }
+  return best;
 }
 
 // The trunk: torso prism, plate carrier, shoulder straps, assault pack and
@@ -976,17 +1031,38 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     }
     hflex = f_clamp((hflex - 0.08f) / 0.80f, 0.0f, 1.0f);   // standing sway stays at 0
   }
+  // THE SEAT IS ONE MASS. It used to be a 36 x 28 cm ring stood 2.6 cm under
+  // the pelvis with a 22 cm crotch slab under it: from behind, a flat panel
+  // with a square bottom edge hanging between the thighs, and the hip seats
+  // (draw.c) bulging out under it as two balls. The glute ring now sits 2 cm
+  // lower and a touch narrower so its underside rolls INTO the thighs, and the
+  // crotch is tucked to an inseam (14 x 17 cm, 1 cm forward) — the seat ends
+  // in a soft V between the legs instead of a shelf.
+  crotch_p = v3_add(crotch_p, v3_scale(cfw0, 0.020f));
+  // ...and NOT BELOW THE HIP LINE AT ALL. However it was dropped (down the
+  // spine, then along the thighs), the torso's closing end hung under the seat
+  // between the thighs, and in a running stride — one thigh forward, one back
+  // — it showed from behind as a round lump between the legs. The seat panels
+  // (draw.c) and the thighs close the seat and the inseam on their own; the
+  // torso now ends tucked up under the pelvis, where nothing can see its end.
+  // 6 cm under the pelvis node (the glute ring is at 4.6, so the two rings
+  // never coincide — at +2 cm they did, and figcheck counted the z-fight) and
+  // a quarter slimmer, so the end stays inside the seat and the thighs.
+  // (Measured front, side, back, standing, crouched and in a running stride.)
+  (void)crotch_p;
+  const float cr_ = 0.75f;
+  crotch_p = v3_add(P->pelvis, v3_add(v3_scale(spine, -0.060f), v3_scale(cfw0, 0.020f)));
   fnode_t t[FIG_TORSO_N] = {
-    {crotch_p, kt->pants, kt->pants, 0.112f - 0.016f * hflex, 0.096f - 0.022f * hflex, 0.0f,
+    {crotch_p, kt->pants, kt->pants, (0.058f - 0.008f * hflex) * cr_, (0.070f - 0.016f * hflex) * cr_, 0.0f,
      0.70f - 0.25f * hflex},                                              // crotch
-    TN(-0.026f + 0.034f * hflex, -0.020f + 0.024f * hflex, 0.180f - 0.016f * hflex,
-       0.142f - 0.036f * hflex, kt->pants, 0.10f, 0.0f),                  // glutes: mass BACK
+    TN(-0.046f + 0.034f * hflex, -0.004f + 0.008f * hflex, 0.140f - 0.010f * hflex,
+       0.100f - 0.018f * hflex, kt->pants, 0.10f, 0.0f),                  // glutes: mass BACK
     // The seat-to-belt roll. Glutes to belt line lost 28 mm of depth in 88 mm,
     // which on a ring sweep is one steep band — the horizontal shelf across the
     // lower back and the seat. A node a touch FULLER than the straight line
     // between them makes that a curve.
-    TN( 0.020f + 0.012f * hflex, -0.014f + 0.012f * hflex, 0.172f - 0.008f * hflex,
-        0.131f - 0.016f * hflex, kt->pants, 0.19f, 0.0f),
+    TN( 0.020f + 0.012f * hflex, -0.002f + 0.004f * hflex, 0.148f - 0.006f * hflex,
+        0.096f - 0.006f * hflex, kt->pants, 0.19f, 0.0f),
     TN( 0.062f, -0.004f, 0.158f, 0.114f, kt->belt,  0.28f, 0.0f),   // belt line
     TN( 0.128f,  0.004f, 0.146f, 0.106f, kt->olive, 0.45f, 0.0f),   // waist, pulled in
     TN( 0.205f,  0.010f, 0.158f, 0.122f, kt->olive, 0.66f, 0.0f),   // lower ribcage
@@ -1000,6 +1076,17 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
   // not as designed planes. The facet columns carry the low-poly read.
   g_fig_jit = 0.40f;
   fig_chain(t, FIG_TORSO_N, 16, 1, 1, prt);
+  {
+    v3 bk = v3_scale(kt->belt, 0.92f);
+    #define BN(T, COL) {v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), v3_scale(cfw0, FIG_BELT_F))), \
+                        COL, COL, FIG_BELT_RX, FIG_BELT_RZ, 0.22f * tw, 0.0f}
+    fnode_t bt[2] = {BN(FIG_BELT_T0, bk), BN(FIG_BELT_T1, kt->belt)};
+    #undef BN
+    probe("belt");
+    g_fig_jit = 0.0f;
+    fig_chain(bt, 2, 16, 1, 1, prt);
+    g_fig_jit = 0.40f;
+  }
   // THE TUNIC: the insurgent's biggest outline change, and the one an operator
   // can never have. A long shirt worn OUTSIDE the trousers, split at the sides
   // (as a perahan is), so it is two panels — front and back — hanging from
@@ -1049,8 +1136,10 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     (void)cu; (void)du;
     fnode_t tu[4] = {
       TU(0.058f, 0.000f, 0.138f, 0.090f, tun, 0.0f),               // buried under the belt
-      TU(0.004f, -0.006f, 0.190f, 0.156f, tun, 0.0f),
-      TU(-0.060f, 0.5f * ch, 0.192f, fminf(fmaxf(dh + 0.080f, 0.150f), 0.172f), tun, 0.0f),
+      // (wide and deep enough to hang OVER the seat panels: draw.c's seat
+      // stands 0.19 m out at the hips and 0.15 m behind)
+      TU(0.004f, -0.012f, 0.204f, 0.168f, tun, 0.0f),
+      TU(-0.060f, 0.5f * ch - 0.008f, 0.210f, fminf(fmaxf(dh + 0.094f, 0.168f), 0.186f), tun, 0.0f),
       TU(-drop, ch, 0.186f, fminf(fmaxf(dh + 0.050f, 0.122f), 0.148f), tdk, 0.60f)};   // the hem
     #undef TU
     probe("tunic");
@@ -1450,76 +1539,104 @@ FIG_INLINE void fig_torso(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
     }
     #undef PP
   }
-  // Two mag pouches on the belt line; they also mark which way the hips face.
+  // THE BELT KIT, SEATED ON THE BODY. Every pouch here used to hang at a fixed
+  // offset from the pelvis, and the body under it has been re-cut twice since:
+  // the dump pouch floated a centimetre off the seat, the IFAK sat on nothing,
+  // and the two rifle pouches were tubes pointing straight FORWARD out of the
+  // belt — end-on from the side they read as two hockey pucks. Now each one is
+  // built against the surface it rides on (hip_surf: the waist and the two
+  // seat panels, as draw.c cuts them), its back sunk a few millimetres into
+  // it, and anything that hangs hangs FROM the belt: its top tucks under the
+  // belt band and its body follows the curve of the seat down.
   v3 pfw = v3_norm(v3_cross(spine, prt));
+  #define HK_DIR(PHI) v3_add(v3_scale(prt, cosf(PHI)), v3_scale(pfw, sinf(PHI)))
+  #define HK_AT(PHI, T, OUT) v3_add(P->pelvis, v3_add(v3_scale(spine, (T)), \
+                                    v3_scale(HK_DIR(PHI), hip_surf((T), (PHI)) + (OUT))))
+  // Two double rifle-magazine pouches on the front of the belt, upright, a
+  // darker flap over each; they also mark which way the hips face.
   for (int i = 0; i < 2; i++) {
-    float s2 = i ? 1.0f : -1.0f;
-    v3 hipc = v3_add(P->pelvis, v3_add(v3_scale(prt, s2 * 0.072f),
-                                       v3_scale(spine, 0.030f)));
-    fnode_t mp[3] = {
-      {v3_add(hipc, v3_scale(pfw, 0.052f)), kt->belt, kt->belt, 0.052f, 0.034f, 0, 0.0f},
-      {v3_add(hipc, v3_scale(pfw, 0.086f)), kt->belt, kt->belt, 0.056f, 0.038f, 0, 0.0f},
-      {v3_add(hipc, v3_scale(pfw, 0.112f)), kt->belt, kt->belt, 0.042f, 0.028f, 0, 0.0f}};
+    float phi = F_PI * 0.5f + (i ? -0.62f : 0.62f);      // front, 35 deg off centre
+    v3 tg = v3_norm(v3_cross(spine, HK_DIR(phi)));      // along the belt
+    v3 flap = v3_scale(kt->belt, 0.78f);
+    fnode_t mp[4] = {
+      {HK_AT(phi, -0.034f, 0.014f), kt->belt, kt->belt, 0.040f, 0.018f, 0, 0.55f},
+      {HK_AT(phi, -0.022f, 0.016f), kt->belt, kt->belt, 0.044f, 0.020f, 0, 0.0f},
+      {HK_AT(phi,  0.052f, 0.017f), kt->belt, flap,     0.044f, 0.021f, 0, 0.0f},
+      {HK_AT(phi,  0.078f, 0.015f), flap, flap,         0.040f, 0.019f, 0, 0.0f}};
     probe("magpouch");
     g_fig_soft = 1;
-    fig_chain(mp, 3, 16, 1, 1, spine);
+    fig_chain(mp, 4, 8, 1, 1, tg);
     g_fig_soft = 0;
   }
   // THE BATTLE BELT'S KIT (operators): the IFAK at the back of the weak-side hip
-  // with its red cross printed on the outer face, a DUMP POUCH sagging at the
-  // back of the strong side, and a pistol magazine pouch ahead of the left
-  // rifle pouch. Hung off the pelvis like the mag pouches, on the hips' own
-  // forward (pfw), so they turn with the hips and not with the chest.
+  // with a subdued cross on its outer face, a DUMP POUCH hanging at the back of
+  // the strong side, and a pistol magazine pouch on the weak-side hip.
   if (!kt->ins && g_fig_k > 8) {
     v3 pk = v3_scale(kt->gear, 0.82f);   // coyote kit on the dark belt
-    // IFAK: a horizontal block, back-left
-    v3 ic = v3_add(P->pelvis, v3_add(v3_scale(prt, -0.104f), v3_add(v3_scale(pfw, -0.128f),
-                                                                   v3_scale(spine, 0.024f))));
-    v3 iout = v3_norm(v3_add(v3_scale(prt, -0.45f), v3_scale(pfw, -0.89f)));
+    // IFAK: a rolled pouch lying ALONG the belt, back-left, riding the belt band
+    float iphi = -F_PI * 0.5f - 0.62f;
+    v3 iout = HK_DIR(iphi);
     v3 iac = v3_norm(v3_cross(spine, iout));          // along the belt
+    float ir = 0.030f;
+    v3 ic = HK_AT(iphi, 0.052f, ir - 0.006f);
     fnode_t ik[3] = {
-      {v3_add(ic, v3_scale(iac, -0.046f)), pk, pk, 0.028f, 0.024f, 0, 0.55f},
-      {ic, pk, pk, 0.032f, 0.028f, 0, 0.0f},
-      {v3_add(ic, v3_scale(iac, 0.046f)), pk, pk, 0.028f, 0.024f, 0, 0.0f}};
+      {v3_add(ic, v3_scale(iac, -0.048f)), pk, pk, 0.026f, 0.024f, 0, 0.55f},
+      {ic, pk, pk, ir, 0.029f, 0, 0.0f},
+      {v3_add(ic, v3_scale(iac, 0.048f)), pk, pk, 0.026f, 0.024f, 0, 0.0f}};
     probe("ifak");
     g_fig_soft = 1;
     fig_chain(ik, 3, 12, 1, 1, iout);
     g_fig_soft = 0;
-    // v5: a SUBDUED cross, a value step under the pouch — red is the hostile
-    // hue in this game and it sat at hip height on every operator.
+    // a belt loop over the roll at each end: the pouch is ON the belt
+    for (int e = -1; e <= 1; e += 2) {
+      v3 lc = v3_add(ic, v3_scale(iac, (float)e * 0.034f));
+      fnode_t lp[2] = {
+        {v3_sub(lc, v3_scale(iac, 0.006f)), kt->belt, kt->belt, ir + 0.003f, 0.032f, 0, 0.0f},
+        {v3_add(lc, v3_scale(iac, 0.006f)), kt->belt, kt->belt, ir + 0.003f, 0.032f, 0, 0.0f}};
+      fig_chain(lp, 2, 12, 1, 1, iout);
+    }
+    // a SUBDUED cross, a value step under the pouch (red is the hostile hue)
     v3 red = v3_scale(pk, 0.55f);
-    v3 cface = v3_add(ic, v3_scale(iout, 0.0275f));
+    v3 cface = v3_add(ic, v3_scale(iout, 0.0285f));
     for (int b = 0; b < 2; b++) {   // the cross: a bar along the belt, a bar up it
       v3 ax = b ? spine : iac;
       fnode_t cr[2] = {
         // the bars' caps at DIFFERENT depths: where they cross, coplanar caps z-fight
-        {v3_sub(cface, v3_scale(iout, b ? 0.0040f : 0.0012f)), red, red, 0.0180f, 0.0060f, 0, 0.0f},
-        {v3_add(cface, v3_scale(iout, b ? 0.0045f : 0.0018f)), red, red, 0.0180f, 0.0060f, 0, 0.0f}};
+        {v3_sub(cface, v3_scale(iout, b ? 0.0040f : 0.0012f)), red, red, 0.0150f, 0.0050f, 0, 0.0f},
+        {v3_add(cface, v3_scale(iout, b ? 0.0045f : 0.0018f)), red, red, 0.0150f, 0.0050f, 0, 0.0f}};
       fig_chain(cr, 2, 8, 1, 1, ax);
     }
-    // the dump pouch: a soft sack, back-right, sagging below the belt
-    v3 dc = v3_add(P->pelvis, v3_add(v3_scale(prt, 0.104f), v3_scale(pfw, -0.124f)));
+    // the DUMP POUCH: a soft sack hung from the belt at the back of the strong
+    // side. Its top is tucked behind the belt band; the body lies on the seat
+    // and only its bottom swings (the antenna's 2nd-order follower).
+    float dphi = -F_PI * 0.5f + 0.70f;
+    v3 dtg = v3_norm(v3_cross(spine, HK_DIR(dphi)));
     v3 dcol = v3_scale(kt->gear, 0.70f);
-    // v5: the sack SWINGS — its lower half rides the same 2nd-order follower
-    // the antenna whips on (P->ant_sway), so it lags a stop and settles.
-    fnode_t dp[3] = {
-      {v3_add(dc, v3_scale(spine, 0.026f)), dcol, dcol, 0.034f, 0.024f, 0, 0.55f},
-      {v3_add(v3_add(dc, v3_scale(spine, -0.020f)), v3_scale(P->ant_sway, 0.10f)), dcol, dcol, 0.042f, 0.032f, 0, 0.0f},
-      {v3_add(v3_add(dc, v3_scale(spine, -0.066f)), v3_scale(P->ant_sway, 0.24f)), dcol, dcol, 0.030f, 0.024f, 0, 0.0f}};
+    fnode_t dp[4] = {
+      // HIGH ON THE BELT and short: below the belt line the seat moves with
+      // the stride — the panel over the swinging leg swells out by two to
+      // three centimetres — and a sack resting on it was crossed by it. Kept
+      // above that, its bottom only just clears the top of the seat.
+      {HK_AT(dphi,  0.074f, 0.010f), kt->belt, kt->belt, 0.036f, 0.014f, 0, 0.55f},  // the loop
+      {HK_AT(dphi,  0.056f, 0.022f), dcol, dcol, 0.040f, 0.020f, 0, 0.0f},
+      {v3_add(HK_AT(dphi, 0.024f, 0.030f), v3_scale(P->ant_sway, 0.05f)), dcol, dcol, 0.044f, 0.024f, 0, 0.0f},
+      {v3_add(HK_AT(dphi, -0.006f, 0.030f), v3_scale(P->ant_sway, 0.10f)), dcol, dcol, 0.034f, 0.018f, 0, 0.0f}};
     probe("dumppouch");
     g_fig_soft = 1;
-    fig_chain(dp, 3, 12, 1, 1, prt);
-    // the pistol magazine pouch, front-left beside the rifle pouch
-    v3 pc2 = v3_add(P->pelvis, v3_add(v3_scale(prt, -0.140f), v3_add(v3_scale(pfw, 0.040f),
-                                                                    v3_scale(spine, 0.026f))));
+    fig_chain(dp, 4, 12, 1, 1, dtg);
+    // the pistol magazine pouch, upright on the weak-side hip
+    float pphi = F_PI + 0.30f;
+    v3 ptg = v3_norm(v3_cross(spine, HK_DIR(pphi)));
     fnode_t ppm[3] = {
-      {v3_add(pc2, v3_scale(pfw, 0.012f)), pk, pk, 0.016f, 0.026f, 0, 0.0f},
-      {v3_add(pc2, v3_scale(pfw, 0.030f)), pk, pk, 0.018f, 0.030f, 0, 0.0f},
-      {v3_add(pc2, v3_scale(pfw, 0.042f)), pk, pk, 0.014f, 0.024f, 0, 0.0f}};
+      {HK_AT(pphi, 0.000f, 0.011f), pk, pk, 0.018f, 0.012f, 0, 0.55f},
+      {HK_AT(pphi, 0.012f, 0.013f), pk, pk, 0.020f, 0.014f, 0, 0.0f},
+      {HK_AT(pphi, 0.074f, 0.012f), pk, pk, 0.018f, 0.012f, 0, 0.0f}};
     probe("pistolpouch");
-    fig_chain(ppm, 3, 12, 1, 1, spine);
+    fig_chain(ppm, 3, 8, 1, 1, ptg);
     g_fig_soft = 0;
   }
+  #undef HK_AT
+  #undef HK_DIR
 }
 
 // Both arms, and the gloves closed round the grip cylinders the rifle
@@ -1714,11 +1831,18 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       else
         gun_hold(wpn, i ? GH_GRIP : GH_FORE3, g_org, g_rt, g_up, g_fw, &hc, &ha, &hr);
       if ((i == 0 && (wpn == WPN_KN || wpn == WPN_GR)) || (g_fig_free >> i & 1)) {
-        // the free hand closes on nothing
-        ha = g_rt;
+        // the free hand closes on nothing — round an axis ACROSS the forearm.
+        // (It used to close round the gun's right axis, which in the middle of
+        // a weapon swap can lie along the forearm: the fingers then wrapped
+        // round nothing in line with the arm and stood out as a claw.)
+        v3 fdir = v3_norm(v3_sub(P->wri[i], P->elb[i]));
+        v3 ax = v3_cross(fdir, spine);
+        if (v3_dot(ax, ax) < 1e-4f) ax = v3_cross(fdir, Rc);
+        ha = v3_norm(ax);
         hr = 0.013f;
-        hc = v3_add(P->wri[i], v3_scale(v3_norm(v3_sub(P->wri[i], P->elb[i])), 0.075f));
+        hc = v3_add(P->wri[i], v3_scale(fdir, 0.075f));
       }
+      if (g_fig_grab >> i & 1) { hc = g_fig_grab_c[i]; ha = g_fig_grab_a[i]; hr = g_fig_grab_r[i]; }
       if (i == 0 && brace_k > 0.5f) {
         // Slide brace: a KNUCKLE-DRAG FIST. The fat-cylinder palm-flat
         // attempt wrapped the fingers ~90 deg around a deeply buried axis —
@@ -1736,9 +1860,14 @@ FIG_INLINE void fig_arms(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine,
       // rifle, and a finger that only finds the trigger in first person is the
       // divergence this whole pass exists to remove. (The slide-brace hand is
       // i == 0 and never receives the blade, so no brace guard is needed here.)
-      const v3 *tp = i == 1 ? &g_gun_trig_p : NULL;
+      // ...unless that hand is not on the grip at all (a weapon swap: closed
+      // on nothing, or round the stock). Its trigger finger still reached for
+      // the trigger then, wherever the rifle was — a 20 cm finger hanging off
+      // a fist behind his neck.
+      int off_grip = (g_fig_free | g_fig_grab) >> i & 1;
+      const v3 *tp = i == 1 && !off_grip ? &g_gun_trig_p : NULL;
       v3 pd;
-      fig_hand(P->wri[i], hc, ha, hr, s, kt->glove, i == 1 ? 1 : 2, tp, &pd);
+      fig_hand(P->wri[i], hc, ha, hr, s, kt->glove, i == 1 && !off_grip ? 1 : 2, tp, &pd);
       // ...and the SAME forearm the viewmodel builds, off the same palm axis.
       // The wrist rotations are the viewmodel's business — there the arm is free
       // and the hold decides where it goes — while here the elbow is already

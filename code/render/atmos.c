@@ -34,10 +34,29 @@ static const atm_t ATM[] = {
    {0.98f, 1.00f, 1.02f}, {0.002f, 0.006f, 0.010f}},
   // BLUE HOUR: the sun just under the dunes, the lamps lit. COMPOUND's own —
   // the arena's seed pick below never reaches it.
-  {"BLUE HOUR",   {0.52f, 0.15f, -0.84f}, {1.55f, 0.95f, 0.68f}, {0.46f, 0.46f, 0.66f},
-   {0.035f, 0.07f, 0.22f}, {0.20f, 0.19f, 0.24f}, {0.70f, 0.34f, 0.26f},
-   0.56f, 1.70f, 8.0e-5f, 0.26f, 0.48f, 1.02f, 0.34f, 0.32f,
-   {0.97f, 0.99f, 1.04f}, {0.004f, 0.008f, 0.020f}},
+  // (0.8.3: the violet haze pulled back — a bluer horizon, thinner air and
+  // neutral shadows, so the compound reads at dusk instead of through smog)
+  {"BLUE HOUR",   {0.52f, 0.15f, -0.84f}, {1.55f, 0.98f, 0.72f}, {0.40f, 0.48f, 0.68f},
+   {0.030f, 0.07f, 0.22f}, {0.20f, 0.20f, 0.23f}, {0.56f, 0.32f, 0.24f},
+   0.56f, 1.70f, 5.5e-5f, 0.26f, 0.42f, 1.04f, 0.34f, 0.30f,
+   {0.98f, 1.00f, 1.03f}, {0.000f, 0.004f, 0.012f}},
+  // CLEAR AFTERNOON: CITADEL's own. The town was graded under EMBER DUSK — a
+  // violet sky, a red sun and a thick warm haze — and the limewash, the stone
+  // and the shutters all came out the same brown. A high, clean desert sun
+  // under a deep blue sky: the plaster reads near white, the shade on it reads
+  // blue, and the shutters and awnings keep their own colours.
+  {"CLEAR AFTERNOON", {-0.58f, 0.62f, 0.52f}, {3.30f, 3.00f, 2.55f}, {0.80f, 0.90f, 1.08f},
+   {0.07f, 0.20f, 0.52f}, {0.44f, 0.39f, 0.32f}, {0.30f, 0.22f, 0.12f},
+   0.35f, 1.10f, 4.5e-5f, 0.26f, 0.30f, 1.10f, 0.34f, 0.22f,
+   {1.00f, 1.00f, 1.00f}, {0.000f, 0.003f, 0.008f}},
+  // CRISP MORNING: REFINERY's own. Under GOLDEN HOUR its grey concrete and
+  // steel took the sun's amber and the haze's sepia until the site looked
+  // smog-bound. A clear mid-morning sky: neutral greys, the safety yellow
+  // and the pipe colours read as paint, and the far stacks stay sharp.
+  {"CRISP MORNING", {0.66f, 0.56f, 0.50f}, {3.15f, 3.00f, 2.70f}, {0.76f, 0.88f, 1.06f},
+   {0.06f, 0.19f, 0.50f}, {0.38f, 0.37f, 0.35f}, {0.26f, 0.22f, 0.16f},
+   0.36f, 1.20f, 4.0e-5f, 0.32f, 0.30f, 1.12f, 0.34f, 0.22f,
+   {0.99f, 1.00f, 1.01f}, {0.000f, 0.004f, 0.010f}},
 };
 #define ATM_COUNT ((int)(sizeof ATM / sizeof ATM[0]))
 #define ATM_ARENA_N 5   // the presets ARENA draws from (BLUE HOUR is COMPOUND's)
@@ -132,7 +151,11 @@ static const char *WORLD_FS =
   "uniform vec4 uSurf;\n"
   "uniform vec2 uYard;\n"               // yard paint: arena half-size, on (see YARD)
   "uniform int uTown;\n"
-  "uniform vec3 uWrist;\n"
+  "uniform vec4 uWrist;\n"
+  "uniform vec4 uWrist2;\n"            // wrist: x kill flash, y time, z style, w s since own shot
+  "uniform vec4 uWrist3;\n"            // wrist: x magazine fill, y/z/w frag/smoke/fire carried
+  "uniform vec4 uWrist4;\n"            // wrist: x health 0..1, y reload progress (0 = none), z magazine size, w hit flash
+
   "uniform vec3 uWristOn;\n"            // wrist display's lit colour (gear LED)
   // WEAPON THEME (see WPN_THEMES): x = pattern + 1, 0 is the factory finish and
   // skips the block entirely; y = pattern scale per metre; z = metalness the
@@ -459,6 +482,51 @@ static const char *WORLD_FS =
   "  }\n"
   "  return r;\n"
   "}\n"
+  // Distance to the segment a-b: the wrist compass's stroke letters.
+  "float wbx(vec2 p, vec2 c, vec2 h){ vec2 q = abs(p - c) - h; return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); }\n"
+  "float lseg(vec2 p, vec2 a, vec2 b){\n"
+  "  vec2 pa = p - a, ba = b - a;\n"
+  "  float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);\n"
+  "  return length(pa - ba * h);\n"
+  "}\n"
+  // Signed distance to a box of half-extent e: the wrist gauges' icons.
+  "float wbox(vec2 p, vec2 e){\n"
+  "  vec2 d = abs(p) - e;\n"
+  "  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);\n"
+  "}\n"
+  // A five-segment gauge across u0..u1 at row centre vc: crisp cells with dark
+  // gaps. Returns the cell mask in x and the position along the bar in y.
+  "vec2 wgauge(vec2 uv, float vc, float u0, float u1){\n"
+  "  if (abs(uv.y - vc) > 0.15 || uv.x < u0 || uv.x > u1) return vec2(0.0);\n"
+  "  float t = (uv.x - u0) / (u1 - u0);\n"
+  "  float f = fract(t * 5.0);\n"
+  "  float aa = fwidth(t) * 5.0;\n"
+  "  float cell = smoothstep(0.04, 0.04 + aa, f) * (1.0 - smoothstep(0.96 - aa, 0.96, f));\n"
+  "  float edge = 1.0 - smoothstep(0.135 - fwidth(uv.y), 0.135, abs(uv.y - vc));\n"
+  "  return vec2(cell * edge, t);\n"
+  "}\n"
+  // One seven-segment digit in a cell of half-size 0.37 x 0.62 (p centred on
+  // it). Returns the signed distance to its LIT segments in x and to all seven
+  // in y, so the unlit ones can ghost through like a real LCD.
+  "vec2 wseg7(vec2 p, int n){\n"
+  "  const int SEG[10] = int[10](63, 6, 91, 79, 102, 109, 125, 7, 127, 111);\n"
+  "  int m = SEG[clamp(n, 0, 9)];\n"
+  "  const float w = 0.30, h = 0.55, t = 0.065, g = 0.035;\n"
+  "  vec2 hc[3] = vec2[3](vec2(0.0, h), vec2(0.0, 0.0), vec2(0.0, -h));\n"
+  "  vec2 vc[4] = vec2[4](vec2(w, h * 0.5), vec2(w, -h * 0.5), vec2(-w, -h * 0.5), vec2(-w, h * 0.5));\n"
+  "  int hb[3] = int[3](1, 64, 8);\n"                 // a, g, d
+  "  int vb[4] = int[4](2, 4, 16, 32);\n"             // b, c, e, f
+  "  vec2 r = vec2(1e3);\n"
+  "  for (int i = 0; i < 3; i++) {\n"
+  "    float d = wbox(p - hc[i], vec2(w - g, t));\n"
+  "    r.y = min(r.y, d); if ((m & hb[i]) != 0) r.x = min(r.x, d);\n"
+  "  }\n"
+  "  for (int i = 0; i < 4; i++) {\n"
+  "    float d = wbox(p - vc[i], vec2(t, h * 0.5 - g));\n"
+  "    r.y = min(r.y, d); if ((m & vb[i]) != 0) r.x = min(r.x, d);\n"
+  "  }\n"
+  "  return r;\n"
+  "}\n"
   // Cellular (Worley) F1 distance: the pitted micro-texture of a moulded
   // polymer, which is a field of tiny craters rather than a smooth noise.
   "float worley2(vec2 p){\n"
@@ -694,31 +762,210 @@ static const char *WORLD_FS =
   "      if (tk > 0.25) alb = pc * pc * clamp(lum / 0.277, 0.45, 1.5);\n"
   "      else alb = min(uSkinD * uSkinD * (lum / 0.0361), vec3(0.85));\n"
   "    }\n"
-  // THE WRIST DISPLAY (mf -8): the amber panel on the support gauntlet shows
-  // the magazine — two seven-segment digits and a fill bar — in the same
-  // backlit acrylic as the inlays, so it reads as part of the glove. UV rides
-  // in the vertex colour (the panel is built for it in vm_build).
+  // THE WRIST DISPLAY (mf -8): a THREAT RING on the support gauntlet (0.8.3;
+  // it was a two-digit kill counter). A ring whose top is where the wearer
+  // faces, a tick there and a dot at its centre; an AMBER arc lights toward
+  // the last hostile shot heard within 60 m, a thicker RED arc, pulsing,
+  // toward where he was last hit from, each fading as it ages. Bold shapes:
+  // the panel is a few dozen pixels on screen. Drawn as a backlit LCD
+  // (display colours through display_in at unit gain); a kill flashes it white
+  // for a beat (uWrist2.x). uWrist: x shot bearing (deg, clockwise from
+  // facing), y its strength, z hit bearing, w its strength (frame.c). UV in
+  // the vertex colour (vm_build); u left-to-right from the eye, v up.
+  // THE OTHER STYLES (config wrist_style, uWrist2.z): 1 an IR STROBE (no
+  // screen: a domed beacon lens that blinks, flaring on the wearer's shots),
+  // 2 AMMO (the magazine as a fill bar, the three grenades as dots), 3 a
+  // WATCH (a round dial, its hands on the game clock), 4 a UNIT PATCH (velcro,
+  // a stitched border, an arrowhead badge in the gear colour), 5 PLAIN (an
+  // armour plate, no display). Those last two light nothing.
+  "    if (mf < -7.5 && uWrist2.z > 0.5) {\n"
+  "      vec2 uv = vCol.rg;\n"
+  "      vec2 c = uv - 0.5;\n"
+  "      float aa = fwidth(uv.x) * 1.5 + 0.002;\n"
+  "      int st = int(uWrist2.z + 0.5);\n"
+  "      vec3 lit = min(uWristOn * vec3(0.95, 1.0, 1.0), vec3(1.0));\n"
+  "      vec3 d;\n"
+  "      if (st >= 6) {\n"
+  "        // THE VITALS STYLES: health, the magazine and the grenades, read as\n"
+  "        // shapes rather than digits. Health runs green -> amber -> red and\n"
+  "        // pulses when low; the magazine is one tick per round (a solid bar past\n"
+  "        // 30), red when a quarter is left, a white sweep while reloading; a hit\n"
+  "        // rims the screen red.\n"
+  "        float hp = clamp(uWrist4.x, 0.0, 1.0);\n"
+  "        float rl = uWrist4.y;\n"
+  "        float am = rl > 0.0 ? rl : clamp(uWrist3.x, 0.0, 1.0);\n"
+  "        float n = max(uWrist4.z, 1.0);\n"
+  "        vec3 hc = hp > 0.6 ? mix(vec3(1.0, 0.75, 0.15), vec3(0.30, 1.0, 0.45), (hp - 0.6) / 0.4)\n"
+  "                : hp > 0.3 ? mix(vec3(1.0, 0.18, 0.08), vec3(1.0, 0.75, 0.15), (hp - 0.3) / 0.3)\n"
+  "                : vec3(1.0, 0.18, 0.08) * (0.65 + 0.35 * sin(uWrist2.y * 9.0));\n"
+  "        vec3 ac = rl > 0.0 ? vec3(0.95, 0.97, 1.0) : uWrist3.x < 0.26 ? vec3(1.0, 0.22, 0.10) : vec3(0.95, 0.92, 0.82);\n"
+  "        vec3 off = vec3(0.075, 0.08, 0.08);\n"
+  "        if (vCol.b > 0.5) {\n"
+  "          float r = length(c);\n"
+  "          vec3 lamp = hc * (1.05 - 0.6 * r) + vec3(0.25) * (1.0 - smoothstep(0.0, 0.12, length(c - vec2(-0.12, 0.12))));\n"
+  "          lamp = mix(lamp, vec3(1.0, 0.1, 0.05), clamp(uWrist4.w, 0.0, 1.0));\n"
+  "          oCol = vec4(display_in(clamp(lamp, 0.0, 1.0)), 1.0);\n"
+  "          return;\n"
+  "        }\n"
+  "        d = vec3(0.028, 0.030, 0.032);\n"
+  "        float hb = 0.0, ab = 0.0, ff = 0.0, fa = 0.0;\n"
+  "        vec2 hpos, apos;\n"
+  "        float tick = 1.0;\n"
+  "        if (st == 6) {\n"
+  "          // bars: a cross + health bar on top, a cartridge + magazine ticks under it\n"
+  "          float cr = min(wbx(uv, vec2(0.15, 0.74), vec2(0.075, 0.025)), wbx(uv, vec2(0.15, 0.74), vec2(0.025, 0.075)));\n"
+  "          d = mix(d, hc, 1.0 - smoothstep(0.0, aa, cr));\n"
+  "          float hbar = wbx(uv, vec2(0.585, 0.74), vec2(0.335, 0.075));\n"
+  "          float hin = step(uv.x, 0.25 + 0.67 * hp);\n"
+  "          d = mix(d, mix(off, hc, hin), 1.0 - smoothstep(0.0, aa, hbar));\n"
+  "          float bl = min(wbx(uv, vec2(0.15, 0.44), vec2(0.03, 0.06)), length(uv - vec2(0.15, 0.51)) - 0.03);\n"
+  "          d = mix(d, ac, 1.0 - smoothstep(0.0, aa, bl));\n"
+  "          float ax = (uv.x - 0.25) / 0.67;\n"
+  "          float inb = 1.0 - smoothstep(0.0, aa, wbx(uv, vec2(0.585, 0.44), vec2(0.335, 0.075)));\n"
+  "          float m = n <= 12.5 ? n : 10.0;\n"
+  "          float fx = fract(ax * m), fw = fwidth(ax * m) * 1.2;\n"
+  "          tick = smoothstep(0.12, 0.12 + fw, fx) * (1.0 - smoothstep(1.0 - fw, 1.0, fx));\n"
+  "          d = mix(d, mix(off, ac, step(ax, am)), inb * tick);\n"
+
+  "        } else if (st == 7) {\n"
+  "          // twin arcs: health up the left, the magazine up the right\n"
+  "          float r = length(c), a = atan(c.x, c.y);\n"
+  "          float t = (3.14159 - abs(a)) / 3.14159;\n"
+  "          float ring = 1.0 - smoothstep(0.0, aa, abs(r - 0.36) - 0.065);\n"
+  "          float gap = step(0.06, t) * step(t, 0.94);\n"
+  "          float hv = a < 0.0 ? hp : am;\n"
+  "          vec3 cc = a < 0.0 ? hc : ac;\n"
+  "          float seg = 1.0;\n"
+  "          if (a > 0.0) seg = step(0.18, fract((t - 0.06) / 0.88 * (n <= 12.5 ? n : 10.0)));\n"
+  "          d = mix(d, mix(off, cc, step((t - 0.06) / 0.88, hv)), ring * gap * seg);\n"
+  "          float cr = min(wbx(c, vec2(0.0, 0.08), vec2(0.10, 0.032)), wbx(c, vec2(0.0, 0.08), vec2(0.032, 0.10)));\n"
+  "          d = mix(d, hc, 1.0 - smoothstep(0.0, aa, cr));\n"
+  "        } else {\n"
+  "          // columns: health on the left, the magazine stacked on the right\n"
+  "          float hcol = wbx(uv, vec2(0.27, 0.62), vec2(0.13, 0.28));\n"
+  "          d = mix(d, mix(off, hc, step(uv.y, 0.34 + 0.56 * hp)), 1.0 - smoothstep(0.0, aa, hcol));\n"
+  "          float cr = min(wbx(uv, vec2(0.27, 0.62), vec2(0.07, 0.022)), wbx(uv, vec2(0.27, 0.62), vec2(0.022, 0.07)));\n"
+  "          d = mix(d, vec3(0.03), (1.0 - smoothstep(0.0, aa, cr)) * (1.0 - smoothstep(0.0, aa, hcol)));\n"
+  "          float ay = (uv.y - 0.34) / 0.56;\n"
+  "          float inb = 1.0 - smoothstep(0.0, aa, wbx(uv, vec2(0.71, 0.62), vec2(0.17, 0.28)));\n"
+  "          float m = n <= 12.5 ? n : 10.0;\n"
+  "          tick = step(0.18, fract(ay * m));\n"
+  "          float fill = step(ay, am);\n"
+  "          d = mix(d, mix(off, ac, fill), inb * tick);\n"
+  "        }\n"
+  "        // grenades: frag (round), smoke (canister), fire (orange) along the bottom\n"
+  "        for (int k = 0; k < 3; k++) {\n"
+  "          float have = k == 0 ? uWrist3.y : k == 1 ? uWrist3.z : uWrist3.w;\n"
+  "          vec3 kc = k == 0 ? vec3(0.55, 0.85, 0.40) : k == 1 ? vec3(0.85, 0.88, 0.92) : vec3(1.0, 0.45, 0.10);\n"
+  "          float gs = st == 7 ? 0.7 : 1.0;\n"
+  "          vec2 g = st == 7 ? vec2(0.36 + 0.14 * float(k), 0.36) : vec2(0.30 + 0.20 * float(k), 0.15);\n"
+  "          float sh = k == 1 ? wbx(uv, g, vec2(0.040, 0.055) * gs) - 0.01 * gs : length(uv - g) - 0.055 * gs;\n"
+  "          d = mix(d, have > 0.01 ? kc : off * 1.6, 1.0 - smoothstep(0.0, aa, sh));\n"
+  "        }\n"
+  "        // a hit: the screen's rim flashes red\n"
+  "        float rim = smoothstep(0.40, 0.48, max(abs(c.x), abs(c.y)));\n"
+  "        d = mix(d, vec3(1.0, 0.1, 0.05), rim * clamp(uWrist4.w, 0.0, 1.0));\n"
+  "        d = mix(d, vec3(1.0, 0.97, 0.90), clamp(uWrist2.x, 0.0, 1.0) * 0.25);\n"
+  "        oCol = vec4(display_in(clamp(d, 0.0, 1.0)) * 1.12, 1.0);\n"
+  "        return;\n"
+  "      }\n"
+  "      if (st == 1) {\n"
+  "        float r = length(c);\n"
+  "        float blink = step(fract(uWrist2.y * 0.9), 0.12);\n"
+  "        float fire = exp(-uWrist2.w * 9.0);\n"
+  "        float on = max(blink, fire);\n"
+  "        vec3 housing = vec3(0.07, 0.075, 0.08);\n"
+  "        vec3 lens = mix(vec3(0.16, 0.05, 0.05), vec3(1.0, 0.30, 0.22), on);\n"
+  "        d = housing * (0.8 + 0.4 * smoothstep(0.5, 0.0, r));\n"
+  "        d = mix(d, vec3(0.03), 1.0 - smoothstep(0.30, 0.30 + aa, r));\n"
+  "        d = mix(d, lens * (1.0 - 0.6 * r / 0.26), 1.0 - smoothstep(0.26, 0.26 + aa, r));\n"
+  "        d += vec3(1.0, 0.85, 0.8) * (1.0 - smoothstep(0.0, 0.06, length(c - vec2(-0.08, 0.09)))) * 0.5;\n"
+  "      } else if (st == 2) {\n"
+  "        d = vec3(0.040, 0.042, 0.040);\n"
+  "        float bx = step(0.14, uv.x) * step(uv.x, 0.86) * step(0.52, uv.y) * step(uv.y, 0.86);\n"
+  "        float fillx = 0.14 + 0.72 * clamp(uWrist3.x, 0.0, 1.0);\n"
+  "        float frame_ = bx * (1.0 - step(0.17, uv.x) * step(uv.x, 0.83) * step(0.55, uv.y) * step(uv.y, 0.83));\n"
+  "        vec3 ac = uWrist3.x < 0.25 ? vec3(1.0, 0.16, 0.08) : lit;\n"
+  "        d = mix(d, lit * 0.5, frame_);\n"
+  "        d = mix(d, ac, bx * (1.0 - frame_) * step(uv.x, fillx));\n"
+  "        for (int k = 0; k < 3; k++) {\n"
+  "          float have = k == 0 ? uWrist3.y : k == 1 ? uWrist3.z : uWrist3.w;\n"
+  "          vec3 kc = k == 0 ? lit : k == 1 ? vec3(0.85, 0.88, 0.9) : vec3(1.0, 0.35, 0.10);\n"
+  "          float dot_ = 1.0 - smoothstep(0.10, 0.10 + aa, length(uv - vec2(0.24 + 0.26 * float(k), 0.25)));\n"
+  "          d = mix(d, have > 0.01 ? kc : vec3(0.12), dot_);\n"
+  "        }\n"
+  "      } else if (st == 3) {\n"
+  "        float r = length(c);\n"
+  "        d = vec3(0.06, 0.062, 0.065);\n"
+  "        d = mix(d, vec3(0.10, 0.10, 0.10), 1.0 - smoothstep(0.44, 0.44 + aa, r));\n"
+  "        d = mix(d, vec3(0.025), 1.0 - smoothstep(0.38, 0.38 + aa, r));\n"
+  "        float a = atan(c.x, c.y);\n"
+  "        float hr = abs(fract(a / 6.2832 * 12.0 + 0.5) - 0.5);\n"
+  "        d = mix(d, lit, (1.0 - smoothstep(0.06, 0.09, hr)) * step(0.29, r) * step(r, 0.36));\n"
+  "        float t = uWrist2.y;\n"
+  "        vec2 hm = vec2(sin(t * 6.2832 / 3600.0 * 60.0), cos(t * 6.2832 / 3600.0 * 60.0));\n"
+  "        vec2 hh = vec2(sin(t * 6.2832 / 43200.0 * 60.0 + 1.5), cos(t * 6.2832 / 43200.0 * 60.0 + 1.5));\n"
+  "        vec2 hs = vec2(sin(floor(t) * 6.2832 / 60.0), cos(floor(t) * 6.2832 / 60.0));\n"
+  "        float dm = lseg(c, vec2(0.0), hm * 0.30), dh = lseg(c, vec2(0.0), hh * 0.20), ds = lseg(c, vec2(0.0), hs * 0.33);\n"
+  "        d = mix(d, vec3(0.92, 0.92, 0.88), 1.0 - smoothstep(0.030, 0.030 + aa, min(dm, dh)));\n"
+  "        d = mix(d, vec3(1.0, 0.25, 0.12), 1.0 - smoothstep(0.012, 0.012 + aa, ds));\n"
+  "        d = mix(d, vec3(0.9), 1.0 - smoothstep(0.035, 0.035 + aa, r));\n"
+  "      } else if (st == 4) {\n"
+  "        vec2 q = abs(c);\n"
+  "        float hook = 0.5 + 0.5 * sin((uv.x + uv.y) * 220.0) * sin((uv.x - uv.y) * 220.0);\n"
+  "        d = vec3(0.10, 0.10, 0.095) * (0.85 + 0.25 * hook);\n"
+  "        float pat = step(max(q.x, q.y), 0.40);\n"
+  "        vec3 cloth = uWristOn * 0.10 + vec3(0.13, 0.13, 0.12);\n"
+  "        float weave = 0.92 + 0.08 * sin(uv.x * 300.0) * sin(uv.y * 300.0);\n"
+  "        d = mix(d, cloth * weave, pat);\n"
+  "        float stitch = step(abs(max(q.x, q.y) - 0.36), 0.012) * step(0.5, fract((uv.x + uv.y) * 22.0));\n"
+  "        d = mix(d, vec3(0.55, 0.52, 0.45), stitch);\n"
+  "        vec2 a0 = vec2(0.0, 0.22), a1 = vec2(-0.20, -0.18), a2 = vec2(0.20, -0.18), a3 = vec2(0.0, -0.06);\n"
+  "        float ar = min(min(lseg(c, a0, a1), lseg(c, a0, a2)), min(lseg(c, a1, a3), lseg(c, a2, a3)));\n"
+  "        d = mix(d, lit * 0.55, 1.0 - smoothstep(0.035, 0.035 + aa, ar));\n"
+  "        oCol = vec4(display_in(clamp(d, 0.0, 1.0)) * (0.75 + 0.35 * clamp(n.y, -1.0, 1.0)), 1.0);\n"
+  "        return;\n"
+  "      } else {\n"
+  "        vec2 q = abs(c);\n"
+  "        float bev = smoothstep(0.42, 0.36, max(q.x, q.y));\n"
+  "        d = vec3(0.11, 0.115, 0.125) * (0.75 + 0.35 * bev);\n"
+  "        d = mix(d, vec3(0.06), step(abs(max(q.x, q.y) - 0.30), 0.008));\n"
+  "        oCol = vec4(display_in(clamp(d, 0.0, 1.0)) * (0.75 + 0.35 * clamp(n.y, -1.0, 1.0)), 1.0);\n"
+  "        return;\n"
+  "      }\n"
+  "      d = mix(d, vec3(1.0, 0.97, 0.90), clamp(uWrist2.x, 0.0, 1.0) * 0.35);\n"
+  "      oCol = vec4(display_in(clamp(d, 0.0, 1.0)) * 1.08, 1.0);\n"
+  "      return;\n"
+  "    }\n"
   "    if (mf < -7.5) {\n"
   "      vec2 uv = vCol.rg;\n"
-  "      float ammo = uWrist.x, mag = max(uWrist.y, 1.0);\n"
-  "      float low = step(ammo, mag * 0.25);\n"
-  "      float blink = low * step(0.5, fract(uWrist.z * 2.2));\n"
-  "      vec3 on = mix(uWristOn, vec3(1.0, 0.16, 0.06), low);\n"
-  "      vec3 bg = vec3(0.10, 0.045, 0.012);\n"
-  "      float lit = 0.0;\n"
-  "      int a = int(ammo + 0.5);\n"
-  "      for (int k = 0; k < 2; k++) {\n"
-  "        int dg = k == 0 ? (a / 10) % 10 : a % 10;\n"
-  "        if (k == 0 && a < 10) continue;\n"
-  "        vec2 c = vec2(uv.x - (k == 0 ? 0.30 : 0.70), uv.y - 0.60) * vec2(4.6, 3.3);\n"
-  "        lit = max(lit, seg7(c, dg));\n"
-  "      }\n"
-  "      float bar = step(0.10, uv.y) * step(uv.y, 0.20) * step(0.08, uv.x) * step(uv.x, 0.92);\n"
-  "      float fill = step(uv.x, 0.08 + 0.84 * ammo / mag);\n"
-  "      lit = max(lit, bar * mix(0.18, 1.0, fill));\n"
-  "      lit *= 1.0 - 0.75 * blink;\n"
-  "      vec3 e = mix(bg, on * 3.2, lit);\n"
-  "      oCol = vec4(display_in(sqrt(clamp(e / 3.2, 0.0, 1.0))) * 3.0 + e * 0.15, 1.0);\n"
+  "      float fl = clamp(uWrist2.x, 0.0, 1.0);\n"
+  "      vec3 bg = vec3(0.040, 0.042, 0.040);\n"
+  "      vec3 lit = min(uWristOn * vec3(0.95, 1.0, 1.0), vec3(1.0));\n"
+  "      vec3 amber = vec3(1.0, 0.62, 0.12), red = vec3(1.0, 0.12, 0.08);\n"
+  "      vec3 d = mix(bg, uWristOn * 0.25, fl * 0.5);\n"
+  "      vec2 c = uv - vec2(0.5, 0.52);\n"
+  "      float r = length(c);\n"
+  "      float ang = degrees(atan(c.x, c.y));\n"            // 0 at the top, clockwise
+  "      float aa = fwidth(r) * 1.2 + 0.003;\n"
+  // the idle ring, the facing tick at its top, the centre dot
+  "      float ring = 1.0 - smoothstep(0.022, 0.022 + aa, abs(r - 0.33));\n"
+  "      d = mix(d, lit * 0.35, ring);\n"
+  "      float tick = step(abs(c.x), 0.035) * step(0.36, c.y) * step(c.y, 0.47);\n"
+  "      d = mix(d, lit, tick);\n"
+  "      d = mix(d, lit, 1.0 - smoothstep(0.05, 0.05 + aa, r));\n"
+  // the threat arcs: a band over the ring, +-28 degrees round the bearing
+  "      float band = 1.0 - smoothstep(0.065, 0.065 + aa, abs(r - 0.33));\n"
+  "      float da = abs(mod(ang - uWrist.x + 540.0, 360.0) - 180.0);\n"
+  "      float sa = (1.0 - smoothstep(22.0, 30.0, da)) * band * clamp(uWrist.y, 0.0, 1.0);\n"
+  "      d = mix(d, amber, sa);\n"
+  "      float hb = abs(mod(ang - uWrist.z + 540.0, 360.0) - 180.0);\n"
+  "      float pulse = 0.75 + 0.25 * sin(uWrist2.y * 18.0);\n"
+  "      float wide = 1.0 - smoothstep(0.090, 0.090 + aa, abs(r - 0.33));\n"
+  "      float ha = (1.0 - smoothstep(26.0, 34.0, hb)) * wide * clamp(uWrist.w * 1.4, 0.0, 1.0) * pulse;\n"
+  "      d = mix(d, red, ha);\n"
+  "      d = mix(d, vec3(1.0, 0.97, 0.90), fl * 0.6 * (ring + tick));\n"
+  "      oCol = vec4(display_in(clamp(d, 0.0, 1.0)) * 1.08, 1.0);\n"
   "      return;\n"
   "    }\n"
   "    if (mf < -6.5) {\n"            // 45-deg diamond-knurled tactical grip leather

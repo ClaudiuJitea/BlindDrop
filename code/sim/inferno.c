@@ -4,7 +4,7 @@
 // FIRE, from the incendiary grenade, the way CS2's incendiary/molotov works. The
 // canister goes off the moment it strikes a floor and lays a POOL OF FIRE that
 // runs out over the ground from where it broke in about a second, burns for
-// seven, and dies back from its rim inward. Anyone standing in it burns — the
+// fourteen, and dies back from its rim inward. Anyone standing in it burns — the
 // thrower too. It does not climb walls, it pours down a step but not up one,
 // and it stops at a wall the way water would.
 //
@@ -30,7 +30,7 @@
 #define FIRE_RISE    0.30f       // m it can climb between cells (a kerb, not a crate)
 #define FIRE_DROP    1.40f       // m it can pour down
 #define FIRE_SPREAD  1.10f       // s for the spread to reach the far rim
-#define FIRE_LIFE    7.0f        // s the pool burns, as in CS2
+#define FIRE_LIFE    14.0f       // s the pool burns (twice CS2's seven)
 #define FIRE_DIE     1.2f        // s over which it dies back, rim first
 #define FIRE_DMG     9           // per burn tick...
 #define FIRE_DMG_T   (TICK_HZ / 4)   // ...four times a second: 36 hp/s in the thick of it

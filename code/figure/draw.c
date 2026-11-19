@@ -86,10 +86,75 @@ static gframe_t holster_frame_leg(const pose_t *P, v3 spine, int leg) {
   if (v3_dot(fwd, pfw) < 0.0f) fwd = v3_scale(fwd, -1.0f);
   v3 mn, mx;
   gun_box(WPN_PT, &mn, &mx);
-  float cu = mx.x > mn.x ? 0.5f * (mn.y + mx.y) - (mx.y - 0.022f) : -0.04f;
-  v3 c = v3_add(P->hip[leg], v3_add(v3_scale(out, r + 0.004f),
-                v3_add(v3_scale(td, 0.112f), v3_scale(fwd, cu))));
-  return gframe_at(WPN_PT, c, td, fwd);
+  // HOW A DROP-LEG HOLSTER CARRIES A PISTOL: muzzle down, the slide toward
+  // the BACK of the leg and the trigger guard toward the front, so the grip
+  // rises out of the mouth pointing FORWARD and up, under the hand that hangs
+  // beside it — with a forward cant of ~12 degrees (the muzzle swung back), so
+  // the grip leans toward the hand. It used to hang the other way round: slide
+  // forward, so the grip stood straight out behind the thigh like the handle
+  // of a hammer in a tool belt.
+  float cant = 0.21f;
+  v3 mz = v3_norm(v3_sub(v3_scale(td, cosf(cant)), v3_scale(fwd, sinf(cant))));
+  float half_h = mx.x > mn.x ? 0.5f * (mx.y - mn.y) : 0.074f;
+  // the slide's top 45 mm behind the leg's mid-line, the frame forward of it
+  float cu = half_h - 0.045f;
+  // r + 0.030: the pistol rides OUTSIDE the leg, on the platform the rig
+  // straps to the thigh — closer and half its frame was inside the trouser.
+  v3 c = v3_add(P->hip[leg], v3_add(v3_scale(out, r + 0.030f),
+                v3_add(v3_scale(td, 0.100f), v3_scale(fwd, cu))));
+  return gframe_at(WPN_PT, c, mz, v3_scale(fwd, -1.0f));
+}
+// The pistol a holster has to close over, measured in its own frame: the
+// third-person Blender model when the figure carries a variant that has one
+// (that is what is drawn), else the built pistol. Same trick as gun_box: emit
+// into the scene and rewind.
+#define HOL_NS 5
+static void pt_holster_box(int ent, v3 *mn, v3 *mx, float *yfront, float ylo[HOL_NS], float zst[HOL_NS]) {
+  // ...and *yfront: the lowest point of the pistol AHEAD of the grip (under
+  // the barrel: a light, a foregrip, a long magazine well), which is how deep
+  // the holster has to be all the way to the muzzle.
+  const mdl_ref_t *tm = gun_tp_model(ent, WPN_PT);
+  int f0 = g_scene_floats, want0 = g_scene_want;
+  float gg = g_gun_girth;
+  g_gun_girth = GUN_GIRTH_3P;
+  if (tm) gun_tp_draw(tm, WPN_PT, (v3){{0, 0, 0}}, (v3){{1, 0, 0}}, (v3){{0, 1, 0}}, (v3){{0, 0, 1}}, 0.0f);
+  else gun_build(WPN_PT, (v3){{0, 0, 0}}, (v3){{1, 0, 0}}, (v3){{0, 1, 0}}, (v3){{0, 0, 1}}, 0.0f, 0.0f, 0.0f);
+  g_gun_girth = gg;
+  v3 lo = {{1e9f, 1e9f, 1e9f}}, hi = {{-1e9f, -1e9f, -1e9f}};
+  for (int f = f0; f + VERT_FLOATS <= g_scene_floats; f += VERT_FLOATS)
+    for (int k = 0; k < 3; k++) {
+      float v = g_scene[f + k];
+      if (v < lo.e[k]) lo.e[k] = v;
+      if (v > hi.e[k]) hi.e[k] = v;
+    }
+  float yf = 1e9f;
+  for (int f = f0; f + VERT_FLOATS <= g_scene_floats; f += VERT_FLOATS)
+    if (g_scene[f + 2] > lo.z + 0.075f && g_scene[f + 1] < yf) yf = g_scene[f + 1];
+  // THE DEPTH PROFILE: how far below the slide the pistol reaches at HOL_NS
+  // stations from just ahead of the grip to the muzzle — deep over the
+  // trigger guard, shallow over the slide and dust cover — so the shell can
+  // follow it and step in, as a molded holster does, instead of being a box.
+  float z0 = lo.z + 0.080f, z1 = hi.z;   // clear of the grip's front strap
+  for (int k = 0; k < HOL_NS; k++) {
+    zst[k] = z0 + (z1 - z0) * (float)k / (float)(HOL_NS - 1);
+    ylo[k] = 1e9f;
+  }
+  for (int f = f0; f + VERT_FLOATS <= g_scene_floats; f += VERT_FLOATS) {
+    float z = g_scene[f + 2], y = g_scene[f + 1];
+    if (z < z0 - 0.012f) continue;                 // the grip: it rides out of the mouth
+    for (int k = 0; k < HOL_NS; k++)
+      if (fabsf(z - zst[k]) < 0.5f * (z1 - z0) / (float)(HOL_NS - 1) + 0.010f && y < ylo[k]) ylo[k] = y;
+  }
+  g_scene_floats = f0;
+  g_scene_want = want0;
+  if (hi.x < lo.x) {   // scene full: the standard pistol's numbers
+    lo = (v3){{-0.020f, -0.112f, -0.054f}}; hi = (v3){{0.020f, 0.036f, 0.153f}}; yf = -0.053f;
+  }
+  for (int k = 0; k < HOL_NS; k++) {
+    if (zst[k] != zst[k] || ylo[k] > 1e8f) ylo[k] = hi.y - 0.050f;
+    if (hi.x < lo.x) zst[k] = lo.z + 0.080f + (hi.z - lo.z - 0.080f) * (float)k / (float)(HOL_NS - 1);
+  }
+  *mn = lo; *mx = hi; *yfront = yf < 1e8f ? yf : hi.y - 0.090f;
 }
 // The strong-side holster (the draw and holster swap arcs use this one).
 static gframe_t holster_frame(const pose_t *P, v3 spine) { return holster_frame_leg(P, spine, 1); }
@@ -212,27 +277,86 @@ static void fig_stowed(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine, int ho
 // nothing of where a gun is kept; this is presentation only, per entity, on
 // its own clock. Phase A puts the old weapon AWAY (hands carry it from the
 // ready to its slot and let go), phase B DRAWS the new one (the hand reaches to
-// the slot, closes, and brings it round over the shoulder to the ready). A
-// weapon with no slot (knife, grenade) skips its phase. Any shot ends it.
-#define SWAP_A 0.32f      // seconds: stow
-#define SWAP_B 0.42f      // seconds: draw
+// the slot, closes, and brings it out to the ready). A weapon with no slot
+// (knife, grenade) skips its phase. A shot does not cut it (that was a pop):
+// it runs the rest SWAP_RUSH times faster, so the gun is up in a few frames.
+//
+// v2 — what made the old one look wrong, and what replaced it:
+//  * the gun's axes were blended LINEARLY between the slot and the ready and
+//    re-squared, and its centre was forced THROUGH a point 17 cm above the
+//    shoulder: a rifle that hangs muzzle-down on the back went up over the
+//    head, stood on its stock and cartwheeled down into the hands — the
+//    helicopter blade. Now the orientation is a true shortest-arc rotation
+//    (axes_slerp), through an explicit middle key where the two ends are half
+//    a turn apart (pistol, sniper) so it can never pick the long way round or
+//    flip between frames, and the centre runs a spline through keys that
+//    keep it at chest height beside the body: pulled UP out of the slot first
+//    while still muzzle-down, then swung forward round the strong side as the
+//    muzzle comes up.
+//  * the rotation LAGS the lift, so a gun clears its slot before it turns.
+//  * the hand no longer parks in front of the belly between the two phases:
+//    after letting go of the old gun it travels straight on toward the new
+//    one's slot, on a slight outward arc, and the elbow lifts when the hand
+//    goes up behind the shoulder instead of folding down through the chest.
+//  * 0.32 + 0.42 s was a long gun stowed and drawn in about the time of a
+//    blink; the long guns now take 0.50 + 0.66 s, the pistol 0.40 + 0.46 s.
+#define SWAP_A_LONG 0.50f   // seconds: stow a long gun
+#define SWAP_B_LONG 0.66f   // seconds: draw a long gun
+#define SWAP_A_PT   0.40f   // seconds: holster the pistol
+#define SWAP_B_PT   0.46f   // seconds: draw the pistol
+#define SWAP_RUSH   6.0f    // a shot mid-swap runs the rest this much faster
 static int   g_sw_seen[MAX_ENTS];   // last weapon seen + 1, 0 = never
 static int   g_sw_from[MAX_ENTS];
 static float g_sw_t0[MAX_ENTS];
+static float g_sw_rush[MAX_ENTS];   // when a shot rushed this swap (< t0: not)
 static float ease3(float x) { x = f_clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); }
-// A weapon frame between two others: the box centre on a quadratic arc that
-// passes THROUGH `via` at the halfway point, axes blended and re-squared.
-static gframe_t gframe_arc(int w, const gframe_t *a, const gframe_t *b, v3 via, float k) {
-  v3 ca = gframe_centre(w, a), cb = gframe_centre(w, b);
-  v3 ctl = v3_sub(v3_scale(via, 2.0f), v3_scale(v3_add(ca, cb), 0.5f));
-  float u = 1.0f - k;
-  v3 c = v3_add(v3_scale(ca, u * u), v3_add(v3_scale(ctl, 2.0f * u * k), v3_scale(cb, k * k)));
-  v3 fw = v3_add(v3_scale(a->fw, u), v3_scale(b->fw, k));
-  v3 up = v3_add(v3_scale(a->up, u), v3_scale(b->up, k));
-  if (v3_dot(fw, fw) < 1e-4f) fw = k < 0.5f ? a->fw : b->fw;
-  v3 upo = v3_sub(up, v3_scale(v3_norm(fw), v3_dot(up, v3_norm(fw))));
-  if (v3_dot(upo, upo) < 1e-4f) up = v3_add(up, v3_scale(a->rt, 0.3f));
-  return gframe_at(w, c, fw, up);
+static float swap_stow_s(int w) {
+  return w == WPN_PT ? SWAP_A_PT : (w == WPN_AR || w == WPN_SR) ? SWAP_A_LONG : 0.0f;
+}
+static float swap_draw_s(int w) {
+  return w == WPN_PT ? SWAP_B_PT : (w == WPN_AR || w == WPN_SR) ? SWAP_B_LONG : 0.0f;
+}
+// Turn the axes (art, aup, afw) toward (brt, bup, bfw) by the fraction k of
+// the single shortest rotation between them — what a wrist does. Blending the
+// axes linearly instead swings through whatever the average happens to be,
+// and near half a turn that average is noise.
+static void axes_slerp(v3 art, v3 aup, v3 afw, v3 brt, v3 bup, v3 bfw, float k,
+                       v3 *rt, v3 *up, v3 *fw) {
+  if (k <= 0.0f) { *rt = art; *up = aup; *fw = afw; return; }
+  if (k >= 1.0f) { *rt = brt; *up = bup; *fw = bfw; return; }
+  float m[3][3];
+  for (int r = 0; r < 3; r++)
+    for (int c = 0; c < 3; c++)
+      m[r][c] = brt.e[r] * art.e[c] + bup.e[r] * aup.e[c] + bfw.e[r] * afw.e[c];
+  float ang = acosf(f_clamp(0.5f * (m[0][0] + m[1][1] + m[2][2] - 1.0f), -1.0f, 1.0f));
+  if (ang < 1e-4f) { *rt = brt; *up = bup; *fw = bfw; return; }
+  v3 ax = {{m[2][1] - m[1][2], m[0][2] - m[2][0], m[1][0] - m[0][1]}};
+  if (v3_dot(ax, ax) < 1e-8f) {   // a half turn: the axis is the symmetric part
+    int j = 0;
+    for (int q = 1; q < 3; q++) if (m[q][q] > m[j][j]) j = q;
+    float aj = sqrtf(fmaxf(0.5f * (m[j][j] + 1.0f), 1e-8f));
+    for (int q = 0; q < 3; q++) ax.e[q] = q == j ? aj : 0.25f * (m[q][j] + m[j][q]) / aj;
+  }
+  ax = v3_norm(ax);
+  v3 f = v3_rot_axis(afw, ax, ang * k), u = v3_rot_axis(aup, ax, ang * k);
+  *fw = v3_norm(f);
+  *up = v3_norm(v3_sub(u, v3_scale(*fw, v3_dot(u, *fw))));
+  *rt = v3_norm(v3_cross(*fw, *up));
+}
+// Catmull-Rom through four points at u = 0, 1/3, 2/3, 1 (ends clamped).
+static v3 spline4(const v3 c[4], float u) {
+  float x = f_clamp(u, 0.0f, 1.0f) * 3.0f;
+  int i = x >= 3.0f ? 2 : (int)x;
+  float t = x - (float)i;
+  v3 p0 = c[i > 0 ? i - 1 : 0], p1 = c[i], p2 = c[i + 1], p3 = c[i + 2 < 4 ? i + 2 : 3];
+  float t2 = t * t, t3 = t2 * t;
+  v3 r = v3_scale(p1, 2.0f);
+  r = v3_add(r, v3_scale(v3_sub(p2, p0), t));
+  r = v3_add(r, v3_scale(v3_add(v3_sub(v3_scale(p0, 2.0f), v3_scale(p1, 5.0f)),
+                                v3_sub(v3_scale(p2, 4.0f), p3)), t2));
+  r = v3_add(r, v3_scale(v3_add(v3_sub(v3_scale(p1, 3.0f), p0),
+                                v3_sub(p3, v3_scale(p2, 3.0f))), t3));
+  return v3_scale(r, 0.5f);
 }
 // The wrist that holds weapon `w` in frame `f` by its grip (hand 1) or its
 // fore-end (hand 0) — the same construction the sidearm branch uses.
@@ -247,6 +371,104 @@ static v3 gframe_wrist(int w, const gframe_t *f, int hand) {
   gun_hold(w, GH_FORE3, f->o, f->rt, f->up, f->fw, &gc, &ga, &gr);
   v3 br = v3_norm(v3_add(v3_scale(f->rt, -0.62f), v3_scale(f->up, -0.78f)));
   return v3_add(gc, v3_add(v3_scale(ga, -0.040f), v3_scale(br, gr + 0.066f)));
+}
+
+// Where weapon `w` lives off the hands, for the swap: its back/flank slot or
+// the strong-side holster. 0 for a weapon with no slot.
+static int swap_slot(const pose_t *P, v3 Rc, v3 spine, int w, gframe_t *S) {
+  if (w == WPN_PT) { *S = holster_frame(P, spine); return 1; }
+  return stow_frame(P, Rc, spine, w, S);
+}
+// The weapon `w` on its way between its slot S (p = 0) and the ready H
+// (p = 1). The centre follows a spline through two body-relative keys: LIFT
+// (pulled straight up out of the slot, still in its slot attitude) and SWING
+// (beside the strong side at chest height for the carbine, in front of the
+// chest for the sniper coming off the left flank, in front of the hip for the
+// pistol). The attitude turns on the shortest arc, starting only once the gun
+// is clear, through a MID attitude — muzzle down and forward, rolled on its
+// side — wherever the slot and the ready are close to half a turn apart.
+static gframe_t swap_frame(const pose_t *P, v3 Rc, v3 spine, int w,
+                           const gframe_t *S, const gframe_t *H, float p) {
+  v3 cfw = v3_norm(v3_cross(spine, Rc));
+  v3 c[4];
+  c[0] = gframe_centre(w, S);
+  c[3] = gframe_centre(w, H);
+  float lag;
+  if (w == WPN_AR) {
+    // (no real lift: the stock already stands up behind the neck, and every
+    // centimetre it rose took the hand over the helmet)
+    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.03f), v3_scale(Rc, 0.10f)));
+    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, 0.34f),
+                  v3_add(v3_scale(spine, -0.14f), v3_scale(cfw, 0.04f))));
+    lag = 0.15f;
+  } else if (w == WPN_SR) {
+    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.03f), v3_scale(Rc, -0.10f)));
+    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, -0.14f),
+                  v3_add(v3_scale(spine, -0.14f), v3_scale(cfw, 0.28f))));
+    lag = 0.15f;
+  } else {
+    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.13f), v3_scale(Rc, 0.03f)));
+    c[2] = v3_add(P->hip[1], v3_add(v3_scale(spine, 0.26f),
+                  v3_add(v3_scale(cfw, 0.20f), v3_scale(Rc, 0.02f))));
+    lag = 0.25f;
+  }
+  float ro = ease3((p - lag) / (0.92f - lag));
+  v3 rt, up, fw;
+  if (w == WPN_AR) {
+    axes_slerp(S->rt, S->up, S->fw, H->rt, H->up, H->fw, ro, &rt, &up, &fw);
+  } else {
+    // the middle attitude: muzzle down and forward, the top turned outward
+    v3 mfw = v3_norm(v3_add(v3_scale(spine, -0.70f), v3_scale(cfw, 0.70f)));
+    v3 mup = v3_norm(v3_sub(Rc, v3_scale(mfw, v3_dot(Rc, mfw))));
+    v3 mrt = v3_norm(v3_cross(mfw, mup));
+    if (ro < 0.5f)
+      axes_slerp(S->rt, S->up, S->fw, mrt, mup, mfw, ro * 2.0f, &rt, &up, &fw);
+    else
+      axes_slerp(mrt, mup, mfw, H->rt, H->up, H->fw, ro * 2.0f - 1.0f, &rt, &up, &fw);
+  }
+  if (p <= 0.0f) return *S;
+  if (p >= 1.0f) return *H;
+  return gframe_at(w, spline4(c, p), fw, up);
+}
+// Where a hand holds weapon `w` in frame F during the swap, p as in
+// swap_frame. A long gun on the back is taken by the STOCK (its grip is out of
+// reach behind him; the butt standing up behind the neck is not), and the hand
+// slides to its own hold — the grip (hand 1) or the fore-end (hand 0) — as the
+// gun comes round. Returns the WRIST; *hc/*ha/*hr is the cylinder the fingers
+// close round, so the hand visibly wraps the stock instead of making a fist
+// in the air next to it.
+//
+// The wrist stands off the stock on the side the SHOULDER is (and a little
+// outboard): the stock is 8 cm off the spine behind the neck, and a wrist put
+// ON it laid the forearm across the back of the head.
+static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho, v3 side,
+                      v3 *hc, v3 *ha, float *hr) {
+  v3 gc, ga; float gr;
+  gun_hold(w, hand ? GH_GRIP : GH_FORE3, F->o, F->rt, F->up, F->fw, &gc, &ga, &gr);
+  v3 gw = gframe_wrist(w, F, hand);
+  if (w == WPN_PT) { *hc = gc; *ha = ga; *hr = gr; return gw; }
+  v3 mn, mx;
+  gun_box(w, &mn, &mx);
+  v3 sc = v3_add(F->o, v3_add(v3_scale(F->fw, mn.z * 0.60f),
+                 v3_scale(F->up, 0.5f * (mn.y + mx.y))));
+  v3 sa = F->fw;
+  v3 br = v3_add(v3_norm(v3_sub(sho, sc)), v3_scale(side, 0.6f));
+  br = v3_sub(br, v3_scale(sa, v3_dot(br, sa)));
+  br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : side;
+  const float sr = 0.019f;                       // the stock's grip radius
+  v3 sw = v3_add(sc, v3_scale(br, sr + 0.068f));
+  float s = ease3((p - 0.30f) / 0.45f);
+  if (v3_dot(sa, ga) < 0.0f) sa = v3_scale(sa, -1.0f);
+  *hc = v3_lerp(sc, gc, s);
+  *ha = v3_norm(v3_lerp(sa, ga, s));
+  *hr = sr + (gr - sr) * s;
+  return v3_lerp(sw, gw, s);
+}
+// The elbow pole for an arm whose wrist is at `wr`: out and DOWN while the
+// hand is low, out and UP when it goes above the shoulder to reach behind it.
+static v3 swap_pole(v3 sho, v3 wr, v3 Rc, v3 spine, float side) {
+  float h = f_clamp(v3_dot(v3_sub(wr, sho), spine) / 0.18f + 0.35f, 0.0f, 1.0f);
+  return v3_add(v3_scale(Rc, side * (0.7f + 0.2f * h)), v3_scale(spine, -0.8f + 1.2f * h));
 }
 
 static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
@@ -500,7 +722,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   // THE WEAPON SWAP (see SWAP_A): which weapon is in the hands this frame and
   // how far through putting one away / drawing one he is.
   int living = !dth || dth->slack <= 0.0001f;
-  int hold = wpn, sw_phase = 0;
+  int hold = wpn, sw_phase = 0, sw_from = wpn;
   float sw_k = 0.0f;
   // Carried kit is drawn for the local player always and for anyone else only
   // inside 12 m — it is a rifle and a half of vertices per figure.
@@ -512,13 +734,16 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     if (g_sw_seen[e] != wpn + 1) {
       if (g_sw_seen[e]) { g_sw_from[e] = g_sw_seen[e] - 1; g_sw_t0[e] = now; }
       else g_sw_t0[e] = -1e9f;
+      g_sw_rush[e] = -2e9f;
       g_sw_seen[e] = wpn + 1;
     }
-    if (gs.trig > 0.05f) g_sw_t0[e] = -1e9f;   // a shot ends it at once
     int from = g_sw_from[e];
+    sw_from = from;
+    float da = swap_stow_s(from), db = swap_draw_s(wpn);
     float t = now - g_sw_t0[e];
-    float da = (from == WPN_AR || from == WPN_SR || from == WPN_PT) ? SWAP_A : 0.0f;
-    float db = (wpn == WPN_AR || wpn == WPN_SR || wpn == WPN_PT) ? SWAP_B : 0.0f;
+    // a shot mid-swap: the rest of it runs SWAP_RUSH times faster
+    if (gs.trig > 0.05f && g_sw_rush[e] < g_sw_t0[e] && t >= 0.0f && t < da + db) g_sw_rush[e] = now;
+    if (g_sw_rush[e] >= g_sw_t0[e]) t = (g_sw_rush[e] - g_sw_t0[e]) + (now - g_sw_rush[e]) * SWAP_RUSH;
     if (carry && from != wpn && t >= 0.0f && t < da + db) {
       if (t < da) { sw_phase = 1; sw_k = t / da; hold = from; }
       else        { sw_phase = 2; sw_k = (t - da) / db; }
@@ -1203,22 +1428,93 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     // junction is always skin, never a tube end.
     // (close tiers only: past ~12 m the junction is a few pixels, and a
     // 6-8-gon ellipsoid against an 8-gon tube is all shallow facet crossings.)
-    if (g_fig_k > 8) {
+    // THE SEAT PANEL. Trousers are not a tube with two tubes stuck under it:
+    // each leg is cut as one panel that runs from the waistband over the seat
+    // and the hip down into the thigh, and the two panels meet in a seam down
+    // the middle. So each leg now carries that panel — a short chain that
+    // starts buried in the torso under the belt, swells over the seat and the
+    // hip joint (wider than the thigh's own top ring, so the thigh's tube end
+    // can never show at the hip, standing or in a stride), and dives into the
+    // thigh a sixth of the way down. The two panels overlap past the midline,
+    // and where they cross is the seat seam. It replaces the two buttock balls
+    // that used to stand out of the trouser under the belt.
+    {
       v3 pfw_ = v3_norm(v3_cross(spine, prt));
-      v3 bax = v3_add(v3_scale(spine, -1.0f), td);
-      bax = v3_dot(bax, bax) > 1e-6f ? v3_norm(bax) : v3_scale(spine, -1.0f);
-      float ext = f_clamp(-v3_dot(td, pfw_), 0.0f, 1.0f);   // leg swung BACK
-      // Clearly NARROWER than the thigh across (0.062 vs 0.090) and clearly
-      // DEEPER behind it (0.134+ vs 0.108), so wherever the two surfaces meet
-      // they cross steeply — near-equal radii made a tangent graze (`figv`
-      // seat/thigh) — and the two seats never reach the midline.
-      v3 bc = v3_add(P.hip[i], v3_add(v3_scale(pfw_, -0.034f - 0.020f * ext),
-                                      v3_scale(bax, 0.012f)));
+      float s_ = i ? 1.0f : -1.0f;
+      v3 pv = P.pelvis;
+      // (builder.c's FIG_SEAT_ST is this list at rest: keep the two in step)
+      #define SEAT_P(T, L, F) v3_add(pv, v3_add(v3_scale(spine, (T)), \
+                              v3_add(v3_scale(prt, s_ * (L)), v3_scale(pfw_, (F)))))
+      v3 hipn = v3_add(P.hip[i], v3_scale(pfw_, -0.012f));
+      // the thigh's own axis decides where the panel ends, so a stride carries
+      // the panel with the leg and the seat stretches over the hip
+      v3 low = v3_add(v3_add(P.hip[i], v3_scale(thv, 0.20f)), v3_scale(pfw_, -0.006f));   // above the leg strap (0.28)
+      // As the thigh comes FORWARD (a crouch, a kneel, the front leg of a
+      // stride) its buried top end swings out BEHIND the hip, and the seat
+      // must follow it there: the seat node slides back over the hip joint,
+      // which is also what a seat does when a man squats.
+      // (from 0.62, not 0: a running stride brings the front thigh up to ~0.6
+      // forward, and a seat that half-grew there lay almost ON the panel and
+      // the two tore through each other in patches)
+      // Gated by the CROUCH (or the slide), not by the thigh angle alone: a
+      // running stride drives the front thigh just as far forward (0.94 here
+      // against 0.90-0.98 crouched), and a seat that grew under a runner lay
+      // on the panel and tore through it in patches.
+      float squat = fmaxf(A->crouch_s, A->slide_s);
+      float fl = smooth01(f_clamp((v3_dot(td, pfw_) - 0.62f) / 0.28f, 0.0f, 1.0f)) *
+                 smooth01(f_clamp((squat - 0.25f) / 0.55f, 0.0f, 1.0f));
+      v3 seat_up = SEAT_P(-0.020f, 0.072f, -0.016f);
+      v3 seat_bk = v3_add(v3_add(P.hip[i], v3_scale(td, -0.060f)), v3_scale(spine, 0.020f));
+      v3 seat_mid = v3_lerp(seat_up, seat_bk, fl);
+      // A node a tenth of the way down the thigh shares the turn from the
+      // seat into the leg between two joints. With the leg swung behind, that
+      // turn is ~40 degrees, and taken at one node fig_chain's bevel clamp
+      // thinned the ring there by half: the panel sank, and its neighbour and
+      // the thigh tore through it in patches across the seat.
+      v3 thmid = v3_add(v3_add(P.hip[i], v3_scale(thv, 0.10f)), v3_scale(pfw_, -0.010f));
+      // EACH NODE SITS BEHIND ITS JOINT. The seat is all BEHIND the hip: the
+      // back of these rings is where the seat is, and the front must stay inside
+      // the thigh and the belly. Centred on the joints they stood as far out in
+      // front as behind, and the two legs' fronts met between the thighs in a
+      // rounded mound — the egg under the belt. Shifted back by what they lost
+      // in depth, the seat is exactly where it was and the front is 2 cm inside
+      // (any shallower and the two seats' backs meet at a graze under the belt).
+      fnode_t sp[5] = {
+        {SEAT_P(0.040f, 0.048f, -0.013f), kt.pants, kt.pants, 0.088f, 0.087f, 0, 0.0f},   // well inside the belt
+        {v3_add(seat_mid, v3_scale(pfw_, -0.012f)), kt.pants, kt.pants, 0.112f, 0.114f, 0, 0.0f},  // over the seat
+        {v3_add(hipn, v3_scale(pfw_, -0.010f)), kt.pants, kt.pants, 0.101f, 0.112f, 0, 0.0f},      // behind the hip joint
+        {thmid, kt.pants, kt.pants, 0.097f, 0.116f, 0, 0.0f},                             // a tenth down the leg
+        {low, kt.pants, kt.pants, 0.064f, 0.074f, 0, 0.0f}};                              // into the thigh
+      #undef SEAT_P
       probe("seat");
-      fig_ball(bc, 0.062f, 0.118f, 0.134f + 0.012f * ext, bax, prt, 16, v3_scale(kt.pants, 0.97f));
+      g_fig_jit = 0.0f;   // one cloth with the thigh: no band jitter, no darkened ends
+      if (!kt.ins) fig_chain(sp, 5, 16, 1, 1, prt);   // the insurgent's tunic is his seat
+      // ...and the ROUND OF THE SEAT in a squat. Thighs forward, the leg tubes
+      // are seen end-on from behind — two flat discs where a seat should be —
+      // and no panel swept down from the belt can close a disc that faces
+      // backwards. A seat in a crouch IS round, so with the flexion a rounded
+      // mass grows over the back of each hip joint, wider and deeper than the
+      // thigh so it swallows the tube end; standing (fl = 0) it is gone.
+      if (fl > 0.02f) {
+        // centred 2 cm in from the hip joint and wider, so the two overlap well
+        // past the midline: one seat with a soft seam, not two balls
+        v3 bc = v3_add(v3_add(P.hip[i], v3_scale(td, -0.046f * fl)),
+                       v3_add(v3_scale(spine, 0.006f), v3_scale(prt, -s_ * 0.022f * fl)));
+        probe("seat");
+        fig_ball(bc, 0.076f + 0.046f * fl, 0.050f + 0.060f * fl, 0.080f + 0.040f * fl, td, prt, 16, kt.pants);
+      }
+      g_fig_jit = 1.0f;
     }
-    th[nth++] = (fnode_t){v3_add(P.hip[i], v3_scale(td, -0.090f)),
-                          kt.pants, kt.pants, 0.046f, 0.050f, 0, 0.0f};
+    // The buried top end points UP INTO THE PELVIS, not back along the thigh:
+    // with the thigh driven forward (a running stride, a crouch) "back along
+    // the thigh" is straight out behind the hip, and its end showed as a white
+    // disc under the seat. Standing it is the same point it always was.
+    {
+      v3 sd_ = v3_add(v3_scale(td, -1.0f), v3_scale(spine, 1.2f));
+      sd_ = v3_dot(sd_, sd_) > 1e-6f ? v3_norm(sd_) : spine;
+      th[nth++] = (fnode_t){v3_add(P.hip[i], v3_scale(sd_, 0.090f)),
+                            kt.pants, kt.pants, 0.046f, 0.050f, 0, 0.0f};
+    }
     // Narrowed ACROSS more than in depth, which is both the anatomy and the
     // fix for the one thing the first attempt broke: hip_span is 190 mm, so at
     // rx 0.1023 each thigh reached 7 mm PAST the midline and the two legs
@@ -1398,27 +1694,54 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // that difference is the whole margin budget. rx is the OUTWARD half-depth
       // and rz the half-width around the leg, because the hint below is `out`
       // and fig_ring lays rx along the hint.
-      const float dls[4] = {0.040f, 0.090f, 0.150f, 0.196f};  // below the hip
-      const float dlx[4] = {0.030f, 0.040f, 0.038f, 0.028f};  // depth, along out
-      const float dlz[4] = {0.038f, 0.048f, 0.046f, 0.034f};  // width, round leg
-      fnode_t dl[4];
-      for (int q = 0; q < 4; q++) {
-        float u = (dls[q] - dls[0]) / (dls[3] - dls[0]);
-        dl[q] = (fnode_t){v3_add(v3_add(P.hip[i], v3_scale(out, rhip + (rbel - rhip) * u)),
-                                 v3_scale(td, dls[q])),
-                          kt.belt, kt.belt, dlx[q], dlz[q], 0, q ? 0.0f : 0.62f};
+      (void)rhip; (void)rbel;
+      // THE HOLSTER is a Blender mesh (tools/props_models.py `holster`,
+      // FIG_HOLSTER): a molded duty shell deep over the trigger guard that
+      // steps to a slim sheath over the slide, a raised mouth lip, a rotating
+      // hood on pivot hubs over the back of the slide, a thigh platform with
+      // strap slots, screwed to the shell. Authored round the standard
+      // pistol's box in the pistol's own frame and STRETCHED per axis to the
+      // box of the pistol actually carried, so a long or deep variant (a
+      // Deagle, a light under the barrel) still closes inside it. The mouth
+      // stops ahead of the grip; only the grip shows, leaning forward under
+      // the hand. Hand-placed rings could not make the crisp step, lip and
+      // hood a molded holster is read by — they made a pouch, then a box.
+      // Drawn whether or not the pistol is in it.
+      {
+        gframe_t hf = holster_frame_leg(&P, spine, i);
+        v3 bmn, bmx;
+        float yfr, ylo[HOL_NS], zst[HOL_NS];
+        pt_holster_box(g_fig_ent, &bmn, &bmx, &yfr, ylo, zst);
+        (void)yfr; (void)zst;
+        float in_ = v3_dot(hf.rt, out) > 0.0f ? -1.0f : 1.0f;   // rt sign toward the leg
+        // the standard pistol the mesh was cut round
+        const float B_HX = 0.020f, B_YT = 0.036f, B_YG = -0.055f, B_ZR = -0.054f, B_ZM = 0.153f;
+        float ytg = fminf(ylo[0], ylo[1]);                       // the trigger guard's depth
+        float sx = fmaxf(fmaxf(bmx.x, -bmn.x) / B_HX, 1.0f);
+        float sy = f_clamp((bmx.y - ytg) / (B_YT - B_YG), 0.85f, 1.6f);
+        float sz = f_clamp((bmx.z - bmn.z) / (B_ZM - B_ZR), 0.85f, 1.6f);
+        float xc = 0.5f * (bmn.x + bmx.x);
+        v3 ax = v3_scale(hf.rt, sx * in_), ay = v3_scale(hf.up, sy), az = v3_scale(hf.fw, sz);
+        v3 org = v3_add(hf.o, v3_add(v3_scale(hf.rt, xc),
+                 v3_add(v3_scale(hf.up, bmx.y - B_YT * sy), v3_scale(hf.fw, bmn.z - B_ZR * sz))));
+        v3 slots[4] = {kt.web, kt.belt, kt.belt, kt.belt};
+        const v3 *s0 = g_md_slots;
+        g_md_slots = slots;
+        probe("dropleg");
+        model_draw(FIG_HOLSTER_V, FIG_HOLSTER_P, FIG_HOLSTER_NP, 0, org, ax, ay, az);
+        g_md_slots = s0;
+        // the HANGER: a strap from the top of the platform up to the belt
+        #define HM_(X, Y, Z) v3_add(org, v3_add(v3_scale(ax, (X)), v3_add(v3_scale(ay, (Y)), v3_scale(az, (Z)))))
+        v3 htop = HM_(0.036f, 0.010f, -0.088f);
+        #undef HM_
+        v3 bt = v3_add(P.pelvis, v3_add(v3_scale(spine, 0.040f), v3_scale(out, 0.150f)));
+        fnode_t hg[3] = {
+          {v3_add(htop, v3_scale(td, 0.014f)), kt.web, kt.web, 0.006f, 0.015f, 0, 0.0f},
+          {v3_lerp(htop, bt, 0.55f), kt.web, kt.web, 0.006f, 0.015f, 0, 0.0f},
+          {bt, kt.web, kt.web, 0.006f, 0.015f, 0, 0.0f}};
+        probe("legstrap");
+        fig_chain(hg, 3, 6, 1, 1, out);
       }
-      probe("dropleg");
-      // The hint is `out`, NOT `td`. fig_chain consults the hint for the FIRST
-      // ring only and every chain has to pick one that cannot align with its own
-      // first bone — and this chain's first bone IS td, so the hint projected to
-      // zero and the fallback anchored the cross-section to cross(td, WORLD UP).
-      // Measured, that rolled the pouch through 107 degrees around the leg during
-      // a plain turn-in-place, which is most of why the seam wandered. `out` is
-      // perpendicular to td by construction and can never degenerate.
-      g_fig_soft = 1;   // molded holster platform
-      fig_chain(dl, 4, 16, 1, 1, out);
-      g_fig_soft = 0;
       // LEG STRAPS: two webbing bands round the thigh that the holster hangs
       // from — on the thigh's own axis and hint, so their profile is the
       // thigh's profile 4% out, and they can never cross it.
@@ -1851,67 +2174,102 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   }
   if (sw_phase) {
     // Fly the weapon in the hands between the ready and its carry slot, and
-    // the hands with it. gk is the GUN (0 = at the ready, 1 = seated); the
-    // trigger hand holds the grip near the ready and the STOCK near the slot
-    // (the grip of a rifle on a man's back is out of his reach, the butt
-    // standing up behind his neck is not), the support hand only near the
-    // ready. Off the gun, a hand closes on nothing (g_fig_free).
+    // the hands with it (see SWAP_A_LONG). p is the GUN (0 = seated, 1 = at
+    // the ready); att is the trigger hand ON it, sup the support hand. Off the
+    // gun, a hand closes on nothing (g_fig_free).
     int w = hold;
-    gframe_t S, H;
-    int ok = 1;
-    if (w == WPN_PT) S = holster_frame(&P, spine);
-    else ok = stow_frame(&P, Rc, spine, w, &S);
+    int other = sw_phase == 1 ? wpn : sw_from;   // the weapon of the other phase
+    gframe_t S, H, So;
+    int ok = swap_slot(&P, Rc, spine, w, &S);
+    int ok_o = other != w && swap_slot(&P, Rc, spine, other, &So);
     pose_gun_frame(&P, w, &H.o, &H.rt, &H.up, &H.fw);
     if (ok) {
       v3 cfw = v3_norm(v3_cross(spine, Rc));
-      v3 via = w == WPN_AR
-             ? v3_add(P.sho[1], v3_add(v3_scale(spine, 0.17f), v3_scale(Rc, -0.05f)))
-             : w == WPN_SR
-             ? v3_add(P.chest, v3_add(v3_scale(spine, 0.06f),
-                      v3_add(v3_scale(Rc, -0.12f), v3_scale(cfw, 0.24f))))
-             : v3_add(P.hip[1], v3_add(v3_scale(spine, 0.20f),
-                      v3_add(v3_scale(cfw, 0.16f), v3_scale(Rc, 0.08f))));
-      float gk, att, sup;
+      float p, att, sup, land = 0.0f;
       if (sw_phase == 1) {
-        gk  = ease3(sw_k / 0.78f);
-        att = 1.0f - ease3((sw_k - 0.80f) / 0.20f);
-        sup = 1.0f - ease3(sw_k / 0.30f);
+        sup = 1.0f - ease3(sw_k / 0.28f);
+        p   = 1.0f - ease3(sw_k / 0.76f);
+        att = 1.0f - ease3((sw_k - 0.70f) / 0.30f);
       } else {
-        gk  = 1.0f - ease3((sw_k - 0.26f) / 0.74f);
-        att = ease3(sw_k / 0.26f);
-        sup = ease3((sw_k - 0.72f) / 0.28f);
+        att  = ease3(sw_k / 0.28f);
+        p    = ease3((sw_k - 0.20f) / 0.72f);
+        sup  = ease3((sw_k - 0.66f) / 0.34f);
+        land = ease3((sw_k - 0.84f) / 0.16f);
       }
-      gframe_t F = gframe_arc(w, &H, &S, via, gk);
+      gframe_t F = swap_frame(&P, Rc, spine, w, &S, &H, p);
       g_org = F.o; g_rt = F.rt; g_up = F.up; g_fw = F.fw;
       v3 fin0 = P.wri[0], fin1 = P.wri[1];
-      v3 rest1 = v3_add(P.chest, v3_add(v3_scale(Rc, 0.17f),
-                  v3_add(v3_scale(spine, -0.20f), v3_scale(cfw, 0.08f))));
-      v3 rest0 = v3_add(P.chest, v3_add(v3_scale(Rc, -0.17f),
-                  v3_add(v3_scale(spine, -0.20f), v3_scale(cfw, 0.08f))));
-      v3 grip = gframe_wrist(w, &F, 1);
-      if (w != WPN_PT) {
-        v3 mn, mx;
-        gun_box(w, &mn, &mx);
-        v3 stock = v3_add(F.o, v3_add(v3_scale(F.fw, mn.z * 0.80f),
-                          v3_scale(F.up, 0.5f * (mn.y + mx.y))));
-        grip = v3_lerp(grip, v3_add(stock, v3_scale(spine, 0.03f)), ease3((gk - 0.25f) / 0.6f));
+      // The support hand, off the gun, HANGS: down by the side with a slight
+      // bend, elbow back. Parked in front of the belly (where it used to go)
+      // the arm had to fold its 0.58 m into 0.3 m, and with the elbow pole
+      // pointing outward it folded out sideways — a chicken wing held through
+      // the whole swap.
+      v3 rest0 = v3_add(P.sho[0], v3_add(v3_scale(Rc, -0.03f),
+                  v3_add(v3_scale(spine, -0.50f), v3_scale(cfw, 0.12f))));
+      v3 rest1 = v3_add(P.sho[1], v3_add(v3_scale(Rc, 0.03f),
+                  v3_add(v3_scale(spine, -0.50f), v3_scale(cfw, 0.12f))));
+      // WHICH HAND TAKES IT FROM THE SLOT: the strong hand for the pistol and
+      // for the carbine over the right shoulder; the LEFT hand for the sniper
+      // on the left flank (the right one reaching for it went across behind
+      // the head), which then hands the grip to the right hand in front of the
+      // chest and slides to the fore-end.
+      int lead_l = w == WPN_SR, olead_l = ok_o && other == WPN_SR;
+      // Where the strong hand is while it is OFF a gun: on its way from the
+      // slot of the gun it just put away to the slot of the one it is going
+      // for — the SAME point from both phases, so the hand never stops in
+      // front of the belly between them. With nothing to go for (knife,
+      // grenade) it goes to the pose's own hold; with nothing put away (a
+      // knife out) it starts from there too. A hand the other phase does not
+      // use hangs at the side.
+      v3 free1 = fin1;
+      v3 c_[2], a_[2]; float r_[2];   // the cylinder each hand closes round
+      if (ok_o && !lead_l && !olead_l)
+        free1 = v3_lerp(swap_handle(w, &S, 0.0f, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]),
+                        swap_handle(other, &So, 0.0f, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]), 0.45f);
+      else if (ok_o) free1 = rest1;
+      float k_ = 1.0f - att;   // the lead hand: 0 on the gun, 1 away from it
+      float bow = sinf(F_PI * f_clamp(k_, 0.0f, 1.0f)) * (ok_o ? 1.0f : 0.6f);
+      v3 w1, w0;
+      float on1, on0;          // how far each hand is ON the gun
+      if (!lead_l) {
+        w1 = v3_lerp(swap_handle(w, &F, p, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]), free1, ease3(k_));
+        // the reach bows OUT and up, so it goes round the body, not through it
+        w1 = v3_add(w1, v3_add(v3_scale(Rc, 0.06f * bow), v3_scale(spine, 0.04f * bow)));
+        w0 = v3_lerp(rest0, gframe_wrist(w, &F, 0), sup);
+        on1 = att; on0 = sup;
+      } else {
+        // the sniper: the left hand leads (stock near the slot, fore-end at
+        // the ready), the right hand joins on the grip as it comes round
+        v3 h0 = swap_handle(w, &F, p, 0, P.sho[0], v3_scale(Rc, -1.0f), &c_[0], &a_[0], &r_[0]);
+        w0 = v3_lerp(h0, rest0, ease3(k_));
+        w0 = v3_add(w0, v3_add(v3_scale(Rc, -0.06f * bow), v3_scale(spine, 0.04f * bow)));
+        float jr = ease3((p - 0.40f) / 0.35f);
+        w1 = v3_lerp(free1, gframe_wrist(w, &F, 1), jr);
+        on0 = att; on1 = jr;
       }
-      v3 w1 = v3_lerp(rest1, grip, att);
-      v3 w0 = v3_lerp(rest0, gframe_wrist(w, &F, 0), sup);
       // The last stretch of the draw lands on the pose's OWN hold, so there is
       // no pop where the animation hands back to the ordinary carry.
-      if (sw_phase == 2) {
-        float e = ease3((sw_k - 0.82f) / 0.18f);
-        w1 = v3_lerp(w1, fin1, e);
-        w0 = v3_lerp(w0, fin0, e);
+      if (land > 0.0f) {
+        w1 = v3_lerp(w1, fin1, land);
+        w0 = v3_lerp(w0, fin0, land);
       }
       P.wri[1] = w1;
       P.wri[0] = w0;
-      g_fig_free = (att < 0.5f || (w != WPN_PT && gk > 0.55f) ? 2 : 0) | (sup < 0.5f ? 1 : 0);
-      v3 p0 = v3_add(v3_scale(Rc, -0.7f), v3_scale(spine, -0.8f));
-      v3 p1 = v3_add(v3_scale(Rc, 0.7f), v3_scale(spine, -0.8f));
-      P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, p0);
-      P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, p1);
+      // The lead hand closes round the stock-to-grip cylinder while it is on
+      // the gun; a hand off the gun closes on nothing.
+      int lead = lead_l ? 0 : 1;
+      g_fig_free = (on1 < 0.5f ? 2 : 0) | (on0 < 0.5f ? 1 : 0);
+      if (w != WPN_PT && (lead ? on1 : on0) >= 0.5f && land < 0.5f) {
+        g_fig_grab = 1 << lead;
+        g_fig_grab_c[lead] = c_[lead]; g_fig_grab_a[lead] = a_[lead]; g_fig_grab_r[lead] = r_[lead];
+      }
+      v3 pole0 = v3_lerp(v3_add(v3_scale(cfw, -0.8f), v3_scale(Rc, -0.3f)),
+                         swap_pole(P.sho[0], P.wri[0], Rc, spine, -1.0f), fmaxf(on0, land));
+      v3 pole1 = v3_lerp(v3_add(v3_scale(cfw, -0.8f), v3_scale(Rc, 0.3f)),
+                         swap_pole(P.sho[1], P.wri[1], Rc, spine, 1.0f),
+                         lead_l ? fmaxf(on1, land) : 1.0f);
+      P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, pole0);
+      P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, pole1);
     } else {
       sw_phase = 0;
       hold = wpn;
@@ -1960,6 +2318,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   fig_arms(&P, &kt, Rc, spine, g_org, g_rt, g_up, g_fw, hold,
            A->slide_s, A->slide_dir);
   g_fig_free = 0;
+  g_fig_grab = 0;
   // The long guns he is not holding, on his back. Living figures only (a
   // corpse's drape would have to carry them too), and for a bot only inside
   // 12 m: a slung rifle is ~one more rifle of vertices, and a full brawl's

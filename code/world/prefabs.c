@@ -65,8 +65,10 @@ static void town_style(int which) {
   s->glass = rgb(0.10f, 0.12f, 0.15f);
   s->door  = rgb(0.30f, 0.19f, 0.11f);
   if (which == 0) {          // CITADEL: an old desert town
-    s->plaster[0] = rgb(0.80f, 0.68f, 0.50f); s->plaster[1] = rgb(0.86f, 0.80f, 0.68f);
-    s->plaster[2] = rgb(0.74f, 0.55f, 0.38f); s->plaster[3] = rgb(0.90f, 0.86f, 0.78f);
+    // Limewash in four pours: warm sand, bone, a soft terracotta and chalk
+    // white. Pulled back from ochre so a clear sky does not turn the town orange.
+    s->plaster[0] = rgb(0.82f, 0.72f, 0.56f); s->plaster[1] = rgb(0.88f, 0.83f, 0.73f);
+    s->plaster[2] = rgb(0.78f, 0.60f, 0.46f); s->plaster[3] = rgb(0.92f, 0.89f, 0.83f);
     s->trim = rgb(0.62f, 0.50f, 0.36f); s->stone = rgb(0.58f, 0.50f, 0.40f);
     s->roof = rgb(0.70f, 0.60f, 0.46f);
     s->shutter[0] = rgb(0.16f, 0.36f, 0.52f); s->shutter[1] = rgb(0.20f, 0.44f, 0.36f);

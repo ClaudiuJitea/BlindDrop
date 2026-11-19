@@ -208,6 +208,284 @@ static void small_map_style(void) {
 // container stack in the yards); what changed is that every block is now the
 // thing it stood for, plus an overhead crane, roofs on the sheds, pipe runs,
 // drums, a forklift and the yard's safety markings.
+// THE STEELWORKS AROUND THE YARD. The Foundry was a walled box with mountains
+// past the wall; a yard like this sits inside the works it serves. Everything
+// here stands OUTSIDE the shell (|x| or |z| past H + 0.6), so none of it is
+// reachable, none of it changes a sightline inside, and it is all built
+// through g_ks with the rest of the half: south and east here, north and west
+// as the mirror. What it gives the yard is a skyline to navigate by — the
+// rolling-mill hall behind each end wall, the blast furnace and its stoves
+// over each shed roof, chimneys, a water tower and silos at the corners.
+#define FOUNDRY_YARD 24.0f   // the yard: the 48 m map the Foundry was, now the works' centre
+static void k_octa(float x, float z, float r, float y0, float y1, v3 c) {
+  octa(g_ks * x, g_ks * z, r, y0, y1, c);
+}
+// A round tower in courses: `n` sections from y0 to y1 tapering r0 -> r1,
+// with a proud steel band at each joint (bands sit between section planes).
+static void k_tower(float x, float z, float r0, float r1, float y0, float y1, int n, v3 c,
+                    v3 band) {
+  for (int i = 0; i < n; i++) {
+    float t0 = (float)i / (float)n, t1 = (float)(i + 1) / (float)n;
+    float r = r0 + (r1 - r0) * (t0 + t1) * 0.5f;
+    float ya = y0 + (y1 - y0) * t0, yb = y0 + (y1 - y0) * t1;
+    k_octa(x, z, r, ya, yb, kt_(c, x + (float)i, z, 40 + i, 0.90f, 1.06f));
+    if (i > 0) KMAT(SMAT_STEEL, k_octa(x, z, r + 0.09f, ya - 0.13f, ya + 0.17f, band));
+  }
+}
+static void foundry_backdrop_half(void) {
+  const float H = ARENA_HALF, O = FOUNDRY_YARD + 0.6f;   // the yard wall's outer face
+  v3 brick = rgb(0.47f, 0.25f, 0.19f), brick_d = rgb(0.36f, 0.19f, 0.15f);
+  v3 steel = rgb(0.34f, 0.36f, 0.39f), dark = rgb(0.17f, 0.18f, 0.19f);
+  v3 rust = rgb(0.44f, 0.28f, 0.20f), conc = rgb(0.62f, 0.61f, 0.58f);
+  v3 glass = rgb(0.12f, 0.15f, 0.19f), yel = rgb(0.86f, 0.66f, 0.12f);
+  const float HX = H - 0.1f;                 // the outer shell's inner face
+  // ---- THE ROLLING-MILL HALL behind the south wall: a brick shed 44 m long,
+  // pilastered every 4 m, a band of tall steel-framed windows, a cornice and
+  // a glazed roof monitor along its ridge.
+  {
+    const float z0 = 27.0f, z1 = 41.0f, X = 22.0f, HH = 11.0f;
+    // THE HALL IS A BUILDING YOU GO INTO: brick walls 0.5 m thick under a
+    // ceiling slab, two doors in the front facing the yard's gate, one in each
+    // end, and inside it the mill line, the coils and the hall crane.
+    const float T = 0.5f, DH = 3.3f, WT_ = HH - 0.4f;
+    KMAT(SMAT_BRICK, {
+      KB(-X, 0.0f, z0, -13.6f, WT_, z0 + T, brick);                 // front, in three
+      KB(-10.4f, 0.0f, z0, 6.4f, WT_, z0 + T, brick);
+      KB(9.6f, 0.0f, z0, X, WT_, z0 + T, brick);
+      KB(-13.6f, DH, z0, -10.4f, WT_, z0 + T, brick);               // ...and the lintels
+      KB(6.4f, DH, z0, 9.6f, WT_, z0 + T, brick);
+      KB(-X, 0.0f, z1 - T, X, WT_, z1, brick);                      // back
+      KB(-X, 0.0f, z0 + T, -X + T, WT_, 31.4f, brick);              // west end, a door
+      KB(-X, 0.0f, 34.6f, -X + T, WT_, z1 - T, brick);
+      KB(-X, DH, 31.4f, -X + T, WT_, 34.6f, brick);
+      KB(X - T, 0.0f, z0 + T, X, WT_, 31.4f, brick);                // east end, a door
+      KB(X - T, 0.0f, 34.6f, X, WT_, z1 - T, brick);
+      KB(X - T, DH, 31.4f, X, WT_, 34.6f, brick);
+      KB(-X, WT_, z0, X, HH, z1, brick_d);                          // the ceiling slab
+      for (float x = -X; x <= X + 0.01f; x += 4.0f)              // pilasters
+        KB(x - 0.30f, 0.0f, z0 - 0.28f, x + 0.30f, HH + 0.25f, z0, brick_d);
+      // cornice (flush at the back, where the roof stair climbs the wall)
+      KB(-X - 0.45f, HH, z0 - 0.45f, X + 0.45f, HH + 0.55f, z1, brick_d);
+      KB(-X + 0.2f, 3.35f, z0 - 0.12f, X - 0.2f, 3.60f, z0 - 0.005f, brick_d);              // string course
+    });
+    KMAT(SMAT_GLASS, for (float x = -X + 0.30f; x < X - 0.5f; x += 4.0f)
+      KB(x + 0.45f, 5.0f, z0 - 0.04f, x + 3.15f, 9.8f, z0 - 0.002f, glass));
+    KMAT(SMAT_STEEL, for (float x = -X + 0.30f; x < X - 0.5f; x += 4.0f) {
+      KB(x + 1.70f, 4.95f, z0 - 0.08f, x + 1.90f, 9.85f, z0 - 0.010f, dark);             // mullion
+      KB(x + 0.40f, 7.30f, z0 - 0.07f, x + 3.20f, 7.42f, z0 - 0.015f, dark);             // transom
+      KB(x + 0.35f, 4.80f, z0 - 0.20f, x + 3.25f, 4.95f, z0 - 0.020f, rgb(0.55f, 0.53f, 0.50f));   // sill
+    });
+    // the roof: a slab, then the monitor with its own glazing and a cap
+    KMAT(SMAT_CLAD, {
+      KB(-X + 0.6f, HH + 0.55f, z0 + 3.0f, X - 0.6f, HH + 2.6f, z1 - 3.0f, rgb(0.36f, 0.38f, 0.41f));
+      KB(-X + 0.3f, HH + 2.6f, z0 + 2.7f, X - 0.3f, HH + 2.85f, z1 - 2.7f, rgb(0.30f, 0.32f, 0.35f));
+    });
+    KMAT(SMAT_GLASS, KB(-X + 1.0f, HH + 0.75f, z0 + 2.97f, X - 1.0f, HH + 2.35f, z0 + 3.0f, glass));
+    // INSIDE: two roll-stand pairs on their roller tables (the mill line, cover
+    // down the hall's middle with the centre left open), finished coils along
+    // the back wall, the hall crane's girder overhead, door frames in steel.
+    KMAT(SMAT_STEEL, {
+      const float mz0 = 34.4f, mz1 = 36.4f;
+      for (int i = 0; i < 4; i++) {
+        float hx = (i == 0) ? -15.0f : (i == 1) ? -11.0f : (i == 2) ? 4.0f : 8.0f;
+        KB(hx - 0.55f, 0.0f, mz0, hx + 0.55f, 2.70f, mz1, rgb(0.30f, 0.33f, 0.38f));      // housing
+        KB(hx - 0.62f, 2.70f, mz0 - 0.05f, hx + 0.62f, 2.95f, mz1 + 0.05f, yel);          // its cap
+      }
+      KB(-14.45f, 0.0f, 34.85f, -11.55f, 0.85f, 35.95f, dark);         // roller tables
+      KB(4.55f, 0.0f, 34.85f, 7.45f, 0.85f, 35.95f, dark);
+      KB(-21.0f, 0.0f, 34.85f, -15.55f, 0.85f, 35.95f, dark);
+      KB(8.55f, 0.0f, 34.85f, 13.0f, 0.85f, 35.95f, dark);
+      KB(-21.4f, 8.2f, 30.2f, 21.4f, 8.9f, 31.0f, yel);                // hall crane girder
+      KB(-6.0f, 8.9f, 30.0f, -4.6f, 9.5f, 31.2f, rgb(0.24f, 0.25f, 0.27f));
+      KB(-21.5f, 7.8f, z0 + T, -21.0f, 8.2f, z1 - T, dark);            // its runway beams
+      KB(21.0f, 7.8f, z0 + T, 21.5f, 8.2f, z1 - T, dark);
+    });
+    for (int i = 0; i < 6; i++) {                                     // coils by the back wall
+      float cx = (i < 2) ? -19.0f + 1.8f * (float)i : (i < 4) ? -2.0f + 1.8f * (float)(i - 2) : 15.0f + 1.8f * (float)(i - 4);
+      KMAT(SMAT_STEEL, k_octa(cx, 39.4f, 0.80f, 0.0f, 1.40f, kt_(rgb(0.52f, 0.54f, 0.57f), cx, 39.4f, 80, 0.88f, 1.06f)));
+    }
+    // a gantry crane's runway over a stock yard at the hall's east end
+    KMAT(SMAT_HAZARD, KB(X + 1.0f, 8.0f, z0 + 1.0f, X + 9.0f, 8.6f, z0 + 1.8f, yel));
+    KMAT(SMAT_STEEL, {
+      KB(X + 8.4f, 0.0f, z0 + 1.0f, X + 9.0f, 8.0f, z0 + 1.8f, steel);
+      KB(X + 0.2f, 0.0f, z0 + 1.0f, X + 0.8f, 8.0f, z0 + 1.8f, steel);
+    });
+  }
+  // ---- TWO BRICK CHIMNEYS behind the hall, 34 m, banded, sooted at the top.
+  KMAT(SMAT_BRICK, {
+    k_tower(-12.0f, 44.0f, 1.55f, 1.05f, 0.0f, 30.0f, 6, brick, dark);
+    k_tower(12.0f, 44.0f, 1.55f, 1.05f, 0.0f, 34.0f, 7, brick, dark);
+    k_octa(-12.0f, 44.0f, 1.18f, 30.0f, 31.2f, rgb(0.16f, 0.13f, 0.12f));
+    k_octa(12.0f, 44.0f, 1.18f, 34.0f, 35.2f, rgb(0.16f, 0.13f, 0.12f));
+  });
+  // ---- THE WATER TOWER on the south-east corner: four legs, braces, a tank.
+  KMAT(SMAT_STEEL, {
+    const float cx = 36.0f, cz = 36.0f;
+    for (int i = 0; i < 4; i++) {
+      float lx = cx + ((i & 1) ? 2.2f : -2.2f), lz = cz + ((i & 2) ? 2.2f : -2.2f);
+      KB(lx - 0.18f, 0.0f, lz - 0.18f, lx + 0.18f, 14.0f, lz + 0.18f, steel);
+    }
+    for (float y = 4.5f; y < 14.0f; y += 4.5f) {
+      KB(cx - 2.15f, y, cz - 2.11f, cx + 2.15f, y + 0.14f, cz - 2.05f, dark);
+      KB(cx - 2.15f, y, cz + 2.05f, cx + 2.15f, y + 0.14f, cz + 2.11f, dark);
+      KB(cx - 2.11f, y + 0.20f, cz - 2.15f, cx - 2.05f, y + 0.34f, cz + 2.15f, dark);
+      KB(cx + 2.05f, y + 0.20f, cz - 2.15f, cx + 2.11f, y + 0.34f, cz + 2.15f, dark);
+    }
+    k_octa(cx, cz, 3.1f, 14.0f, 19.0f, rgb(0.52f, 0.56f, 0.58f));
+    k_octa(cx, cz, 3.22f, 16.4f, 16.6f, dark);
+    k_octa(cx, cz, 2.3f, 19.0f, 19.7f, rgb(0.44f, 0.47f, 0.49f));
+    k_octa(cx, cz, 1.2f, 19.7f, 20.3f, rgb(0.44f, 0.47f, 0.49f));
+  });
+  // ---- THE ORE SILOS on the south-west corner: three concrete bins on a
+  // conveyor gallery.
+  KMAT(SMAT_CONCRETE, for (int i = 0; i < 3; i++) {
+    float cx = -42.0f + 5.4f * (float)i, cz = 34.0f;
+    k_octa(cx, cz, 2.5f, 0.0f, 17.0f, kt_(conc, cx, cz, 60, 0.92f, 1.04f));
+    k_octa(cx, cz, 1.7f, 17.0f, 18.0f, kt_(conc, cx, cz, 61, 0.86f, 0.94f));
+  });
+  KMAT(SMAT_CLAD, KB(-44.0f, 18.0f, 33.0f, -31.0f, 20.2f, 35.0f, rgb(0.58f, 0.50f, 0.38f)));
+  // ---- THE BLAST FURNACE east of the east wall: hearth, bosh, a stack in
+  // banded courses, the throat and four uptakes into the downcomer.
+  {
+    const float fx = 37.0f, fz = -3.0f;
+    v3 shell = rgb(0.30f, 0.31f, 0.33f);
+    KMAT(SMAT_STEEL, {
+      k_octa(fx, fz, 4.6f, 0.0f, 7.0f, rust);                       // hearth
+      k_octa(fx, fz, 5.0f, 7.0f, 10.5f, shell);                     // bosh
+      k_octa(fx, fz, 6.4f, 9.2f, 10.0f, dark);                      // bustle main
+      k_octa(fx, fz, 6.6f, 10.5f, 11.0f, steel);                    // working deck
+    });
+    KMAT(SMAT_STEEL, k_tower(fx, fz, 4.6f, 3.0f, 11.0f, 25.0f, 7, shell, dark));
+    KMAT(SMAT_STEEL, {
+      k_octa(fx, fz, 3.3f, 25.0f, 25.6f, steel);                    // top platform
+      k_octa(fx, fz, 2.2f, 25.6f, 28.5f, rust);                     // throat, hopper
+      for (int i = 0; i < 4; i++) {                                 // uptakes
+        float ux = fx + ((i & 1) ? 1.4f : -1.4f), uz = fz + ((i & 2) ? 1.4f : -1.4f);
+        KB(ux - 0.45f, 25.8f, uz - 0.45f, ux + 0.45f, 33.0f, uz + 0.45f, shell);
+      }
+      KB(fx - 2.0f, 33.0f, fz - 2.0f, fx + 2.0f, 34.2f, fz + 2.0f, shell);
+      // the downcomer: over and down to the dust catcher on the north side
+      KB(fx - 0.7f, 30.6f, fz - 11.0f, fx + 0.7f, 32.0f, fz - 1.9f, shell);
+      KB(fx - 0.7f, 18.0f, fz - 11.0f, fx + 0.7f, 30.6f, fz - 9.6f, shell);
+      k_octa(fx, fz - 10.3f, 2.4f, 6.0f, 18.0f, rgb(0.40f, 0.40f, 0.42f));   // dust catcher
+      k_octa(fx, fz - 10.3f, 1.2f, 3.0f, 6.0f, rgb(0.40f, 0.40f, 0.42f));
+      for (int i = 0; i < 4; i++) {
+        float lx = fx + ((i & 1) ? 1.9f : -1.9f), lz = fz - 10.3f + ((i & 2) ? 1.9f : -1.9f);
+        KB(lx - 0.16f, 0.0f, lz - 0.16f, lx + 0.16f, 6.4f, lz + 0.16f, dark);
+      }
+      // the cast house roof over the tap floor, toward the yard
+      // (clear of the shed's back door at z -1.5..1.5)
+      KB(fx - 11.0f, 0.0f, fz - 4.6f, fx - 10.6f, 6.5f, fz - 4.2f, steel);
+      KB(fx - 11.0f, 0.0f, fz + 4.6f, fx - 10.6f, 6.5f, fz + 5.0f, steel);
+    });
+    KMAT(SMAT_CLAD, KB(fx - 11.4f, 6.5f, fz - 4.8f, fx - 4.0f, 6.85f, fz + 5.2f, rgb(0.42f, 0.44f, 0.47f)));
+    // THE SKIP INCLINE: twin girders climbing from the stock house to the top
+    // platform, built in steps (axis boxes), a box every 0.3 m of run.
+    KMAT(SMAT_HAZARD, for (int i = 0; i < 26; i++) {
+      const float st = 9.6f / 26.0f;
+      float xa = fx + 13.0f - st * (float)(i + 1), xb = fx + 13.0f - st * (float)i;
+      float y = 25.0f * (float)i / 26.0f;
+      KB(xa, y, fz - 1.45f, xb, y + 1.25f, fz - 1.05f, yel);
+      KB(xa, y, fz + 1.05f, xb, y + 1.25f, fz + 1.45f, yel);
+    });
+    KMAT(SMAT_CLAD, KB(fx + 12.6f, 0.0f, fz - 3.5f, HX, 4.5f, fz + 3.5f, rgb(0.46f, 0.36f, 0.28f)));
+  }
+  // ---- THREE HOT-BLAST STOVES in a row south of the furnace: tall domed
+  // cylinders, and the hot-blast main across their shoulders to the bustle.
+  KMAT(SMAT_STEEL, for (int i = 0; i < 3; i++) {
+    float cx = 31.5f + 6.0f * (float)i, cz = 13.0f;
+    v3 sc = kt_(rgb(0.56f, 0.58f, 0.60f), cx, cz, 70, 0.92f, 1.04f);
+    k_octa(cx, cz, 2.5f, 0.0f, 22.0f, sc);
+    k_octa(cx, cz, 2.62f, 7.0f, 7.25f, dark);
+    k_octa(cx, cz, 2.62f, 14.5f, 14.75f, dark);
+    k_octa(cx, cz, 2.0f, 22.0f, 23.4f, sc);
+    k_octa(cx, cz, 1.1f, 23.4f, 24.3f, sc);
+  });
+  KMAT(SMAT_STEEL, {
+    KB(29.0f, 11.6f, 9.9f, 46.0f, 12.8f, 11.1f, rust);              // hot-blast main
+    KB(36.4f, 9.7f, 2.8f, 37.6f, 12.7f, 9.9f, rust);                 // into the bustle
+  });
+  // ---- A STACK OF PIPE BENT INTO THE SKY: the waste-gas chimney by the stoves.
+  KMAT(SMAT_STEEL, {
+    k_tower(46.0f, 18.0f, 1.0f, 0.8f, 0.0f, 40.0f, 8, rgb(0.62f, 0.62f, 0.60f), rgb(0.70f, 0.20f, 0.14f));
+  });
+  // ---- THE WAYS UP. Steel stairs (0.40 m risers: STEP_H walks them) to the
+  // rolling-mill hall's roof, up its back wall (the cornice stops flush there
+  // so nothing overhangs the climb), landing level with the roof; and to
+  // the cast house roof at 6.85 m, from beside the shed's back door, the perch
+  // that looks back over the yard wall. Built through g_ks like the rest
+  // (stair_up takes world coordinates, so the half's sign goes in by hand).
+  {
+    v3 tread = rgb(0.32f, 0.34f, 0.37f), rl = rgb(0.86f, 0.66f, 0.12f);
+    KMAT(SMAT_STEEL, {
+      stair_up(0, g_ks * 41.0f, g_ks > 0.0f ? -1 : 1, g_ks * -7.0f, g_ks > 0.0f ? 1 : -1,
+               1.60f, 11.60f, 0.50f, 1.45f, tread, rl);
+      stair_up(0, g_ks * 2.2f, g_ks > 0.0f ? -1 : 1, g_ks * 34.8f, g_ks > 0.0f ? -1 : 1,
+               1.20f, 6.80f, 0.50f, 1.45f, tread, rl);
+    });
+  }
+  // ---- THE STOCK YARDS of the outer ring: cover between the buildings.
+  KMAT(SMAT_STEEL, {
+    static const float COILS[][2] = {{28.0f, 46.0f}, {29.8f, 46.0f}, {44.0f, 29.6f}, {44.0f, 31.4f}, {33.0f, 27.0f}};
+    for (int i = 0; i < 5; i++)
+      k_octa(COILS[i][0], COILS[i][1], 0.80f, 0.0f, 1.40f, kt_(rgb(0.52f, 0.54f, 0.57f), COILS[i][0], COILS[i][1], 81, 0.88f, 1.06f));
+    // ingot stacks: three courses of cast pigs, each course turned
+    static const float INGOTS[][2] = {{30.0f, -20.0f}, {45.5f, -20.5f}, {47.0f, 5.0f}};
+    for (int i = 0; i < 3; i++) {
+      float x = INGOTS[i][0], z = INGOTS[i][1];
+      v3 ic = kt_(rgb(0.36f, 0.30f, 0.27f), x, z, 82, 0.9f, 1.05f);
+      KB(x - 1.0f, 0.0f, z - 0.6f, x + 1.0f, 0.40f, z + 0.6f, ic);
+      KB(x - 0.6f, 0.40f, z - 1.0f, x + 0.6f, 0.80f, z + 1.0f, ic);
+      KB(x - 0.9f, 0.80f, z - 0.5f, x + 0.9f, 1.18f, z + 0.5f, ic);
+    }
+  });
+  container(g_ks * -38.0f, g_ks * 46.5f, 0, 0.0f, rgb(0.24f, 0.42f, 0.30f));
+  container(g_ks * -30.5f, g_ks * 44.0f, 1, 0.0f, rgb(0.58f, 0.30f, 0.18f));
+  lamp(g_ks * 23.0f, g_ks * 26.2f, 1, g_ks > 0.0f ? 1 : -1);
+  lamp(g_ks * 34.0f, g_ks * 20.0f, 0, g_ks > 0.0f ? -1 : 1);
+  // ---- THE RAILS out of the yard continue past the east wall to the works.
+  KMAT(SMAT_STEEL, {
+    KB(O, 0.0f, 21.90f, HX, 0.016f, 21.98f, rgb(0.46f, 0.44f, 0.42f));
+    KB(O, 0.0f, 23.33f, HX, 0.016f, 23.41f, rgb(0.46f, 0.44f, 0.42f));
+  });
+}
+
+// THE YARD WALL. The Foundry's yard was the whole map, walled by the arena
+// shell; it is now the centre of the works, and its wall has ways out: a gate
+// in each end wall toward the rolling-mill hall (x 6..11 here, -11..-6 in the
+// mirror), a door through each shed's back wall into the blast furnace's cast
+// house (z -1.5..1.5), and the rail gate where the spur leaves (z 20.6..24).
+static void foundry_yard_wall_half(void) {
+  const float Y = FOUNDRY_YARD, WT = 0.6f, BH = 3.2f;
+  const theme_t *t = &g_theme;
+  v3 wc = t->wall, cap = {{t->wall.x * 0.86f, t->wall.y * 0.86f, t->wall.z * 0.86f}};
+  v3 yel = rgb(0.86f, 0.66f, 0.12f), steel = rgb(0.30f, 0.32f, 0.35f);
+  KMAT(SMAT_CONCRETE, {
+    KB(-Y - WT, 0.0f, Y, 6.0f, BH, Y + WT, wc);                     // south wall, the gate gap
+    KB(11.0f, 0.0f, Y, Y + WT, BH, Y + WT, wc);
+    KB(Y, 0.0f, -Y, Y + WT, BH, -1.5f, wc);                         // east wall: door, rail gate
+    KB(Y, 0.0f, 1.5f, Y + WT, BH, 20.6f, wc);
+    KB(Y, 2.6f, -1.5f, Y + WT, BH, 1.5f, wc);                       // the door's lintel
+    // piers on the yard face, clear of the openings
+    for (float u = -21.0f; u <= 21.01f; u += 6.0f) {
+      if (u > 5.0f && u < 12.0f) continue;
+      KB(u - 0.25f, 0.0f, Y - 0.22f, u + 0.25f, 3.30f, Y, wc);
+      KB(u - 0.31f, 3.30f, Y - 0.28f, u + 0.31f, 3.42f, Y + 0.02f, cap);
+    }
+  });
+  // the gate's steel portal and its hazard-striped jambs; the rail gate's posts
+  KMAT(SMAT_HAZARD, {
+    KB(5.60f, 0.0f, Y - 0.12f, 6.05f, BH + 0.9f, Y + WT + 0.12f, yel);
+    KB(10.95f, 0.0f, Y - 0.12f, 11.4f, BH + 0.9f, Y + WT + 0.12f, yel);
+    KB(Y - 0.12f, 0.0f, 20.20f, Y + WT + 0.12f, BH + 0.6f, 20.65f, yel);
+  });
+  KMAT(SMAT_STEEL, {
+    KB(5.6f, BH + 0.9f, Y - 0.16f, 11.4f, BH + 1.3f, Y + WT + 0.16f, steel);   // portal beam
+    KB(Y - 0.08f, 0.0f, -1.62f, Y + WT + 0.08f, 2.62f, -1.46f, steel);         // door frame
+    KB(Y - 0.08f, 0.0f, 1.46f, Y + WT + 0.08f, 2.62f, 1.62f, steel);
+  });
+}
+
 static void foundry_half(void) {
   const theme_t *t = &g_theme;
   v3 steel = rgb(0.30f, 0.32f, 0.35f), dark = rgb(0.17f, 0.18f, 0.19f);
@@ -263,7 +541,8 @@ static void foundry_half(void) {
     KB(13.0f, 2.6f, 13.6f, 13.6f, 3.60f, 14.0f, steel);
     KB(12.48f, 3.50f, -14.3f, 12.6f, 3.66f, 14.3f, dark);         // gutter
   });
-  k_pipes(1, 24.0f, -1.0f, 0.06f, -13.8f, 13.8f, 1.75f, 3, rust);
+  k_pipes(1, 24.0f, -1.0f, 0.06f, -13.8f, -1.8f, 1.75f, 3, rust);   // (the back door between)
+  k_pipes(1, 24.0f, -1.0f, 0.06f, 1.8f, 13.8f, 1.75f, 3, rust);
   // ...and what holds the roof up, seen from inside (render-only: PROP_ROOF).
   prop_add(PROP_ROOF, g_ks * 18.3f, 0.0f, 0, g_ks < 0.0f ? -1 : 1,
            rgb(0.33f, 0.35f, 0.38f), rgb(0.20f, 0.21f, 0.22f));
@@ -326,6 +605,54 @@ static void foundry_half(void) {
   k_line(12.20f, -14.0f, 12.32f, 14.0f, yel);
   k_line(-5.6f, 2.55f, 4.1f, 2.67f, yel);
   lamp(g_ks * 12.3f, g_ks * -16.8f, 1, g_ks > 0.0f ? 1 : -1);
+  // THE LADLE on the crane's hook: a refractory-lined steel ladle on its bail,
+  // the melt glowing in it — hung high enough (2.5 m) to walk and jump under.
+  KMAT(SMAT_STEEL, {
+    k_octa(-3.0f, -7.0f, 0.78f, 2.50f, 2.70f, dark);
+    k_octa(-3.0f, -7.0f, 0.92f, 2.70f, 3.42f, rgb(0.28f, 0.24f, 0.22f));
+    k_octa(-3.0f, -7.0f, 1.00f, 3.20f, 3.38f, steel);                // lip band
+    KB(-4.08f, 3.0f, -7.06f, -4.00f, 3.80f, -6.94f, dark);         // the bail
+    KB(-2.00f, 3.0f, -7.06f, -1.92f, 3.80f, -6.94f, dark);
+    KB(-4.08f, 3.80f, -7.06f, -1.92f, 3.88f, -6.94f, dark);
+  });
+  k_octa(-3.0f, -7.0f, 0.80f, 3.42f, 3.46f, rgb(1.0f, 0.52f, 0.12f));   // the melt
+  // THE CRANE CAB: the operator's glazed pulpit under the east end of the
+  // bridge girder, over the shed roof line.
+  KMAT(SMAT_STEEL, KB(17.2f, 5.9f, -7.65f, 19.0f, 7.45f, -6.35f, rgb(0.24f, 0.25f, 0.27f)));
+  KMAT(SMAT_GLASS, KB(16.0f, 6.35f, -7.45f, 17.2f, 7.45f, -6.55f, rgb(0.12f, 0.15f, 0.19f)));
+  KMAT(SMAT_HAZARD, KB(15.96f, 6.20f, -7.50f, 17.2f, 6.35f, -6.50f, yel));
+  // THE PIPE BRIDGE: a trussed bridge from shed roof to shed roof across the
+  // yard at 5.6 m carrying the gas, steam and water mains; a post each end on
+  // the shed's front wall line. Well above anything you can stand on.
+  KMAT(SMAT_STEEL, {
+    KB(-13.25f, 3.72f, 11.75f, -12.95f, 5.60f, 12.05f, steel);
+    KB(12.95f, 3.72f, 11.75f, 13.25f, 5.60f, 12.05f, steel);
+    KB(-13.4f, 5.60f, 11.45f, 13.4f, 5.78f, 12.55f, dark);           // bottom chord / deck
+    KB(-13.4f, 6.62f, 11.45f, 13.4f, 6.74f, 11.55f, dark);           // top chords
+    KB(-13.4f, 6.62f, 12.45f, 13.4f, 6.74f, 12.55f, dark);
+    for (float x = -12.6f; x < 12.8f; x += 1.8f) {                   // verticals
+      KB(x, 5.78f, 11.45f, x + 0.08f, 6.62f, 11.53f, dark);
+      KB(x, 5.78f, 12.47f, x + 0.08f, 6.62f, 12.55f, dark);
+    }
+    KB(-13.3f, 5.80f, 11.60f, 13.3f, 6.14f, 11.94f, rgb(0.20f, 0.42f, 0.30f));   // water
+    KB(-13.3f, 5.80f, 12.02f, 13.3f, 6.06f, 12.28f, rgb(0.62f, 0.62f, 0.60f));   // steam
+    KB(-13.3f, 6.18f, 11.80f, 13.3f, 6.44f, 12.06f, yel);                       // gas
+  });
+  // THE TAP RUNNER: the furnace's tap hole drains into a glowing trough
+  // let into the floor (paint-thin: it is a picture, not a step).
+  KB(9.82f, 0.0f, -8.84f, 10.18f, 0.008f, -6.9f, rgb(1.0f, 0.46f, 0.10f));
+  // THE RAIL SPUR along the south wall: two rails and their sleepers, flush
+  // with the floor, a buffer stop at the yard end; they run on under the east
+  // wall to the works outside.
+  KMAT(SMAT_WOOD, for (float x = -5.4f; x < 23.6f; x += 0.70f)
+    KB(x, 0.0f, 21.62f, x + 0.24f, 0.006f, 23.67f, rgb(0.30f, 0.25f, 0.20f)));
+  KMAT(SMAT_STEEL, {
+    KB(-5.6f, 0.0f, 21.90f, FOUNDRY_YARD + 0.6f, 0.016f, 21.98f, rgb(0.46f, 0.44f, 0.42f));
+    KB(-5.6f, 0.0f, 23.33f, FOUNDRY_YARD + 0.6f, 0.016f, 23.41f, rgb(0.46f, 0.44f, 0.42f));
+  });
+  KMAT(SMAT_HAZARD, KB(-6.05f, 0.0f, 21.70f, -5.6f, 0.62f, 23.59f, yel));   // buffer stop
+  foundry_yard_wall_half();
+  foundry_backdrop_half();
 }
 static void map_foundry(void) {
   small_map_style();
@@ -471,10 +798,83 @@ static void bazaar_half(void) {
   lamp(g_ks * 4.4f, g_ks * -13.0f, 1, g_ks > 0.0f ? 1 : -1);
   lamp(g_ks * 13.0f, g_ks * 4.4f, 0, g_ks > 0.0f ? -1 : 1);
 }
+// THE BAZAAR'S OUTER STREET. The market filled the middle of the map and left
+// a ring of bare sand to the arena wall, so the quarter ended in a void. Now a
+// row of shopfront houses stands against the wall all the way round: each its
+// own width, height and limewash, a door and a shuttered window at street
+// level, a striped awning on every other front, upper windows on the tall
+// ones, a cornice and a roof parapet. They are 2 m deep (the street is still
+// 9 m wide) and nobody stands on them: no step reaches 3.6 m.
+static void k_shopfront(int ax, float a0, float a1, float face, float back, int salt) {
+  // ax 0: the row runs along x, the front faces -z at z = face (back at z = back)
+  static const float PL[6][3] = {{0.86f, 0.78f, 0.62f}, {0.90f, 0.86f, 0.76f}, {0.80f, 0.62f, 0.46f},
+                                 {0.76f, 0.70f, 0.58f}, {0.88f, 0.72f, 0.52f}, {0.70f, 0.56f, 0.44f}};
+  const theme_t *t = &g_theme;
+  v3 door = rgb(0.32f, 0.20f, 0.12f), glass = rgb(0.10f, 0.12f, 0.15f);
+  v3 shut[3] = {rgb(0.18f, 0.40f, 0.52f), rgb(0.56f, 0.30f, 0.18f), rgb(0.26f, 0.42f, 0.30f)};
+  v3 awn[3] = {t->band_s, rgb(0.86f, 0.82f, 0.72f), t->band_n};
+  float sg = face < back ? 1.0f : -1.0f;               // +1: the row lies on the + side of its face
+  int k = 0;
+  for (float u = a0; u < a1 - 0.5f; k++) {
+    float w = 4.0f + 2.0f * khash(u, face, salt + k);
+    if (u + w > a1 - 2.5f) w = a1 - u;
+    float v = u + w;
+    float h = 3.6f + 2.4f * khash(face, u, salt + 7 * k);
+    int pi = (int)(6.0f * khash(u, (float)k, salt + 3)) % 6;
+    v3 pc = kt_(rgb(PL[pi][0], PL[pi][1], PL[pi][2]), u, face, salt, 0.94f, 1.02f);
+    v3 cc = v3_scale(pc, 0.86f);
+    float m = 0.5f * (u + v), f0 = face, f1 = back;
+    float fz0 = fminf(f0, f1), fz1 = fmaxf(f0, f1);
+    float pr = face - sg * 0.02f;                       // the plane things stand proud to
+#define SF(a_, y0_, b_, y1_, d0_, d1_, c_)                                           \
+    do { float _d0 = face - sg * (d0_), _d1 = face - sg * (d1_);                     \
+         if (ax == 0) KB(a_, y0_, fminf(_d0, _d1), b_, y1_, fmaxf(_d0, _d1), c_);     \
+         else         KB(fminf(_d0, _d1), y0_, a_, fmaxf(_d0, _d1), y1_, b_, c_); } while (0)
+    (void)pr;
+    KMAT(SMAT_STUCCO, {
+      if (ax == 0) KB(u, 0.0f, fz0, v, h, fz1, pc); else KB(fz0, 0.0f, u, fz1, h, v, pc);
+      SF(u + 0.02f, h - 0.30f, v - 0.02f, h - 0.14f, 0.0f, 0.10f, cc);          // cornice
+      SF(u + 0.02f, h, v - 0.02f, h + 0.45f, -0.05f, 0.25f, cc);               // parapet
+      SF(u + 0.02f, 0.0f, v - 0.02f, 0.28f, 0.0f, 0.06f, v3_scale(pc, 0.78f));  // plinth
+    });
+    float dx = u + 0.7f + 0.8f * khash(u, h, salt + 11);
+    KMAT(SMAT_WOOD, {
+      SF(dx, 0.28f, dx + 1.05f, 2.25f, 0.06f, 0.075f, door);
+      SF(dx + 1.7f, 1.25f, dx + 2.6f, 2.15f, 0.0f, 0.015f, glass);
+      SF(dx + 1.28f, 1.25f, dx + 1.7f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
+      SF(dx + 2.6f, 1.25f, dx + 3.02f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
+      if (h > 4.6f) {                                   // upper floor windows
+        SF(u + 0.8f, 3.05f, u + 1.6f, 3.95f, 0.0f, 0.015f, glass);
+        if (w > 4.6f) SF(v - 1.6f, 3.05f, v - 0.8f, 3.95f, 0.0f, 0.015f, glass);
+      }
+    });
+    KMAT(SMAT_STONE, SF(dx - 0.08f, 2.25f, dx + 1.13f, 2.40f, 0.0f, 0.10f, rgb(0.62f, 0.56f, 0.46f)));
+    if (k & 1) {                                        // a striped awning, high and shallow
+      v3 ac = awn[(k / 2) % 3];
+      float ay = ax ? 2.70f : 2.62f;                   // (the two rows' awnings never share a plane)
+      SF(u + 0.4f, ay, v - 0.4f, ay + 0.04f, 0.0f, 1.10f, ac);
+      KMAT(SMAT_STEEL, {
+        SF(u + 0.45f, 2.30f, u + 0.52f, ay, 1.00f, 1.07f, rgb(0.2f, 0.2f, 0.2f));
+        SF(v - 0.52f, 2.30f, v - 0.45f, ay, 1.00f, 1.07f, rgb(0.2f, 0.2f, 0.2f));
+      });
+    }
+    (void)m;
+#undef SF
+    u = v;
+  }
+}
 static void map_bazaar(void) {
   small_map_style();
   const theme_t *t = &g_theme;
   k_shell_piers(t->wall);
+  // the outer street's shopfronts, a row along each wall (the 180-degree
+  // symmetry is kept by building each half's two rows through g_ks)
+  for (int hh = 0; hh < 2; hh++) {
+    g_ks = hh ? -1.0f : 1.0f;
+    k_shopfront(0, -24.0f, 24.0f, 22.0f, 23.9f, 300);   // along the +z wall, facing -z
+    k_shopfront(1, -21.8f, 21.8f, 22.0f, 23.9f, 400);   // along the +x wall, facing -x
+  }
+  g_ks = 1.0f;
   // THE FOUNTAIN: an octagonal stone basin with water, a column, an upper
   // bowl and the blue spire the map is navigated by.
   v3 stone = rgb(0.66f, 0.60f, 0.50f);
@@ -1434,7 +1834,50 @@ static const char *const *sup_rows(void) {
     default: return NULL;
   }
 }
-static int sup_spot_ok(float x, float z, int kind, int qt) {
+// A point inside VISIBLE architecture (a wall, a pier, a parapet) — not inside a
+// prop's hidden block-out (only props hide their solids).
+static int sup_wall_at(v3 p) {
+  for (int i = 0; i < g_num_solids; i++) {
+    if (g_solid_hide[i]) continue;
+    const solid_t *sd = &g_solids[i];
+    if (p.x > sd->min.x && p.x < sd->max.x && p.y > sd->min.y && p.y < sd->max.y &&
+        p.z > sd->min.z && p.z < sd->max.z) return 1;
+  }
+  return 0;
+}
+// BACK TO A WALL. A station on the 1 m search grid at (x, z) facing qt looks up
+// to SUP_REACH behind its back for a wall that spans its whole width (both
+// edges and the middle, at two heights) and, when it finds one, steps back
+// against it: *x, *z come back moved. 0 when there is no such wall.
+// It used to accept ANY solid 0.25 m behind the back, and on a grid whose
+// points rarely sit that close to a facade the something was usually a prop:
+// a generator, an electrical box, a lamp post. The cabinet then stood flush
+// against it and, from the front, the two read as one object grown into the
+// other. A prop is a hidden block-out, so it no longer counts as a wall, and a
+// post is narrower than the station, so neither does that.
+#define SUP_REACH 0.80f
+static int sup_snap_wall(float *x, float *z, int kind, int qt) {
+  const pbox_t *b = &SUP_BOX[kind];
+  float fx = qt == 0 ? 1.0f : qt == 2 ? -1.0f : 0.0f, fz = qt == 1 ? 1.0f : qt == 3 ? -1.0f : 0.0f;
+  float lx = -fz, lz = fx;                       // the station's own left
+  for (float d = 0.02f; d <= SUP_REACH + 1e-4f; d += 0.02f) {
+    float bk = -b->a0 + d;
+    int all = 1;
+    for (int k = -1; k <= 1 && all; k++) {
+      float w = k < 0 ? b->b0 + 0.04f : k > 0 ? b->b1 - 0.04f : 0.0f;
+      float px = *x - fx * bk + lx * w, pz = *z - fz * bk + lz * w;
+      all = sup_wall_at((v3){{px, 0.6f, pz}}) && sup_wall_at((v3){{px, 1.2f, pz}});
+    }
+    if (all) {
+      float mv = fmaxf(d - 0.03f, 0.0f);
+      *x -= fx * mv; *z -= fz * mv;
+      return 1;
+    }
+  }
+  return 0;
+}
+static int sup_spot_ok(float *px_, float *pz_, int kind, int qt) {
+  float x = *px_, z = *pz_;
   const char *const *rows = sup_rows();
   const float H = ARENA_HALF;
   if (fabsf(x) > H - 2.0f || fabsf(z) > H - 2.0f) return 0;
@@ -1452,16 +1895,24 @@ static int sup_spot_ok(float x, float z, int kind, int qt) {
   for (int l = 0; l < g_nladders; l++)
     if (fabsf(g_ladders[l].x - x) + fabsf(g_ladders[l].z - z) < 3.0f) return 0;
   const pbox_t *b = &SUP_BOX[kind];
+  if (!sup_snap_wall(&x, &z, kind, qt)) return 0;
   // the footprint with a margin at the sides and a reach in front, clear to 2.3 m
   pbox_t clr = {b->a0 + 0.04f, b->a1 + 1.30f, b->b0 - 0.45f, b->b1 + 0.45f, 0.03f, 2.30f};
   float x0, z0, x1, z1;
   pbox_world(&clr, x, z, qt, &x0, &z0, &x1, &z1);
   if (!wg_box_free((v3){{x0, clr.y0, z0}}, (v3){{x1, clr.y1, z1}})) return 0;
-  // ...and its back against something: probe 0.25 m behind it, at two heights
-  float fx = qt == 0 ? 1.0f : qt == 2 ? -1.0f : 0.0f, fz = qt == 1 ? 1.0f : qt == 3 ? -1.0f : 0.0f;
-  float bk = -b->a0 + 0.25f;
-  if (!wg_inside((v3){{x - fx * bk, 0.6f, z - fz * bk}}, NULL) ||
-      !wg_inside((v3){{x - fx * bk, 1.2f, z - fz * bk}}, NULL)) return 0;
+  // ...and A BREATH OF ROOM from every prop: no prop's block-out within 0.45 m
+  // of the footprint, beside it, in front or behind, up to its own height.
+  pbox_t room = {b->a0 - 0.45f, b->a1 + 0.45f, b->b0 - 0.45f, b->b1 + 0.45f, 0.03f, b->y1 + 0.30f};
+  pbox_world(&room, x, z, qt, &x0, &z0, &x1, &z1);
+  for (int i = 0; i < g_num_solids; i++) {
+    if (!g_solid_hide[i]) continue;
+    const solid_t *sd = &g_solids[i];
+    if (sd->max.y - sd->min.y < 0.05f) continue;       // floor films and pads
+    if (x0 < sd->max.x && x1 > sd->min.x && room.y0 < sd->max.y && room.y1 > sd->min.y &&
+        z0 < sd->max.z && z1 > sd->min.z) return 0;
+  }
+  *px_ = x; *pz_ = z;
   return 1;
 }
 static void sup_add(float x, float z, int kind, int qt) {
@@ -1484,7 +1935,7 @@ static void supply_place(void) {
   int sym = sup_rows() == NULL;              // the 48 m maps are 180-degree symmetric
   int per_kind = sym ? 1 : 3;                // per half on the small maps
   enum { NC = 1600 };
-  static float cx[NC], cz[NC];
+  static float cx[NC], cz[NC], cmx[NC], cmz[NC];
   static int cq[NC], ck[NC];
   int nc = 0;
   for (int kind = 0; kind < 2; kind++)
@@ -1492,9 +1943,10 @@ static void supply_place(void) {
       for (float x = -H + 2.0f; x <= H - 2.0f && nc < NC; x += 1.0f) {
         if (sym && z < 1.0f) continue;       // one half; the mirror is checked with it
         for (int qt = 0; qt < 4 && nc < NC; qt++) {
-          if (!sup_spot_ok(x, z, kind, qt)) continue;
-          if (sym && !sup_spot_ok(-x, -z, kind, (qt + 2) & 3)) continue;
-          cx[nc] = x; cz[nc] = z; cq[nc] = qt; ck[nc] = kind; nc++;
+          float sx = x, sz = z, mx_ = -x, mz_ = -z;
+          if (!sup_spot_ok(&sx, &sz, kind, qt)) continue;
+          if (sym && !sup_spot_ok(&mx_, &mz_, kind, (qt + 2) & 3)) continue;
+          cx[nc] = sx; cz[nc] = sz; cmx[nc] = mx_; cmz[nc] = mz_; cq[nc] = qt; ck[nc] = kind; nc++;
           break;
         }
       }
@@ -1522,9 +1974,11 @@ static void supply_place(void) {
     }
     if (best < 0) continue;
     // the spot may have been taken by a station placed since it was listed
-    if (!sup_spot_ok(cx[best], cz[best], kind, cq[best])) { ck[best] = -1; round--; continue; }
-    sup_add(cx[best], cz[best], kind, cq[best]);
-    if (sym) sup_add(-cx[best], -cz[best], kind, (cq[best] + 2) & 3);
+    float bx_ = cx[best], bz_ = cz[best], bmx = cmx[best], bmz = cmz[best];
+    if (!sup_spot_ok(&bx_, &bz_, kind, cq[best]) ||
+        (sym && !sup_spot_ok(&bmx, &bmz, kind, (cq[best] + 2) & 3))) { ck[best] = -1; round--; continue; }
+    sup_add(bx_, bz_, kind, cq[best]);
+    if (sym) sup_add(bmx, bmz, kind, (cq[best] + 2) & 3);
     want[kind]--;
     ck[best] = -1;
   }
@@ -1744,12 +2198,12 @@ typedef struct {
 } map_def_t;
 static const map_def_t MAP_DEFS[] = {
   {"ARENA",    "arena",    -1, -1, 24.0f, 0.0f,  0, NULL},
-  {"FOUNDRY",  "foundry",   1,  4, 24.0f, 0.0f,  0, map_foundry},   // SLATE, STORMFRONT
+  {"FOUNDRY",  "foundry",   1,  4, 52.0f, 0.45f, 1, map_foundry},  // SLATE, STORMFRONT: the yard + the works
   {"BAZAAR",   "bazaar",    2,  1, 24.0f, 0.0f,  0, map_bazaar},    // SAND, GOLDEN HOUR
   {"OUTPOST",  "outpost",   0,  0, 24.0f, 0.0f,  0, map_outpost},   // QUARTZ, HIGH NOON
-  {"CITADEL",  "citadel",   2,  2, 52.0f, 0.45f, 1, map_citadel},   // SAND, EMBER DUSK
+  {"CITADEL",  "citadel",   2,  6, 52.0f, 0.45f, 1, map_citadel},   // SAND, CLEAR AFTERNOON
   {"HARBOR",   "harbor",    1,  3, 52.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN
-  {"REFINERY", "refinery",  0,  1, 52.0f, 0.45f, 1, map_refinery},  // QUARTZ, GOLDEN HOUR
+  {"REFINERY", "refinery",  0,  7, 52.0f, 0.45f, 1, map_refinery},  // QUARTZ, CRISP MORNING
   {"COMPOUND", "compound",  2,  5, 52.0f, 0.45f, 1, map_compound},  // SAND, BLUE HOUR
 };
 #define MAP_COUNT ((int)(sizeof MAP_DEFS / sizeof MAP_DEFS[0]))

@@ -796,59 +796,289 @@ def dumpster():
         finish(b, (.05, .05, .06), .35, 0, 0)
 
 # ---------------------------------------------------------------- the motorbike
+# A 125 cc commuter single (the CG125 family every town in the region runs on),
+# rebuilt part by part: wire-spoked wheels on drum hubs, a single-downtube
+# cradle frame, a raked fork with chrome stanchions and alloy sliders, a
+# teardrop tank, a stitched bench seat with a grab rail, a finned air-cooled
+# single leaning forward out of its cases, the header and a heat-shielded
+# silencer down the right, chain and sprockets down the left, twin rear shocks
+# on a box swingarm, a round headlamp and twin clocks, mirrors on stalks, four
+# indicators, the plate and the tail lamp. Stood on its side stand.
+MB_R = .300                                  # wheel radius (18 in rim + tyre)
+MB_WF, MB_WR = .650, -.640                   # front / rear axle x
+MB_STEEL = (.10, .10, .11); MB_DARK = (.16, .16, .17); MB_ALU = (.58, .58, .60)
+
+def _bent(pts, r, col, rough=.4, metal=.5, seg=8, name='bent'):
+    """A round bar through a polyline, every joint filled with a ball so the
+    bends are swept rather than mitred."""
+    if r < .008: seg = min(seg, 5)                        # levers, stays, stalks
+    for a, b in zip(pts, pts[1:]):
+        finish(tube(a, b, r, seg, name), col, rough, metal, 0)
+    for i in range(1, len(pts) - 1) if r >= .008 else ():   # a lever's bend needs no ball
+        u_ = (Vector(pts[i]) - Vector(pts[i - 1])).normalized(); w_ = (Vector(pts[i + 1]) - Vector(pts[i])).normalized()
+        if u_.dot(w_) > .93: continue                     # ...nor a shallow one: the tubes' ends meet
+        p = pts[i]
+        bm = bmesh.new(); bmesh.ops.create_uvsphere(bm, u_segments=min(seg, 6), v_segments=4, radius=r)
+        o = from_bm(bm, name + '_j'); place_o(o, p)
+        finish(o, col, rough, metal, 0)
+
+def _ball(p, r, col, rough=.4, metal=.5, seg=12, sc=(1, 1, 1)):
+    bm = bmesh.new(); bmesh.ops.create_uvsphere(bm, u_segments=seg, v_segments=max(6, seg // 2), radius=r)
+    for v in bm.verts: v.co.x *= sc[0]; v.co.y *= sc[1]; v.co.z *= sc[2]
+    o = from_bm(bm, 'ball'); place_o(o, p)
+    return finish(o, col, rough, metal, 0)
+
+def _mb_wheel(xw, front):
+    """Tyre, chrome rim, 36 laced wire spokes, a drum-brake hub."""
+    y = MB_R
+    tyre = [(-.046, .232), (-.052, .248), (-.050, .266), (-.040, .284), (-.022, .296), (0, .300),
+            (.022, .296), (.040, .284), (.050, .266), (.052, .248), (.046, .232)]
+    finish(lathe_z(tyre, xw, y, 1, 20, 'mtyre', cap=False), P_RUBBER, .9, 0, 0)
+    for k in range(16):                                   # block tread on the crown
+        a = 2 * math.pi * k / 16
+        for sz in (0,):
+            g = box((0, 0, 0), (.0035, .011, .015))
+            place_o(g, (xw + .2990 * cos(a), y + .2990 * sin(a), .014 if k % 2 else -.014),
+                    (0, 0, a))
+            finish(g, (.035, .035, .04), .95, 0, 0)
+    rim = [(-.030, .238), (-.032, .228), (-.024, .222), (-.010, .219), (.010, .219), (.024, .222),
+           (.032, .228), (.030, .238)]
+    finish(lathe_z(rim, xw, y, 1, 20, 'mrim', cap=False), CHROME, .18, .95, 0)
+    finish(lathe_z([(-.033, .230), (-.033, .240), (.033, .240), (.033, .230)], xw, y, 1, 20, 'mrimw', cap=False),
+           (.35, .35, .37), .3, .8, 0)
+    # the hub: a drum on the brake side, a flange each side for the spokes
+    hub = [(-.060, .030), (-.058, .070 if front else .085), (-.040, .072 if front else .088),
+           (-.034, .050), (.034, .050), (.040, .058), (.050, .040), (.058, .024)]
+    finish(lathe_z(hub, xw, y, 1, 16, 'mhub'), MB_ALU, .35, .7, 0)
+    for sz in (-1, 1):
+        finish(lathe_z([(sz * .034 - .003, .062), (sz * .034 + .003, .062)], xw, y, 1, 16, 'flange'), MB_ALU, .35, .7, 0)
+    finish(lathe_z([(-.075, .016), (.075, .016)], xw, y, 1, 12, 'axle'), (.40, .40, .42), .3, .9, 0)
+    # 24 spokes, laced tangentially: 12 per flange, alternate leading/trailing
+    for k in range(24):
+        sz = -1 if k % 2 else 1
+        a0 = 2 * math.pi * k / 24
+        a1 = a0 + (.55 if (k // 2) % 2 else -.55)
+        h = Vector((xw + .058 * cos(a0), y + .058 * sin(a0), sz * .034))
+        r_ = Vector((xw + .220 * cos(a1), y + .220 * sin(a1), sz * .010))
+        finish(tube(h, r_, .0026, 4, 'spoke'), (.78, .78, .80), .25, .9, 0)
+
 def motorbike():
-    """A 125 cc commuter motorcycle on its side stand: spoked wheels, a cradle
-    frame, tank and seat, the engine and its exhaust, forks and bars."""
+    """A 125 cc commuter motorcycle on its side stand."""
     clear()
-    R = .30
-    for xw in (-.66, .66):
-        road_wheel(xw, R, 0, 1, R=R, W=.09, spokes=8, rimc=(.70, .70, .72), name='mw', tread=0, seg=16)
-    fr = (.12, .12, .13)
-    for a, b in (((.42, .86, 0), (-.20, .80, 0)), ((.42, .86, 0), (.10, .30, 0)), ((-.20, .80, 0), (-.66, .32, 0)),
-                 ((.10, .30, 0), (-.30, .30, 0)), ((-.30, .30, 0), (-.66, .32, 0))):
-        for sg in ((-1, 1) if a[1] < .5 else (0,)):
-            finish(tube((a[0], a[1], sg * .06), (b[0], b[1], sg * .06), .02), fr, .45, .3, 0)
-    finish(tube((-.25, .72, .09), (-.66, .32, .09), .016), fr, .45, .3, 0)          # swingarm + shocks
-    finish(tube((-.25, .72, -.09), (-.66, .32, -.09), .016), fr, .45, .3, 0)
-    for sg in (-1, 1):
-        finish(tube((.66, .30, sg * .075), (.44, .96, sg * .075), .022), (.75, .75, .77), .25, .9, 0)   # forks
-    tank = rbox(.20, .09, .14, .06); place_o(tank, (.18, .93, 0), (0, 0, -.10))
-    finish(tank, (.5, .5, .5), .25, 0, 0, flag=F_PAINT)
-    seat = rbox(.32, .05, .12, .04); place_o(seat, (-.30, .90, 0), (0, 0, .03))
-    finish(seat, (.05, .05, .055), .6, 0, 0)
-    finish(place_o(rbox(.24, .05, .12, .03), (-.30, .83, 0)), (.5, .5, .5), .3, 0, 0, flag=F_PAINT)   # side covers
-    finish(place_o(rbox(.17, .14, .11, .03), (.08, .45, 0)), (.38, .38, .40), .45, .6, 0)              # engine case
-    cyl = place_o(rbox(.07, .11, .07, .02), (.24, .58, 0), (0, 0, -.6))
-    finish(cyl, (.48, .48, .50), .5, .6, 0)
-    for k in range(5):
-        finish(place_o(box((0, 0, 0), (.09, .006, .09)), (.24 + .03 * k * .56, .52 + .03 * k * .82, 0), (0, 0, -.6)), (.42, .42, .44), .5, .6, 0)
-    finish(tube((.28, .50, .07), (.05, .26, .14), .022), CHROME, .3, .9, 0)                            # exhaust
-    finish(tube((.05, .26, .14), (-.55, .38, .14), .028), CHROME, .3, .9, 0)
-    finish(tube((-.55, .38, .14), (-.72, .40, .14), .035), (.20, .20, .21), .4, .7, 0)
-    finish(tube((.44, .98, -.34), (.44, .98, .34), .012), (.70, .70, .72), .3, .9, 0)                  # handlebar
-    for sg in (-1, 1):
-        finish(tube((.44, .98, sg * .26), (.44, .98, sg * .36), .018), P_RUBBER, .8, 0, 0)
-        finish(tube((.44, 1.0, sg * .18), (.40, 1.16, sg * .24), .005), TRIM, .4, .5, 0)              # mirror stalks
-        finish(place_o(lathe_z([(0, .035), (.01, .033)], 0, 0, 1, 12), (.40, 1.17, sg * .24), (0, math.pi / 2, 0)), TRIM, .4, .5, 0)
-    hl = lathe_z([(0, .075), (.05, .08), (.08, .07)], 0, 0, 1, 16)
-    finish(place_o(hl, (.50, .88, 0), (0, math.pi / 2, 0)), (.10, .10, .11), .4, .3, 0)
-    finish(place_o(lathe_z([(0, .068), (.006, .066)], 0, 0, 1, 16), (.58, .88, 0), (0, math.pi / 2, 0)), LENS_W, .08, 0, 0)
-    for xw, a0, a1 in ((.66, .3, 2.0), (-.66, 1.3, 2.9)):                                           # mudguards
-        bm = bmesh.new(); prev = None
-        for k in range(9):
-            a = a0 + (a1 - a0) * k / 8
-            c = Vector((xw + (R + .04) * cos(a), R + (R + .04) * sin(a), 0))
-            v1 = bm.verts.new(c + Vector((0, 0, .055))); v2 = bm.verts.new(c - Vector((0, 0, .055)))
-            if prev: bm.faces.new((prev[0], prev[1], v2, v1))
-            prev = (v1, v2)
-        o = from_bm(bm, 'guard'); o.modifiers.new('s', 'SOLIDIFY').thickness = .004
-        finish(o, (.5, .5, .5), .3, 0, 0, flag=F_PAINT)
-    finish(tube((-.60, .55, -.06), (-.88, .55, -.06), .006), TRIM, .4, .5, 0)                      # rear rack
-    finish(place_o(rbox(.02, .03, .06, .008), (-.86, .56, 0)), LENS_R, .15, 0, 0)                  # tail lamp
-    finish(tube((-.05, .30, -.10), (-.15, .02, -.32), .012), fr, .45, .4, 0)                        # side stand
-    # lean the whole bike onto its stand
+    R = MB_R; WF, WR = MB_WF, MB_WR
+    _mb_wheel(WF, True); _mb_wheel(WR, False)
+    paint = (.5, .5, .5)
+    # ---- the frame: steering head, backbone, single downtube splitting into a
+    #      cradle under the engine, seat rails and the subframe struts
+    HEAD_T, HEAD_B = Vector((.385, 1.000, 0)), Vector((.430, .860, 0))
+    finish(tube(HEAD_B - (HEAD_T - HEAD_B) * .1, HEAD_T + (HEAD_T - HEAD_B) * .1, .030, 16, 'head'), MB_STEEL, .45, .4, 0)
+    _bent([(.40, .95, 0), (.18, .92, 0), (-.10, .86, 0), (-.18, .70, 0), (-.16, .42, 0)], .024, MB_STEEL)   # backbone + spine
+    _bent([(.42, .89, 0), (.33, .62, 0), (.26, .36, 0)], .024, MB_STEEL)                                   # downtube
+    for sz in (-1, 1):
+        _bent([(.26, .36, 0), (.22, .26, sz * .07), (.06, .21, sz * .08), (-.14, .22, sz * .08), (-.17, .40, sz * .06)],
+              .019, MB_STEEL)                                                                               # cradle
+        _bent([(-.10, .84, sz * .04), (-.40, .80, sz * .085), (-.78, .78, sz * .075)], .016, MB_STEEL)   # seat rail
+        _bent([(-.16, .50, sz * .06), (-.46, .74, sz * .088)], .014, MB_STEEL)                           # strut
+    finish(tube((-.17, .40, -.11), (-.17, .40, .11), .026, 16), MB_STEEL, .4, .4, 0)                    # swingarm pivot
+    # ---- swingarm: rectangular steel each side, the axle adjusters at the end
+    for sz in (-1, 1):
+        a = Vector((-.17, .40, sz * .085)); b = Vector((WR, R, sz * .085)); d = (b - a)
+        sa = rbox(d.length * .5, .022, .012, .006)
+        oriented(sa, (a + b) * .5, d.normalized())
+        finish(sa, MB_STEEL, .45, .35, 0)
+        finish(place_o(box((0, 0, 0), (.035, .020, .006)), (WR + .01, R, sz * .099)), MB_ALU, .35, .7, 0)
+    # ---- twin rear shocks: chrome spring over a black damper, eyes top and bottom
+    for sz in (-1, 1):
+        lo = Vector((WR + .10, R + .06, sz * .105)); hi = Vector((-.46, .77, sz * .100))
+        d = (hi - lo).normalized()
+        finish(tube(lo, hi, .016, 12, 'damp'), (.06, .06, .065), .4, .4, 0)
+        finish(tube(lo + d * .02, lo + d * .10, .024, 14, 'body'), (.08, .08, .09), .4, .4, 0)
+        finish(tube(hi - d * .08, hi - d * .005, .030, 14, 'cap'), CHROME, .2, .95, 0)
+        n = 6
+        for k in range(n):
+            c = lo + (hi - lo) * (.24 + .52 * k / (n - 1))
+            ring = _disc([(-.0045, .030), (.0045, .030)], c, d, 8)
+            finish(ring, CHROME, .2, .95, 0)
+        for e in (lo, hi):
+            _ball(e, .018, (.06, .06, .065), .5, .3, 8, (1, 1, .8))
+    # ---- the fork: chrome stanchions into alloy sliders, two triple clamps
+    fax = (HEAD_T - HEAD_B).normalized()
+    off = .045                                            # fork offset ahead of the head axis
+    nrm = Vector((fax.y, -fax.x, 0))                      # forward, square to the head axis
+    axle = Vector((WF, R, 0))
+    for sz in (-1, 1):
+        top = HEAD_T + nrm * off + fax * .02 + Vector((0, 0, sz * .085))
+        bot = axle + Vector((0, 0, sz * .085))
+        dd = (top - bot); L = dd.length; u = dd.normalized()
+        finish(tube(bot - u * .02, bot + u * L * .45, .027, 16, 'slider'), MB_ALU, .35, .75, 0)
+        finish(tube(bot + u * L * .45, top + u * .02, .0185, 16, 'stanch'), CHROME, .15, .95, 0)
+        finish(tube(bot + u * L * .42, bot + u * L * .46, .0295, 16, 'seal'), (.05, .05, .055), .6, 0, 0)
+        _ball(bot, .028, MB_ALU, .35, .75, 8)
+    for t_, h in ((HEAD_T + fax * .02, .020), (HEAD_B - fax * .01, .024)):
+        tc = rbox(.040, h * .5, .120, .012)
+        oriented(tc, t_ + nrm * .025, nrm, up=fax)
+        finish(tc, MB_ALU if h < .022 else MB_DARK, .35, .7, 0)
+    # ---- front mudguard: a chrome blade on two stays
+    bm = bmesh.new(); prev = None
+    for k in range(13):
+        a = .25 + (2.25 - .25) * k / 12
+        c = Vector((WF + (R + .035) * cos(a), R + (R + .035) * sin(a), 0))
+        n_ = Vector((cos(a), sin(a), 0))
+        row = [bm.verts.new(c + Vector((0, 0, w)) - n_ * (.012 * (1 - (w / .062) ** 2))) for w in (-.062, -.031, 0, .031, .062)]
+        if prev:
+            for i in range(4): bm.faces.new((prev[i], prev[i + 1], row[i + 1], row[i]))
+        prev = row
+    o = from_bm(bm, 'fguard'); o.modifiers.new('s', 'SOLIDIFY').thickness = .003
+    finish(o, paint, .25, .1, 0, flag=F_PAINT)
+    for sz in (-1, 1):
+        _bent([(WF - .06, R + .02, sz * .086), (WF - .02, R + .30, sz * .062)], .005, CHROME, .2, .95, 6)
+    # ---- the tank: a teardrop, knee recesses, a chrome filler cap and badges
+    tank = superloft([(.36, .945, .055, .040, 2.2), (.32, .955, .105, .070, 2.6), (.22, .960, .135, .092, 2.8),
+                      (.10, .955, .138, .096, 2.8), (-.02, .935, .118, .088, 2.6), (-.10, .905, .085, .068, 2.4),
+                      (-.13, .890, .050, .040, 2.2)], 16, 'tank', 1)
+    finish(tank, paint, .22, .15, 0, flag=F_PAINT)
+    finish(_disc([(0, .034), (.008, .030), (.012, .022)], (.12, 1.048, 0), (0, 1, 0), 12), CHROME, .2, .95, 0)
+    for sz in (-1, 1):
+        kp = superloft([(.02, .90, .006, .032, 3), (-.03, .895, .006, .036, 3), (-.09, .88, .006, .030, 3)], 12, 'knee', 1)
+        place_o(kp, (0, 0, sz * .108))
+        finish(kp, (.05, .05, .055), .8, 0, 0)
+        bd = rbox(.045, .014, .003, .004); place_o(bd, (.20, .955, sz * .136), (0, -sz * .15, 0))
+        finish(bd, CHROME, .2, .95, 0)
+    # ---- the seat: stitched bench, piping, grab rail
+    seat = superloft([(-.10, .925, .060, .030, 3), (-.16, .935, .125, .040, 3.4), (-.34, .915, .140, .040, 3.6),
+                      (-.56, .905, .132, .036, 3.4), (-.70, .900, .100, .030, 3), (-.74, .895, .060, .022, 2.6)],
+                     16, 'seat', 1)
+    finish(seat, (.045, .045, .05), .75, 0, 0)
+    for xs in (-.24, -.40, -.56):
+        rib = superloft([(xs + .006, .938, .128, .032, 3.4), (xs - .006, .938, .128, .032, 3.4)], 18, 'rib', 0)
+        finish(rib, (.03, .03, .033), .85, 0, 0)
+    _bent([(-.50, .87, .120), (-.70, .88, .118), (-.79, .88, .07), (-.80, .88, 0), (-.79, .88, -.07),
+           (-.70, .88, -.118), (-.50, .87, -.120)], .011, CHROME, .2, .95, 10)
+    # ---- side panels under the seat (paint), the battery box between them
+    for sz in (-1, 1):
+        sp = prof_front([(-.15, .80), (-.21, .69), (-.37, .67), (-.43, .76), (-.40, .855), (-.17, .865)],
+                        sz * .108 - .007, sz * .108 + .007, 'side')
+        finish(sp, paint, .25, .1, .006, 1, flag=F_PAINT)
+        finish(_disc([(0, .016), (.003, .013)], (-.29, .77, sz * .115), (0, 0, sz), 16), CHROME, .2, .95, 0)
+    finish(place_o(rbox(.11, .09, .075, .012), (-.30, .74, 0)), (.08, .08, .085), .6, 0, 0)          # battery / airbox
+    # ---- the engine: crankcases, the finned barrel and head leaning forward,
+    #      covers either side, the carburettor behind the barrel
+    cc = prof_front([(-.14, .28), (.10, .25), (.22, .30), (.24, .42), (.16, .52), (.02, .56), (-.12, .52), (-.17, .42)],
+                    -.110, .110, 'case')
+    finish(cc, (.52, .52, .54), .4, .6, .008, 2)
+    finish(_disc([(0, .105), (.020, .102), (.034, .090), (.040, .060)], (.04, .40, .110), (0, 0, 1), 12), (.60, .60, .62), .3, .75, 0)   # clutch cover
+    finish(_disc([(0, .085), (.022, .082), (.032, .060)], (-.04, .40, -.110), (0, 0, -1), 12), (.60, .60, .62), .3, .75, 0)  # alternator cover
+    finish(_disc([(0, .030), (.006, .026)], (.04, .40, .150), (0, 0, 1), 12), (.30, .30, .32), .3, .8, 0)
+    cax = Vector((.30, 1.0, 0)).normalized()             # the cylinder leans 17 degrees forward
+    c0 = Vector((.14, .52, 0))
+    finish(tube(c0 - cax * .02, c0 + cax * .20, .052, 20, 'barrel'), (.20, .20, .21), .5, .5, 0)
+    for k in range(9):
+        c = c0 + cax * (.025 + .019 * k)
+        f = box((0, 0, 0), (.082 if k < 6 else .090, .0035, .078 if k < 6 else .086))
+        oriented(f, c, Vector((cax.y, -cax.x, 0)), up=cax)
+        finish(f, (.24, .24, .25) if k < 6 else (.50, .50, .52), .5, .5 if k < 6 else .65, 0)
+    rk = rbox(.075, .030, .062, .016); oriented(rk, c0 + cax * .215, Vector((cax.y, -cax.x, 0)), up=cax)
+    finish(rk, (.55, .55, .57), .3, .7, 0)                                                            # rocker cover
+    finish(tube(c0 + cax * .14 + Vector((-.06, 0, 0)), (-.10, .64, 0), .022, 12), (.12, .12, .13), .5, .3, 0)   # inlet
+    carb = rbox(.035, .030, .032, .008); place_o(carb, (-.08, .63, .01))
+    finish(carb, (.55, .55, .57), .35, .65, 0)
+    finish(tube((-.11, .63, .01), (-.20, .66, .03), .030, 14), (.07, .07, .075), .7, 0, 0)        # intake boot
+    finish(tube((.18, .74, .02), (.18, .78, .055), .006, 6), (.05, .05, .05), .6, 0, 0)            # plug lead
+    # ---- exhaust: header off the front of the head, down and back on the right
+    ex0 = c0 + cax * .10 + Vector((.06, 0, .02))
+    _bent([ex0, (.29, .52, .05), (.30, .32, .09), (.20, .22, .125), (-.10, .23, .14), (-.26, .28, .145)],
+          .019, CHROME, .18, .95, 10)
+    m0, m1 = Vector((-.24, .275, .145)), Vector((-.82, .43, .145))
+    md = (m1 - m0).normalized()
+    sil = _disc([(0, .022), (.04, .044), (.10, .050), (.50, .050), (.56, .046), (.60, .040)], m0, md, 12)
+    finish(sil, CHROME, .18, .95, 0)
+    finish(_disc([(.598, .032), (.608, .030), (.612, .014), (.65, .014)], m0, md, 12), (.18, .18, .19), .4, .7, 0)
+    hs = _disc([(.14, .057), (.40, .057)], m0, md, 12)
+    finish(hs, (.06, .06, .065), .6, .3, 0)                                                         # heat shield
+    # ---- chain and sprockets on the left
+    fs, rs = Vector((-.02, .33, -.095)), Vector((WR, R, -.095))
+    finish(_disc([(-.004, .045), (.004, .045)], fs, (0, 0, -1), 10), (.30, .30, .32), .45, .8, 0)
+    finish(_disc([(-.004, .110), (.004, .110), (.004, .060)], rs, (0, 0, -1), 12), (.38, .38, .40), .45, .8, 0)
+    for sg in (1, -1):
+        a = fs + Vector((0, sg * .048, 0)); b = rs + Vector((0, sg * .113, 0))
+        finish(tube(a, b, .0065, 6, 'chain'), (.12, .11, .10), .6, .6, 0)
+    cg = rbox(((rs - fs).length) * .5 - .03, .006, .030, .004)
+    oriented(cg, (fs + rs) * .5 + Vector((0, .145, -.012)), (rs - fs).normalized())
+    finish(cg, (.05, .05, .055), .5, .2, 0)                                                         # chain guard
+    # ---- footrests, kick-start, gear and brake levers
+    for sz in (-1, 1):
+        finish(tube((-.06, .30, sz * .13), (-.06, .30, sz * .23), .016, 10), P_RUBBER, .9, 0, 0)
+        finish(tube((-.06, .30, sz * .10), (-.06, .30, sz * .13), .009, 8), MB_STEEL, .4, .5, 0)
+        finish(tube((-.40, .44, sz * .14), (-.40, .44, sz * .21), .011, 8), P_RUBBER, .9, 0, 0)   # pillion pegs
+    _bent([(-.10, .44, .155), (-.22, .38, .17), (-.24, .30, .18)], .009, CHROME, .25, .9, 8)       # kick-start
+    _bent([(.02, .37, -.13), (.06, .31, -.17), (.12, .31, -.17)], .007, MB_STEEL, .4, .5, 8)       # gear lever
+    _bent([(-.02, .30, .12), (.12, .29, .14), (.16, .30, .15)], .007, MB_STEEL, .4, .5, 8)         # brake pedal
+    # ---- headlamp, clocks, handlebar, levers, mirrors, indicators
+    hl_c = Vector((.505, .915, 0))
+    finish(_disc([(-.070, .040), (-.050, .072), (-.010, .086), (0, .086)], hl_c, (1, 0, 0), 18), (.06, .06, .065), .4, .3, 0)
+    finish(_disc([(0, .088), (.010, .088), (.016, .082)], hl_c, (1, 0, 0), 18), CHROME, .15, .95, 0)
+    finish(_disc([(.002, .078), (.012, .076), (.016, .060), (.018, .0)], hl_c, (1, 0, 0), 18), LENS_W, .06, 0, 0)
+    for sz in (-1, 1):
+        finish(tube(hl_c + Vector((-.03, 0, sz * .085)), hl_c + Vector((-.06, 0, sz * .092)), .008, 8), MB_STEEL, .4, .5, 0)
+    for sz in (-1, 1):                                                                              # twin clocks
+        cl = Vector((.395, 1.055, sz * .052))
+        cn = Vector((-.35, 1.0, 0)).normalized()
+        finish(_disc([(-.040, .030), (-.010, .040), (0, .040)], cl, cn, 12), (.05, .05, .055), .5, .2, 0)
+        finish(_disc([(0, .041), (.005, .041), (.008, .036)], cl, cn, 12), CHROME, .15, .95, 0)
+        finish(_disc([(.001, .035), (.004, .0)], cl, cn, 12), (.85, .85, .80), .2, 0, 0)
+    bar = [(.40, 1.035, -.10), (.38, 1.08, -.20), (.31, 1.10, -.28), (.27, 1.095, -.33)]
+    _bent([(x, y, -z) for x, y, z in bar[::-1]] + bar, .0115, CHROME, .18, .95, 10)
+    for sz in (-1, 1):
+        g0 = Vector((.31, 1.10, sz * .28)); g1 = Vector((.255, 1.092, sz * .385))
+        finish(tube(g0 + (g1 - g0) * .30, g1, .0175, 14), P_RUBBER, .9, 0, 0)                      # grips
+        finish(_disc([(0, .018), (.008, .015)], g1, g1 - g0, 12), (.06, .06, .06), .6, 0, 0)
+        pc = rbox(.026, .022, .024, .008); place_o(pc, g0 + Vector((0, 0, sz * .005)))
+        finish(pc, (.06, .06, .065), .5, .2, 0)                                                       # switchgear
+        lv0 = g0 + Vector((.03, -.005, 0)); lv1 = g1 + Vector((.065, -.012, sz * .010))
+        _bent([lv0, lv0 + Vector((.035, 0, 0)), lv1], .0055, MB_ALU, .3, .8, 8)                    # levers
+        st0 = Vector((.33, 1.11, sz * .225)); st1 = Vector((.30, 1.235, sz * .285))
+        _bent([st0, st0 + Vector((0, .07, sz * .01)), st1], .0055, CHROME, .2, .95, 8)             # mirror stalks
+        mh = _disc([(-.006, .050), (.010, .052), (.024, .040)], st1 + Vector((.010, 0, 0)), (1, 0, 0), 10)
+        for v in mh.data.vertices:                                                                  # oval head
+            v.co.z = st1.z + (v.co.z - st1.z) * 1.25; v.co.y = st1.y + (v.co.y - st1.y) * .82
+        finish(mh, (.05, .05, .055), .45, .3, 0)
+        mg = _disc([(-.007, .046), (-.006, .0)], st1 + Vector((.010, 0, 0)), (1, 0, 0), 10)
+        for v in mg.data.vertices:
+            v.co.z = st1.z + (v.co.z - st1.z) * 1.25; v.co.y = st1.y + (v.co.y - st1.y) * .82
+        finish(mg, (.55, .60, .64), .05, .9, 0)
+        for (ix, iy, iz, dx_) in ((.47, .925, sz * .135, 1), (-.80, .78, sz * .110, -1)):           # indicators
+            finish(tube((ix - dx_ * .045, iy, iz * .80), (ix, iy, iz), .006, 8), (.06, .06, .065), .5, .2, 0)
+            finish(_disc([(-.030, .020), (-.006, .024), (.008, .018), (.014, .0)], (ix, iy, iz), (dx_, 0, 0), 8),
+                   LENS_A, .1, 0, 0)
+    # ---- rear mudguard, tail lamp, number plate
+    bm = bmesh.new(); prev = None
+    for k in range(11):
+        a = .55 + (1.95 - .55) * k / 10
+        c = Vector((WR + (R + .045) * cos(a), R + (R + .045) * sin(a), 0))
+        n_ = Vector((cos(a), sin(a), 0))
+        row = [bm.verts.new(c + Vector((0, 0, w)) - n_ * (.014 * (1 - (w / .070) ** 2))) for w in (-.070, -.035, 0, .035, .070)]
+        if prev:
+            for i in range(4): bm.faces.new((prev[i], prev[i + 1], row[i + 1], row[i]))
+        prev = row
+    o = from_bm(bm, 'rguard'); o.modifiers.new('s', 'SOLIDIFY').thickness = .003
+    finish(o, paint, .25, .1, 0, flag=F_PAINT)
+    tl = rbox(.030, .028, .055, .012); place_o(tl, (-.86, .73, 0))
+    finish(tl, (.06, .06, .065), .5, .2, 0)
+    finish(place_o(rbox(.006, .022, .046, .008), (-.892, .735, 0)), LENS_R, .1, 0, 0)
+    pl = place_o(box((0, 0, 0), (.004, .060, .088)), (-.90, .615, 0), (0, 0, -.25))
+    finish(pl, PLATE, .5, 0, 0)
+    finish(place_o(box((0, 0, 0), (.003, .066, .094)), (-.896, .614, 0), (0, 0, -.25)), (.05, .05, .055), .5, .2, 0)
+    finish(tube((-.86, .70, 0), (-.89, .67, 0), .008, 8), (.06, .06, .065), .5, .2, 0)
+    # ---- the side stand, down on the left
+    _bent([(-.08, .25, -.09), (-.10, .14, -.16), (-.14, .015, -.245)], .011, MB_STEEL, .45, .4, 8)
+    finish(place_o(rbox(.030, .006, .022, .004), (-.145, .006, -.250)), MB_STEEL, .45, .4, 0)
+    # lean the whole bike onto its stand (rolled about the ground line). The
+    # mode reset matters: tube() leaves its bars in QUATERNION mode, where an
+    # euler rotation is silently ignored and the frame stayed bolt upright
+    # inside a leaning body.
     for o in list(bpy.context.collection.objects):
-        o.rotation_euler = (math.radians(-9), 0, 0)
+        o.rotation_mode = 'XYZ'
+        o.rotation_euler = (math.radians(-8), 0, 0)
         bpy.context.view_layer.objects.active = o; o.select_set(True)
         bpy.ops.object.transform_apply(rotation=True); o.select_set(False)
 
@@ -1807,6 +2037,93 @@ def truck_cab():
     for k in range(2):
         finish(tube((4.0 + k * .3, 3.30, .35), (4.4 + k * .3, 3.30, .35), .04, 10), CHR, .2, .95, 0)
 
+# ---------------------------------------------------------------- the drop-leg holster
+# Worn on the figure, not placed in the world: drawn by code/figure/draw.c in
+# the PISTOL'S OWN FRAME (x across the slide, y up = the slide's top, z forward
+# = the muzzle; metres), around the standard pistol's measured box
+# x +-0.020, y -0.112..0.036, z -0.054..0.153, and stretched per axis to the
+# box of whichever pistol is carried. +x is the side against the thigh.
+# A molded polymer duty holster: the shell is deep where it closes over the
+# trigger guard and STEPS to a slim sheath over the slide and dust cover down
+# to a rounded toe; a raised lip round the mouth (which stops ahead of the
+# grip, so the whole grip stands clear); a rotating hood over the back of the
+# slide on pivot hubs; a thigh platform behind it all, screwed to the shell.
+# Colour flags 8/9 take the wearer's webbing / kit colours (g_md_slots), the
+# part's red channel being its brightness against them.
+HOL_W = .033                                  # shell half-thickness
+
+def _hol_side(pts, x0, x1, b, seg, col, rough, flag, name):
+    o = prof(pts, x0, x1, name)
+    return finish(o, col, rough, 0.0, b, seg, flag=flag)
+
+def holster():
+    clear()
+    shell = [(.010, -.074), (.008, .000), (-.004, .052),      # the mouth, slanting back at the top
+             (.150, .052), (.166, .046), (.176, .028), (.178, .000),   # top edge to the rounded toe
+             (.172, -.030), (.160, -.042), (.100, -.046),     # the slide sheath's underside
+             (.088, -.054), (.076, -.066), (.064, -.072),     # the STEP up from the trigger guard
+             (.030, -.074)]
+    _hol_side(shell, -HOL_W, HOL_W, .010, 2, (1.0, 1.0, 1.0), .42, 9, 'shell')
+    # a raised molded rib down the outer face over the trigger guard: the read
+    # that this shell was formed ROUND a gun
+    rib = [(.016, -.060), (.016, .020), (.044, .030), (.058, -.040), (.044, -.062)]
+    _hol_side(rib, -HOL_W - .004, -HOL_W + .006, 0, 1, (.92, .92, .92), .45, 9, 'rib')
+    # the mouth's lip: a band a few millimetres proud of the shell
+    lip = [(.014, -.074), (.012, .000), (.000, .056), (-.010, .056), (.000, .000), (.002, -.074)]
+    _hol_side(lip, -HOL_W - .003, HOL_W + .003, 0, 1, (.80, .80, .80), .50, 9, 'lip')
+    # THE HOOD: a U over the slide just behind the mouth, its legs down both
+    # faces to the pivot hubs
+    U = [(-.039, -.012), (-.039, .052), (-.027, .066), (.027, .066), (.039, .052), (.039, -.012),
+         (.031, -.012), (.031, .048), (.023, .057), (-.023, .057), (-.031, .048), (-.031, -.012)]
+    hood = prof_front(U, -.054, -.034, 'hood')
+    finish(hood, (.70, .70, .70), .40, 0.0, .005, 1, flag=9)
+    # ...joined to the shell by a strap along each side of the slide
+    for sx in (-1, 1):
+        st = box((sx * .035, .024, -.020), (.0035, .030, .016), 'hstrap')
+        finish(st, (.70, .70, .70), .40, 0.0, 0, 1, flag=9)
+    top = box((0, .060, -.020), (.0385, .0055, .016), 'htop')       # ...and over the slide's top
+    finish(top, (.70, .70, .70), .40, 0.0, 0, 1, flag=9)
+    for sx in (-1, 1):
+        hub = _disc([(0, .011), (.006, .011), (.008, .007)], (sx * .038, -.012, -.044), (sx, 0, 0), 12)
+        finish(hub, (.60, .60, .60), .40, 0.0, 0, 2, flag=9)
+    # the release tab on the outer face, under the thumb
+    tab = prof([(.000, .006), (.022, .010), (.024, .022), (.002, .020)], -HOL_W - .006, -HOL_W + .002, 'tab')
+    finish(tab, (.62, .62, .62), .45, 0.0, 0, 1, flag=9)
+    # THE PLATFORM against the thigh: taller than the holster (its top runs up
+    # toward the belt hanger), rounded, a hair thinner than a finger
+    plat = [(-.080, -.058), (-.092, -.040), (-.092, .058), (-.080, .072), (.150, .072),
+            (.170, .056), (.170, -.044), (.150, -.060)]
+    _hol_side(plat, HOL_W - .004, HOL_W + .008, .006, 2, (.82, .82, .82), .70, 9, 'plat')
+    # two strap slots across it (the leg straps' webbing runs through them)
+    for zc in (.002, .118):
+        sl = box((HOL_W + .0085, .007, zc), (.0012, .055, .012), 'slot')
+        finish(sl, (1.0, 1.0, 1.0), .85, 0.0, 0, 1, flag=8)
+    # the screws that hold shell to platform, through the outer face
+    for zc, yc in ((.034, .036), (.130, .034), (.120, -.030), (.026, -.050)):
+        sc = _disc([(0, .0055), (.0020, .0050), (.0026, .0030)], (-HOL_W - .0005, yc, zc), (-1, 0, 0), 8)
+        finish(sc, (.30, .30, .32), .35, .9, 0, 1)
+    _hol_clean()
+
+def _hol_clean():
+    """Bake every modifier, then collapse anything under 0.1 mm. The game
+    stores a vertex to ~0.03 mm, and a bevel's corner slivers on a thin part
+    land on one grid point: zero-area triangles the figure check counts as
+    degenerate. Collapsing (rather than dropping) them keeps the mesh closed."""
+    for o in list(bpy.context.collection.objects):
+        if 'col' not in o or o.type != 'MESH': continue
+        bpy.context.view_layer.objects.active = o; o.select_set(True)
+        for m in list(o.modifiers):
+            bpy.ops.object.modifier_apply(modifier=m.name)
+        o.select_set(False)
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        for _ in range(3):
+            bmesh.ops.dissolve_degenerate(bm, dist=1.0e-4, edges=bm.edges[:])
+        bmesh.ops.triangulate(bm, faces=bm.faces[:])
+        bad = [f for f in bm.faces if f.calc_area() < 2.0e-9]
+        if bad: bmesh.ops.dissolve_degenerate(bm, dist=2.0e-4, edges=bm.edges[:])
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(o.data); bm.free()
+
 PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5), (pickup, 'PROP_PICKUP', 8.0, .5),
                (dumpster, 'PROP_DUMPSTER', 4.0, .3), (motorbike, 'PROP_MOTO', 4.0, .2),
                (ac_unit, 'PROP_AC', 2.0, .15), (sat_dish, 'PROP_DISH', 2.0, .15),
@@ -1817,4 +2134,5 @@ PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5
                (bench, 'PROP_BENCH', 2.0, .15), (elec_cabinet, 'PROP_ELEC', 2.0, .15),
                (supply_med, 'PROP_SUP_MED', 4.0, .15), (supply_med_item, 'PROP_SUP_MED_I', 2.0, .10),
                (supply_ammo, 'PROP_SUP_AMMO', 4.0, .15), (supply_ammo_item, 'PROP_SUP_AMMO_I', 2.0, .08),
-               (helicopter, 'PROP_HELI', 16.0, .5), (truck_cab, 'PROP_TRUCK', 8.0, .4)]
+               (helicopter, 'PROP_HELI', 16.0, .5), (truck_cab, 'PROP_TRUCK', 8.0, .4),
+               (holster, 'FIG_HOLSTER', 1.0, .02)]
