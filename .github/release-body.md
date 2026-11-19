@@ -5,7 +5,7 @@ BlindDrop is an arena FPS in one C program. No engine and nothing to install: ma
 - **Rebuilt guns:** all 34 have new shaped bodies modelled on reference photos. The MAC-10, Tec-9, MP7 and P90 have their own grips and hand poses. The stock and butt pad stay on during reloads, and parts of the AK-47 that were only on one side are now on both.
 - **Foundry, rebuilt:** new architecture, gates and back doors out of the main yard into the works, and stairs up to some of the big roofs.
 - **Cleaner maps:** Citadel plays under a clear afternoon sky and Refinery on a crisp morning, with the brown haze gone; the other maps are tidied up too.
-- **A forearm status screen:** your gauntlet shows health (green, then amber, then red), your magazine and your grenades as shapes, and flashes red when you're hit. Change the layout with `wrist_style` in `config.cfg`.
+- **A forearm status screen:** your gauntlet shows health (green, then amber, then red), your magazine and your grenades as shapes, and flashes red when you're hit. Pick its layout under Armory > Gear > Wrist.
 
 0.8.5 plays with 0.8 to 0.8.2 (same network protocol, 22).
 

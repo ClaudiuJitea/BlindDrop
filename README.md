@@ -28,8 +28,8 @@
 - **Cleaner maps:** Citadel now plays under a clear afternoon sky and Refinery on a crisp morning,
   with the brown haze gone, and the other maps are tidied up too.
 - **A forearm status screen:** your gauntlet shows health (green, then amber, then red), your
-  magazine and your grenades as shapes rather than numbers, and flashes red when you're hit. You can
-  change the layout with `wrist_style` in `config.cfg`.
+  magazine and your grenades as shapes rather than numbers, and flashes red when you're hit. Pick its
+  layout under **Armory > Gear > Wrist**.
 
 0.8.5 plays with 0.8 to 0.8.2 (same network protocol, 22).
 
