@@ -184,7 +184,13 @@ n="$(run "bots 0; warp 0 0 -10; fire 0 0 -10; wait 200" | grep -c '^hit ')"
 # +19 +19 +16 +16 with the BLENDER HOLSTER and the shifted seat (2026-11-17),
 # see WANT_CROSS.
 # 0 0 -1 0 with the TUCKED CROTCH (2026-11-17, see WANT_CROSS).
-WANT_NEAR="55 55 60 52"
+# +4 +4 +4 0 with the WRISTS IN THE WEAPON'S FRAME (2026-11-20, see
+# WANT_CROSS): by `figv` class at DIST 0 the new pairs are all gun/hand
+# (2 -> 212 tri pairs) and hand/farm (0 -> 5) — the hands now CLOSE on the
+# grip and fore-end in the carry instead of being slid off them by fig_hand's
+# clamp, and a seated palm bites the tube by design. Every other class is
+# byte-identical; zfight 0 on every tier.
+WANT_NEAR="59 59 64 52"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -473,7 +479,21 @@ WANT_NEAR="55 55 60 52"
 # pelvis node and a quarter slimmer, inside the seat panels and the thighs, so
 # fewer surfaces cross it. open/flip/zfight/degen 0 at every tier for the
 # operator and the insurgents.
-WANT_CROSS="260 260 172 140"
+# -3 -3 +3 -1 with WEAPON INERTIA + IDLE DRIFT (2026-11-20, skeleton.c glag/
+# grot): the third-person rifle now trails the body's acceleration and turns
+# and wanders a degree or so at rest, so the arms' IK lands a few mm elsewhere
+# and the 60-tick maximum picks different grip/arm pairs. Pose only, no
+# geometry: open/flip/zfight/degen 0 at every tier, `near` unchanged, figbury
+# LESS buried (AR deepest 8.5 -> 6.5 mm, SR 1.1 -> 0.0).
+# -15 -15 -7 -4 with the WRISTS IN THE WEAPON'S FRAME (2026-11-20,
+# skel_solve wriR/wriL): the wrist targets were offsets along world-up, so a
+# lowered carry put the trigger wrist nearly on the grip's axis (38/43 mm
+# against the tuned 100/75) and the support wrist ON TOP of the handguard;
+# fig_hand then wrapped both hands from the wrong bearing. Held in (bore,
+# gun-up, gun-right) the grips stay seated at every attitude and fewer
+# glove/gun/forearm surfaces cross. open/flip/zfight/degen 0, `near` unchanged,
+# figbury unchanged (AR 6.5 mm, SR 0.0).
+WANT_CROSS="242 242 168 135"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

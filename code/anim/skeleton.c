@@ -328,6 +328,18 @@ typedef struct {
   float   yaw_vel;           // smoothed aim-yaw rate — the head leads a turn
   float   vy;                // smoothed vertical velocity — stages the air pose
   v3      ant_p, ant_v;      // antenna follower: offset + velocity (2nd order)
+  // WEAPON INERTIA. A rifle is 3.5 kg on the end of two arms, and the hold used
+  // to be welded to the chest: a sidestep, a stop or a turn moved the weapon on
+  // the same tick and by the same amount as the trunk, so the hands read as
+  // bolted to a rig. `glag` is a 2nd-order follower (body frame: x right,
+  // y up, z forward, metres) driven by the body's acceleration; `grot` is the
+  // muzzle's angular lag (x yaw, y pitch, rad) driven by the aim's rate. Both
+  // spring back with a little overshoot, so a stop has a settle in it.
+  v3      glag, glag_v;
+  v3      grot, grot_v;
+  float   pitch_prev;        // last tick's aim pitch, for the rate estimate
+  int     glag_on;           // histories primed (first tick measures nothing)
+  float   ready_lin;         // linear driver of ready_s (see the smooth01 note)
   float   yaw_prev;          // last tick's aim yaw for the rate estimate
   float   ads_s;             // eased shouldered-weapon blend, 0 = hip, 1 = aimed
   float   ready_s;           // eased carry state: 1 = stock in the shoulder,
@@ -1321,6 +1333,33 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // see of a distant enemy, and a perfectly rigid one reads as scenery.
   gun_o = v3_add(gun_o, v3_add(v3_scale(U, sinf(a->idle_t * 1.60f) * 0.0045f * still),
                                v3_scale(Rc, sinf(a->idle_t * 0.92f) * 0.0035f * still)));
+  // ...AND THE HANDS ARE NEVER STILL. One sine per axis is a metronome — the eye
+  // finds the period in two cycles and the figure turns into a machine idling.
+  // Incommensurate periods (no common beat inside a minute) on a few mm of
+  // position and under a degree of muzzle drift: the small, constant
+  // correction of a man holding a weight on a point. Smaller once shouldered —
+  // a braced rifle wanders less than a carried one.
+  {
+    float t = a->idle_t, lk = still * (1.0f - 0.5f * a->ads_s);
+    float dyaw = (sinf(t * 0.37f + 0.8f) * 0.0130f + sinf(t * 0.83f + 2.1f) * 0.0070f +
+                  sinf(t * 2.30f) * 0.0018f) * lk;
+    float dpit = (sinf(t * 1.60f + 0.6f) * 0.0110f + sinf(t * 0.29f + 1.7f) * 0.0080f +
+                  sinf(t * 2.70f + 0.3f) * 0.0015f) * lk;
+    gun_o = v3_add(gun_o, v3_add(v3_scale(gd, (sinf(t * 0.47f + 1.1f) * 0.004f) * lk),
+                                 v3_scale(U, sinf(t * 0.61f + 2.4f) * 0.003f * lk)));
+    // The inertia follower from anim_tick, in the body's own frame.
+    v3 Fh = {{sinf(yaw), 0.0f, -cosf(yaw)}};
+    v3 Rh = {{cosf(yaw), 0.0f, sinf(yaw)}};
+    gun_o = v3_add(gun_o, v3_add(v3_scale(Rh, a->glag.x),
+                                 v3_add(v3_scale(U, a->glag.y), v3_scale(Fh, a->glag.z))));
+    dyaw += a->grot.x;
+    dpit += a->grot.y;
+    v3 gr_ = v3_cross(gd, U);
+    if (v3_dot(gr_, gr_) > 1e-6f) {
+      gd = v3_norm(v3_rot_axis(gd, U, dyaw));
+      gd = v3_norm(v3_rot_axis(gd, v3_norm(v3_cross(gd, U)), dpit));
+    }
+  }
   // Wrist targets track the WEAPON's own stations, not the anchor plane: the
   // bore is ~0.10 below gun_o and the grip another 0.05 under that, so a
   // trigger wrist at -0.050 U hovered 10 cm above the grip and the support
@@ -1339,8 +1378,22 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // wrist=25.3 clamp=1 on every frame, in this tree and in HEAD. -0.100/-0.075
   // reads wrist=56.1 clamp=0, with the guard bound going +2.6 -> +4.9 and the
   // firing elbow still at 80 degrees over 375 mm of a 580 mm arm.
+  // ...AND IN THE WEAPON'S OWN FRAME, NOT THE BODY'S. These offsets used to be
+  // along the world-up U and the body's Rc, which is only the weapon's frame
+  // while the bore is level. Tipped into the low-ready carry (34 deg) and then
+  // further by a downward look (to ~60 deg muzzle-down), the same -0.075 U
+  // became mostly ALONG the bore: measured, the trigger wrist went from
+  // 96 mm behind / 75 mm under the grip anchor at the ready to 38 / 43 in the
+  // carry, i.e. nearly onto the grip's own axis. fig_hand wraps the fingers
+  // round from the wrist's bearing on that axis, so the bearing went arbitrary
+  // and the hand turned over — palm out to the camera, the back of the hand on
+  // the grip. Expressed in (bore, gun-up, gun-right) the hold is the same hold
+  // whatever the rifle's attitude, which is what a hand on a grip is.
+  v3 gwr = v3_cross(gd, U);
+  gwr = v3_dot(gwr, gwr) > 1e-6f ? v3_norm(gwr) : Rc;
+  v3 gwu = v3_norm(v3_cross(gwr, gd));
   v3 wriR = v3_add(gun_o, v3_add(v3_scale(gd, -0.100f),
-             v3_add(v3_scale(U, -0.075f), v3_scale(Rc, 0.012f))));
+             v3_add(v3_scale(gwu, -0.075f), v3_scale(gwr, 0.012f))));
   // In the CARRY the support hand slides BACK to the magwell end of the
   // guard: with the muzzle rotated 34 degrees down, the far fore-end station
   // sits ~0.76 m from the weak shoulder against a 0.58 m arm — the IK then
@@ -1356,9 +1409,12 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // read from across the arena. 96% of the arm was not enough: near full
   // extension the IK's pole vector has almost no authority, so widening the pole
   // did nothing at all until the reach came down to about 92%.
+  // Same frame for the support hand: UNDER the fore-end in every attitude.
+  // Along world-up it rose ABOVE the bore in the carry (13 mm over it,
+  // measured) — a palm laid on top of the handguard, back of the hand down.
   v3 wriL = v3_add(gun_o, v3_add(v3_scale(gd, 0.170f + 0.030f * rl),
-             v3_add(v3_scale(U, -0.040f + 0.050f * rl),
-                    v3_scale(Rc, -0.020f))));
+             v3_add(v3_scale(gwu, -0.038f),
+                    v3_scale(gwr, -0.020f))));
   if (a->slide_s > 0.001f) {
     // Off hand braces ON THE GROUND behind the hip — that contact is most of what
     // sells a slide. Aim at the floor and clamp to arm's length rather than at a
@@ -1560,9 +1616,14 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
   a->ads_s += (ads - a->ads_s) * ease_k(14.0f);
   // Carry state: the raise snaps (~110 ms — a shot must never leave a lowered
   // rifle for long), the lower is deliberate (~0.7 s after the fight ends).
+  // Shaped with smooth01 for the reason the pose blends below are: a raw
+  // exponential is at full speed on its first tick, so the rifle SNAPPED out of
+  // the carry and began its lower at a jolt — the robotic beat. The linear
+  // drivers are a little faster to keep the same overall raise/lower times.
   {
     float want = (ready || ads > 0.05f) ? 1.0f : 0.0f;
-    a->ready_s += (want - a->ready_s) * ease_k(want > 0.5f ? 20.0f : 4.5f);
+    a->ready_lin += (want - a->ready_lin) * ease_k(want > 0.5f ? 24.0f : 5.0f);
+    a->ready_s = smooth01(a->ready_lin);
   }
 
   // Smoothed motion signals; the raw-vs-smoothed velocity gap drives lean.
@@ -2284,6 +2345,39 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
     a->ant_p = v3_add(a->ant_p, v3_scale(a->ant_v, TICK_DT));
     float m = v3_len(a->ant_p);
     if (m > 0.11f) a->ant_p = v3_scale(a->ant_p, 0.11f / m);
+  }
+  {
+    // WEAPON INERTIA (see anim_t.glag). The arms are IK'd to the weapon, so
+    // everything the hands do follows from this for free. 2.4 Hz at zeta 0.55:
+    // a soft follow with one small overshoot, which is what a held weight does.
+    // Purely presentational — the shot leaves the eye, not this muzzle.
+    float pr = a->glag_on ? wrap_pi(pitch - a->pitch_prev) / TICK_DT : 0.0f;
+    a->pitch_prev = pitch;
+    if (!a->glag_on) { a->glag_on = 1; a->glag = a->glag_v = a->grot = a->grot_v = (v3){{0, 0, 0}}; }
+    float gfx = sinf(yaw), gfz = -cosf(yaw), grx = cosf(yaw), grz = sinf(yaw);
+    v3 acc = v3_scale(dv, kv / TICK_DT);           // the smoothed body's accel
+    float sm = 1.0f - 0.7f * a->slide_s;           // the slide carries its own
+    v3 tgt = {{-f_clamp((acc.x * grx + acc.z * grz) * 0.0022f, -0.035f, 0.035f) * sm,
+               -f_clamp((vel.y - a->vy) * 0.010f, -0.020f, 0.020f),
+               -f_clamp((acc.x * gfx + acc.z * gfz) * 0.0016f, -0.030f, 0.030f) * sm}};
+    // The muzzle trails the turn (+ about U swings it LEFT, against a right
+    // turn, which is + yaw_vel): yaw_vel is already smoothed; a 5 rad/s flick
+    // leaves the muzzle ~2.5 degrees behind, then it swings through and settles.
+    // Aiming down the sights the shooter is fighting exactly this, so less.
+    float ak = 1.0f - 0.65f * a->ads_s;
+    v3 rt = {{ f_clamp(a->yaw_vel * 0.009f, -0.055f, 0.055f) * ak,
+              -f_clamp(pr * 0.006f, -0.035f, 0.035f) * ak, 0.0f}};
+    const float w0 = F_TAU * 2.4f, ze = 0.55f;
+    a->glag_v = v3_add(a->glag_v, v3_scale(v3_add(v3_scale(v3_sub(tgt, a->glag), w0 * w0),
+                                                 v3_scale(a->glag_v, -2.0f * ze * w0)), TICK_DT));
+    a->glag = v3_add(a->glag, v3_scale(a->glag_v, TICK_DT));
+    a->grot_v = v3_add(a->grot_v, v3_scale(v3_add(v3_scale(v3_sub(rt, a->grot), w0 * w0),
+                                                 v3_scale(a->grot_v, -2.0f * ze * w0)), TICK_DT));
+    a->grot = v3_add(a->grot, v3_scale(a->grot_v, TICK_DT));
+    float gm = v3_len(a->glag);
+    if (gm > 0.045f) a->glag = v3_scale(a->glag, 0.045f / gm);
+    a->grot.x = f_clamp(a->grot.x, -0.07f, 0.07f);
+    a->grot.y = f_clamp(a->grot.y, -0.05f, 0.05f);
   }
   skel_solve(a, base, yaw, pitch);
 }

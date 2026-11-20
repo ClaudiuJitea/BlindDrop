@@ -442,7 +442,7 @@ static gframe_t swap_frame(const pose_t *P, v3 Rc, v3 spine, int w,
 // outboard): the stock is 8 cm off the spine behind the neck, and a wrist put
 // ON it laid the forearm across the back of the head.
 static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho, v3 side,
-                      v3 *hc, v3 *ha, float *hr) {
+                      v3 back, v3 *hc, v3 *ha, float *hr) {
   v3 gc, ga; float gr;
   gun_hold(w, hand ? GH_GRIP : GH_FORE3, F->o, F->rt, F->up, F->fw, &gc, &ga, &gr);
   v3 gw = gframe_wrist(w, F, hand);
@@ -453,6 +453,19 @@ static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho, v3 si
                  v3_scale(F->up, 0.5f * (mn.y + mx.y))));
   v3 sa = F->fw;
   v3 br = v3_add(v3_norm(v3_sub(sho, sc)), v3_scale(side, 0.6f));
+  // THE CARBINE BEHIND THE NECK IS TAKEN FROM BEHIND. With the wrist on the
+  // shoulder's side of the stock (in FRONT of it), fig_hand wrapped the fingers
+  // round onto the stock's rear face: from the shoulder camera, which is
+  // exactly where everyone sees this from, the player looked at a PALM and
+  // curled fingers, with the back of the hand turned to his own neck. A man
+  // reaching back over his shoulder for a rifle does the reverse — the hand
+  // goes behind the stock, palm forward against it, and what is seen from
+  // behind is the back of the glove. So the wrist stands off the stock's REAR
+  // face, still outboard (a wrist straight behind it laid the forearm across
+  // the back of the helmet) and a little high, coming down onto it.
+  if (w == WPN_AR)
+    br = v3_add(v3_scale(back, 1.0f), v3_add(v3_scale(side, 0.55f),
+                                             v3_scale(v3_norm(v3_sub(sc, sho)), 0.15f)));
   br = v3_sub(br, v3_scale(sa, v3_dot(br, sa)));
   br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : side;
   const float sr = 0.019f;                       // the stock's grip radius
@@ -466,9 +479,14 @@ static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho, v3 si
 }
 // The elbow pole for an arm whose wrist is at `wr`: out and DOWN while the
 // hand is low, out and UP when it goes above the shoulder to reach behind it.
+// ...and FORWARD with it: reaching behind the neck the elbow rises in front of
+// the shoulder, not straight out to the side — pointed sideways at shoulder
+// height the upper arm stood out level like a wing for the whole draw.
 static v3 swap_pole(v3 sho, v3 wr, v3 Rc, v3 spine, float side) {
   float h = f_clamp(v3_dot(v3_sub(wr, sho), spine) / 0.18f + 0.35f, 0.0f, 1.0f);
-  return v3_add(v3_scale(Rc, side * (0.7f + 0.2f * h)), v3_scale(spine, -0.8f + 1.2f * h));
+  v3 cfw = v3_norm(v3_cross(spine, Rc));
+  return v3_add(v3_add(v3_scale(Rc, side * (0.7f - 0.10f * h)), v3_scale(spine, -0.8f + 1.25f * h)),
+                v3_scale(cfw, 0.55f * h));
 }
 
 static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
@@ -2224,15 +2242,15 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       v3 free1 = fin1;
       v3 c_[2], a_[2]; float r_[2];   // the cylinder each hand closes round
       if (ok_o && !lead_l && !olead_l)
-        free1 = v3_lerp(swap_handle(w, &S, 0.0f, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]),
-                        swap_handle(other, &So, 0.0f, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]), 0.45f);
+        free1 = v3_lerp(swap_handle(w, &S, 0.0f, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]),
+                        swap_handle(other, &So, 0.0f, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]), 0.45f);
       else if (ok_o) free1 = rest1;
       float k_ = 1.0f - att;   // the lead hand: 0 on the gun, 1 away from it
       float bow = sinf(F_PI * f_clamp(k_, 0.0f, 1.0f)) * (ok_o ? 1.0f : 0.6f);
       v3 w1, w0;
       float on1, on0;          // how far each hand is ON the gun
       if (!lead_l) {
-        w1 = v3_lerp(swap_handle(w, &F, p, 1, P.sho[1], Rc, &c_[1], &a_[1], &r_[1]), free1, ease3(k_));
+        w1 = v3_lerp(swap_handle(w, &F, p, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]), free1, ease3(k_));
         // the reach bows OUT and up, so it goes round the body, not through it
         w1 = v3_add(w1, v3_add(v3_scale(Rc, 0.06f * bow), v3_scale(spine, 0.04f * bow)));
         w0 = v3_lerp(rest0, gframe_wrist(w, &F, 0), sup);
@@ -2240,7 +2258,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       } else {
         // the sniper: the left hand leads (stock near the slot, fore-end at
         // the ready), the right hand joins on the grip as it comes round
-        v3 h0 = swap_handle(w, &F, p, 0, P.sho[0], v3_scale(Rc, -1.0f), &c_[0], &a_[0], &r_[0]);
+        v3 h0 = swap_handle(w, &F, p, 0, P.sho[0], v3_scale(Rc, -1.0f), v3_scale(cfw, -1.0f), &c_[0], &a_[0], &r_[0]);
         w0 = v3_lerp(h0, rest0, ease3(k_));
         w0 = v3_add(w0, v3_add(v3_scale(Rc, -0.06f * bow), v3_scale(spine, 0.04f * bow)));
         float jr = ease3((p - 0.40f) / 0.35f);

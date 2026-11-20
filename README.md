@@ -13,25 +13,30 @@
 <p align="center">
   <img src="media/foundry.jpg" alt="Foundry: the steelworks yard with a railed walkway, a crane gantry and the blast furnace, AK-47 in hand" width="49%">
   <img src="media/citadel.jpg" alt="Citadel: a sunlit old-town street with the minaret at its end, an AWP in hand" width="49%">
-  <img src="media/bazaar.jpg" alt="Bazaar: the market square from a rooftop, canopies and palms in golden light, a pistol in hand" width="49%">
+  <img src="media/bazaar_arcade.jpg" alt="Bazaar: the covered souk hallway, paper lanterns on timber beams over shop counters, an assault rifle in hand" width="49%">
   <img src="media/refinery.jpg" alt="Refinery: a road under coloured pipe racks on a clear morning" width="49%">
 </p>
 
-## New in 0.8.6
+## New in 0.8.7
 
-- **Simpler modes:** four modes, plus **Teams** (on/off) and **Weapons** (all, snipers only, knives
-  + nades) as settings. Any mix works, such as Team Elimination with snipers only.
-- **Elimination with teams:** no respawns, last side standing takes the round.
-- **Build your own Gun Game:** pick up to 10 guns in any order on the **Ladder** page. When you host,
-  your ladder is the one every player climbs.
-- **New forearm displays:** kills this life, health and ammo bars, a radar or a compass. Pick one
-  under **Settings > HUD** or **Armory > Gear**.
+- **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter. Passages
+  lead into a roofed souk hallway with paper lanterns, shop blocks split by narrow alleys, a market
+  street under striped canopies and a ring of tall houses.
+- **Stairs and towers:** stone stairs climb to six roof terraces, a lantern tower stands in each
+  corner, and two pagoda towers look out over the souk.
+- **New outfits:** Sahara, Viper, Nightshade and Abyss join Slate, Arctic and Reaper.
+- **A readable compass:** the forearm compass shows your heading in big digits over a scrolling
+  N / E / S / W strip.
+- **Calmer weapon swaps:** the new weapon comes up in 0.55 s instead of 0.30 s.
 
-0.8.6 uses network protocol 23, so it can't play with older versions.
+0.8.7 uses network protocol 24, so it can't play with older versions.
 
 <p align="center">
-  <img src="media/modes.jpg" alt="The Singleplayer page with Deathmatch, Teams on and Snipers only; the same page in Gun Game with an 8-gun ladder; and the Gun Game Ladder page listing AK-47 to Knife" width="100%">
-  <img src="media/wrist.jpg" alt="The four forearm displays: a kills counter, health and ammo bars, a radar and a compass" width="100%">
+  <img src="media/bazaar_aerial.jpg" alt="The new Bazaar from above: the market square, the ring of souk buildings, a pagoda tower and a lantern tower" width="100%">
+  <img src="media/bazaar_street.jpg" alt="The Bazaar market street under red, blue and orange canopies with hanging lanterns and spice counters, a pistol in hand" width="49%">
+  <img src="media/bazaar_roof.jpg" alt="A Bazaar roof terrace in golden light, the pagoda tower beyond, a sniper rifle in hand" width="49%">
+  <img src="media/outfits.jpg" alt="The seven outfits: Slate, Sahara, Viper, Nightshade, Arctic, Reaper and Abyss" width="100%">
+  <img src="media/compass.jpg" alt="The new forearm compass reading 357 north, 085 east and 228 south-west" width="100%">
 </p>
 
 ## The game
@@ -41,6 +46,10 @@
 - **Movement:** mantling, ladders, slides, `Q`/`E` leans, scopes and recoil you can learn.
 - **Bots** hear and remember you, flank, throw grenades and use medical stations and ammo crates.
 - **Your operator:** outfit, headgear, vest and pack under **Armory**. `V` toggles third person.
+- **Forearm display:** kills this life, health and ammo bars, a radar or a compass, picked under
+  **Settings > HUD** or **Armory > Gear**.
+- **Modes:** four modes plus **Teams** and **Weapons** (all, snipers only, knives + nades) as
+  settings, and a Gun Game ladder you build yourself.
 - **No engine, no asset files:** maps are generated in code, and the models and sounds are built
   into the one binary.
 
@@ -51,13 +60,15 @@
 | **Gun Game** | A kill moves you up your own ladder of guns, and a kill with the last one wins. |
 | **Hostage Rescue** | A stealth mission for a squad of one to three: free three hostages and reach the helicopter. |
 
-**Maps:** Arena (new layout every match), Foundry, Bazaar, Outpost, Citadel, Harbor, Refinery and
+**Maps:** Arena (new layout every match), Foundry, Bazaar (now an 84 m market quarter), Outpost, Citadel, Harbor, Refinery and
 Compound. **Rotate** changes map each match.
 
 <p align="center">
   <img src="media/elimination.jpg" alt="Team Elimination with snipers only on Citadel: the round caption reads ROUND 1, 3 V 3, FIRST TO 3, SNIPERS ONLY" width="32%">
   <img src="media/gungame.jpg" alt="Gun Game on Foundry: the HUD shows the AK-47 on rung 1 of 8" width="32%">
   <img src="media/rescue.jpg" alt="Hostage Rescue on Compound: a guard in the sniper scope at dusk" width="32%">
+  <img src="media/modes.jpg" alt="The Singleplayer page with Deathmatch, Teams on and Snipers only; the same page in Gun Game with an 8-gun ladder; and the Gun Game Ladder page listing AK-47 to Knife" width="100%">
+  <img src="media/wrist.jpg" alt="The four forearm displays: a kills counter, health and ammo bars, a radar and the heading compass" width="100%">
 </p>
 
 ## Download and run

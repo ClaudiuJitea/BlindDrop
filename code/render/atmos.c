@@ -769,8 +769,8 @@ static const char *WORLD_FS =
   //   10 VITALS   two vertical bars: health on the left, the magazine right
   //   11 RADAR    a 40 m scope, facing at the top, enemies the wearer can see
   //               (solid) or has heard fire (fading), and a slow sweep
-  //   12 COMPASS  a ring with the wearer's facing at the top, eight ticks and
-  //               a red north notch + N turning round it
+  //   12 COMPASS  the heading in three digits over a scrolling N/E/S/W tape
+  //               with a fixed caret (see the branch below)
   //   5  PLAIN    an armour plate, no display
   // The small window beside it (vCol.b = 1) is only a power lamp in the gear
   // colour; a hit flashes it red, a kill white. Uniforms (frame.c): uWrist x
@@ -854,23 +854,61 @@ static const char *WORLD_FS =
   "          d = mix(d, bc, (1.0 - smoothstep(0.0, aa, br)) * clamp(bl.z, 0.0, 1.0));\n"
   "        }\n"
   "      } else {\n"
-  "        float r = length(q);\n"
-  "        const float R = 0.30;\n"
-  "        float ring = abs(r - R);\n"
-  "        d = mix(d, lit * 0.35, 1.0 - smoothstep(0.008, 0.008 + aa, ring));\n"
-  "        float ang = atan(q.x, q.y) - uWrist.y;\n"
-  "        float tk = abs(fract(ang / 6.2832 * 8.0 + 0.5) - 0.5);\n"
-  "        d = mix(d, lit * 0.6, (1.0 - smoothstep(0.03, 0.05, tk)) * step(R - 0.05, r) * step(r, R));\n"
-  "        float fwd = lseg(q, vec2(0.0, R + 0.03), vec2(0.0, R + 0.10));\n"
-  "        d = mix(d, lit, 1.0 - smoothstep(0.012, 0.012 + aa, fwd));\n"
-  // north: a red notch on the ring and a big N inside it, upright to the eye
-  "        vec2 dir = vec2(sin(uWrist.y), cos(uWrist.y));\n"
-  "        float nt = lseg(q, dir * (R - 0.04), dir * (R + 0.05));\n"
-  "        d = mix(d, vec3(1.0, 0.20, 0.10), 1.0 - smoothstep(0.020, 0.020 + aa, nt));\n"
-  "        vec2 p = q - dir * (R - 0.15);\n"
-  "        float h = 0.075, w = 0.055;\n"
-  "        float ld = min(min(lseg(p, vec2(-w, -h), vec2(-w, h)), lseg(p, vec2(-w, h), vec2(w, -h))), lseg(p, vec2(w, -h), vec2(w, h)));\n"
-  "        d = mix(d, vec3(1.0, 0.20, 0.10), 1.0 - smoothstep(0.016, 0.016 + aa, ld));\n"
+  // THE COMPASS (0.8.7). It was a 0.30 ring with eight ticks and a red N
+  // riding round it: on a ~60 px screen seen at a slant the ring became a thin
+  // ellipse and the N bloomed into a red smear over its own notch. Now it reads
+  // the way an aircraft's does at this size: the HEADING as three big
+  // seven-segment digits (000-359, north 000, east 090), and under them a
+  // scrolling heading TAPE, +-60 degrees across the screen, a tick every 45
+  // (a 15-degree comb broke into dashes at this size) and N / E / S / W letters on the cardinals (N in red),
+  // with a fixed caret marking where the wearer is facing.
+  "        float hdg = mod(-uWrist.y * 57.29578, 360.0);\n"
+  "        int hi = int(hdg + 0.5) % 360;\n"
+  "        for (int i = 0; i < 3; i++) {\n"
+  "          int dg = i == 0 ? hi / 100 : i == 1 ? (hi / 10) % 10 : hi % 10;\n"
+  "          const float s = 0.235;\n"
+  "          vec2 sd = wseg7((q - vec2(-0.215 + 0.215 * float(i), 0.235)) / s, dg) * s;\n"
+  "          d = mix(d, off, 1.0 - smoothstep(0.004, 0.004 + aa, sd.y));\n"
+  "          d = mix(d, lit, 1.0 - smoothstep(0.004, 0.004 + aa, sd.x));\n"
+  "        }\n"
+  "        const float DPU = 162.0;\n"                   // degrees per unit of q.x: +-0.37 = +-60
+  "        const float T0 = -0.03, T1 = -0.40;\n"        // the tape's top and bottom
+  "        float edge = 1.0 - smoothstep(0.26, 0.37, abs(q.x));\n"
+  "        float intape = step(T1, q.y) * step(q.y, T0) * step(abs(q.x), 0.38);\n"
+  "        d = mix(d, vec3(0.012, 0.013, 0.015), intape);\n"
+  "        float brg = hdg + q.x * DPU;\n"
+  "        float t45 = abs(fract(brg / 45.0 + 0.5) - 0.5) * 45.0 / DPU;\n"
+  "        float mj = step(T0 - 0.115, q.y) * (1.0 - smoothstep(0.014, 0.014 + aa, t45));\n"
+  "        d = mix(d, lit * 0.62, mj * edge * intape);\n"
+  // the cardinal letters: the nearest 90 to this pixel's bearing, drawn on
+  // that cardinal's own centre so a letter never splits across a boundary
+  "        float ci = floor(brg / 90.0 + 0.5);\n"
+  "        float lx = (ci * 90.0 - hdg) / DPU;\n"
+  "        vec2 lp = (q - vec2(lx, -0.290)) / 0.090;\n"
+  "        int cd = int(mod(ci, 4.0));\n"
+  "        float ld = 1e3;\n"
+  "        if (cd == 0) {\n"
+  "          ld = min(min(lseg(lp, vec2(-0.42, -0.62), vec2(-0.42, 0.62)), lseg(lp, vec2(-0.42, 0.62), vec2(0.42, -0.62))),\n"
+  "                   lseg(lp, vec2(0.42, -0.62), vec2(0.42, 0.62)));\n"
+  "        } else if (cd == 1) {\n"
+  "          ld = min(min(lseg(lp, vec2(-0.36, -0.62), vec2(-0.36, 0.62)), lseg(lp, vec2(-0.36, 0.62), vec2(0.38, 0.62))),\n"
+  "                   min(lseg(lp, vec2(-0.36, 0.0), vec2(0.26, 0.0)), lseg(lp, vec2(-0.36, -0.62), vec2(0.38, -0.62))));\n"
+  "        } else if (cd == 2) {\n"
+  "          ld = min(min(lseg(lp, vec2(0.38, 0.62), vec2(-0.38, 0.62)), lseg(lp, vec2(-0.38, 0.62), vec2(-0.38, 0.0))),\n"
+  "                   min(min(lseg(lp, vec2(-0.38, 0.0), vec2(0.38, 0.0)), lseg(lp, vec2(0.38, 0.0), vec2(0.38, -0.62))),\n"
+  "                       lseg(lp, vec2(0.38, -0.62), vec2(-0.38, -0.62))));\n"
+  "        } else {\n"
+  "          ld = min(min(lseg(lp, vec2(-0.50, 0.62), vec2(-0.25, -0.62)), lseg(lp, vec2(-0.25, -0.62), vec2(0.0, 0.25))),\n"
+  "                   min(lseg(lp, vec2(0.0, 0.25), vec2(0.25, -0.62)), lseg(lp, vec2(0.25, -0.62), vec2(0.50, 0.62))));\n"
+  "        }\n"
+  "        vec3 lc = cd == 0 ? vec3(1.0, 0.24, 0.12) : lit;\n"
+  "        float lw = 0.13 + aa / 0.090;\n"
+  "        d = mix(d, lc, (1.0 - smoothstep(0.13, lw, ld)) * edge * intape);\n"
+  // the caret: a small wedge on the tape's top edge pointing down at the
+  // heading (a hairline through the tape read as a big white T: dropped)
+  "        vec2 cq = q - vec2(0.0, T0 + 0.005);\n"
+  "        float wedge = max(abs(cq.x) * 1.7 - cq.y, cq.y - 0.050) * 0.6;\n"
+  "        d = mix(d, vec3(1.0, 0.95, 0.85) * 0.85, 1.0 - smoothstep(0.0, aa, wedge));\n"
   "      }\n"
   "      float rim = smoothstep(0.42, 0.48, max(abs(c.x), abs(c.y)));\n"
   "      d = mix(d, vec3(1.0, 0.1, 0.05), rim * hit);\n"

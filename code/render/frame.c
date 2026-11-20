@@ -928,7 +928,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
       // lit per-outfit colour the `led` column had before v5 dimmed the inlays.
       static const float WRIST_ON[GEAR_THEME_COUNT][3] = {
         {1.00f, 0.62f, 0.10f}, {1.00f, 0.62f, 0.10f}, {0.45f, 1.00f, 0.30f},
-        {1.00f, 0.16f, 0.08f}, {0.25f, 0.80f, 1.00f}, {0.20f, 0.95f, 1.00f}};
+        {0.78f, 0.42f, 1.00f}, {0.25f, 0.80f, 1.00f}, {0.20f, 0.95f, 1.00f},
+        {0.30f, 0.62f, 1.00f}};
       int gi = (int)(gt - GEAR_THEMES);
       if (gi == 0) glUniform3f(uloc(R.prog_world, "uWristOn"), 1.0f, 0.55f, 0.12f);
       else glUniform3f(uloc(R.prog_world, "uWristOn"), WRIST_ON[gi][0], WRIST_ON[gi][1] * 0.887f,

@@ -118,9 +118,12 @@ static const char *const KNIFE_MODEL_NAMES[KNIFE_MODEL_COUNT] = {
 static const char *const WPN_THEME_NAMES[WPN_THEME_COUNT] = {
   "FACTORY", "DESERT", "WOODLAND", "ARCTIC", "URBAN", "TIGER",
   "BLACKOUT", "CRIMSON", "COBALT", "FADE", "GILDED"};
-#define GEAR_THEME_COUNT 6
+// (0.8.7: COYOTE, RANGER and SHADOW retired — two near-identical earth tones
+// and a black a value step off REAPER. Their slots carry the new colourways so
+// a saved ARCTIC / REAPER pick keeps its index.)
+#define GEAR_THEME_COUNT 7
 static const char *const GEAR_THEME_NAMES[GEAR_THEME_COUNT] = {
-  "SLATE", "COYOTE", "RANGER", "SHADOW", "ARCTIC", "REAPER"};
+  "SLATE", "SAHARA", "VIPER", "NIGHTSHADE", "ARCTIC", "REAPER", "ABYSS"};
 // The third-person body's own pieces (fig_kit and the figure builders). Index
 // 0 of each is the shipped operator, so an untouched config is unchanged.
 // v5: the helmet with the quad-tube NVG on its mount, flipped up or down.

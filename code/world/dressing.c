@@ -805,7 +805,8 @@ static void bazaar_half(void) {
 // level, a striped awning on every other front, upper windows on the tall
 // ones, a cornice and a roof parapet. They are 2 m deep (the street is still
 // 9 m wide) and nobody stands on them: no step reaches 3.6 m.
-static void k_shopfront(int ax, float a0, float a1, float face, float back, int salt) {
+static void k_shopfront(int ax, float a0, float a1, float face, float back, int salt,
+                        float hb, float hr) {
   // ax 0: the row runs along x, the front faces -z at z = face (back at z = back)
   static const float PL[6][3] = {{0.86f, 0.78f, 0.62f}, {0.90f, 0.86f, 0.76f}, {0.80f, 0.62f, 0.46f},
                                  {0.76f, 0.70f, 0.58f}, {0.88f, 0.72f, 0.52f}, {0.70f, 0.56f, 0.44f}};
@@ -819,7 +820,7 @@ static void k_shopfront(int ax, float a0, float a1, float face, float back, int 
     float w = 4.0f + 2.0f * khash(u, face, salt + k);
     if (u + w > a1 - 2.5f) w = a1 - u;
     float v = u + w;
-    float h = 3.6f + 2.4f * khash(face, u, salt + 7 * k);
+    float h = hb + hr * khash(face, u, salt + 7 * k);
     int pi = (int)(6.0f * khash(u, (float)k, salt + 3)) % 6;
     v3 pc = kt_(rgb(PL[pi][0], PL[pi][1], PL[pi][2]), u, face, salt, 0.94f, 1.02f);
     v3 cc = v3_scale(pc, 0.86f);
@@ -838,14 +839,22 @@ static void k_shopfront(int ax, float a0, float a1, float face, float back, int 
       SF(u + 0.02f, 0.0f, v - 0.02f, 0.28f, 0.0f, 0.06f, v3_scale(pc, 0.78f));  // plinth
     });
     float dx = u + 0.7f + 0.8f * khash(u, h, salt + 11);
+    if (dx + 1.25f > v) dx = u + 0.5f * (w - 1.05f);    // a narrow front: the door centred
+    int win = dx + 3.12f < v;                          // ...and no window past its end
     KMAT(SMAT_WOOD, {
       SF(dx, 0.28f, dx + 1.05f, 2.25f, 0.06f, 0.075f, door);
-      SF(dx + 1.7f, 1.25f, dx + 2.6f, 2.15f, 0.0f, 0.015f, glass);
-      SF(dx + 1.28f, 1.25f, dx + 1.7f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
-      SF(dx + 2.6f, 1.25f, dx + 3.02f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
+      if (win) {
+        SF(dx + 1.7f, 1.25f, dx + 2.6f, 2.15f, 0.0f, 0.015f, glass);
+        SF(dx + 1.28f, 1.25f, dx + 1.7f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
+        SF(dx + 2.6f, 1.25f, dx + 3.02f, 2.15f, 0.0f, 0.025f, shut[k % 3]);
+      }
       if (h > 4.6f) {                                   // upper floor windows
         SF(u + 0.8f, 3.05f, u + 1.6f, 3.95f, 0.0f, 0.015f, glass);
         if (w > 4.6f) SF(v - 1.6f, 3.05f, v - 0.8f, 3.95f, 0.0f, 0.015f, glass);
+      }
+      if (h > 7.6f) {                                   // ...and a third storey's
+        SF(u + 0.8f, 6.20f, u + 1.6f, 7.10f, 0.0f, 0.015f, glass);
+        if (w > 4.6f) SF(v - 1.6f, 6.20f, v - 0.8f, 7.10f, 0.0f, 0.015f, glass);
       }
     });
     KMAT(SMAT_STONE, SF(dx - 0.08f, 2.25f, dx + 1.13f, 2.40f, 0.0f, 0.10f, rgb(0.62f, 0.56f, 0.46f)));
@@ -863,16 +872,382 @@ static void k_shopfront(int ax, float a0, float a1, float face, float back, int 
     u = v;
   }
 }
+// ---------------------------------------------------------------------------
+// THE SOUK (0.8.7). The Bazaar was the 48 m market square and its outer street,
+// walled in. It is now the heart of an 84 m market quarter: the shopfront row
+// that stood against the old wall is pierced by passages, and behind it runs
+// a ring of the old city in four layers, outward from the core:
+//
+//   23.9-27.5  THE ARCADE: a roofed hallway on timber beams with a skylight
+//              slot in every bay, red and amber paper lanterns on the beams,
+//              banners, and shops on both walls (dark shop mouths, sign
+//              boards, counters with their goods — cover at waist height)
+//   27.5-34.0  THE SHOP BLOCKS, split by cross-alleys strung with cloth; some
+//              blocks have a stone stair up to a parapeted roof terrace
+//   34.0-38.0  THE MARKET STREET under striped canopies and lanterns
+//   38.0-41.9  THE OUTER HOUSES, two and three storeys, against the shell
+//
+// with a climbable lantern tower in each corner courtyard and a pagoda-crowned
+// tower on the two long sides. Every piece is built in a BAND's own frame
+// (a along the band, d outward from the core) and placed through g_ks, so the
+// map keeps its 180-degree symmetry; the +z band runs the full width, the +x
+// band fits between it and its mirror.
+// ---------------------------------------------------------------------------
+#define SK_IN  23.9f   // the inner row's back wall: the arcade's inner side
+#define SK_A1  27.5f   // the arcade's outer side = the blocks' arcade face
+#define SK_B1  34.0f   // the blocks' street face
+#define SK_S1  38.0f   // the outer houses' face
+#define SK_OUT 41.9f   // the outer houses' back (the shell's inner face is 42)
+static int g_sk_ax;    // the band being built: 0 = a is x (the +z band), 1 = a is z
+#define SKB(a0, y0, d0, a1, y1, d1, c)                                   \
+  do { if (g_sk_ax == 0) KB(a0, y0, d0, a1, y1, d1, c);                 \
+       else              KB(d0, y0, a0, d1, y1, a1, c); } while (0)
+static const float SK_CLOTH[6][3] = {
+  {0.90f, 0.62f, 0.18f}, {0.72f, 0.20f, 0.14f}, {0.20f, 0.28f, 0.58f},
+  {0.16f, 0.48f, 0.46f}, {0.86f, 0.82f, 0.72f}, {0.66f, 0.20f, 0.42f}};
+static v3 sk_cloth(float a, float d, int salt) {
+  int i = (int)(6.0f * khash(a, d, salt)) % 6;
+  return kt_(rgb(SK_CLOTH[i][0], SK_CLOTH[i][1], SK_CLOTH[i][2]), a, d, salt + 1, 0.90f, 1.04f);
+}
+// A paper lantern hung on a cord from `top`: a cap, the glowing body and a
+// tassel, its bottom at 2.50 m so a body passes under it.
+static void sk_lantern(float a, float d, float top, int salt) {
+  v3 body = khash(a, d, salt) < 0.6f ? rgb(0.95f, 0.30f, 0.16f) : rgb(1.0f, 0.68f, 0.26f);
+  v3 cap = rgb(0.16f, 0.12f, 0.10f);
+  SKB(a - 0.015f, 2.98f, d - 0.015f, a + 0.015f, top, d + 0.015f, cap);           // the cord
+  SKB(a - 0.12f, 2.92f, d - 0.12f, a + 0.12f, 2.98f, d + 0.12f, cap);             // cap
+  KMAT(SMAT_LAMP, SKB(a - 0.17f, 2.60f, d - 0.17f, a + 0.17f, 2.92f, d + 0.17f, body));
+  SKB(a - 0.10f, 2.54f, d - 0.10f, a + 0.10f, 2.60f, d + 0.10f, cap);             // foot
+  SKB(a - 0.02f, 2.50f, d - 0.02f, a + 0.02f, 2.54f, d + 0.02f, body);            // tassel
+}
+// A SHOP in a wall at d = pl, its street on the `s` side (+1: toward larger
+// d): the mouth (dark, 15 mm proud — rule 1, colour below head height), a
+// timber lintel and a painted sign board above head height, and, if `ctr`, a
+// counter in front with its goods: mounds of spice, bolts of cloth, crates.
+static void sk_shop(float a0, float a1, float pl, float s, int ctr, int salt) {
+  float m = 0.5f * (a0 + a1), w = fminf(2.4f, a1 - a0 - 0.6f) * 0.5f;
+  if (w < 0.5f) return;
+  v3 mouth = kt_(rgb(0.10f, 0.08f, 0.07f), m, pl, salt, 0.85f, 1.15f);
+  v3 wood = kt_(rgb(0.36f, 0.24f, 0.15f), m, pl, salt + 1, 0.90f, 1.08f);
+  KMAT(SMAT_WOOD, {
+    SKB(m - w, 0.0f, pl + s * 0.002f, m + w, 2.28f, pl + s * 0.015f, mouth);
+    SKB(m - w - 0.14f, 2.32f, pl, m + w + 0.14f, 2.44f, pl + s * 0.07f, wood);
+    SKB(m - w + 0.05f, 2.52f, pl, m + w - 0.05f, 2.98f, pl + s * 0.09f, sk_cloth(m, pl, salt + 2));
+    SKB(m - w + 0.18f, 2.62f, pl + s * 0.09f, m + w - 0.18f, 2.88f, pl + s * 0.10f,
+       kt_(rgb(0.92f, 0.86f, 0.70f), m, pl, salt + 3, 0.9f, 1.0f));               // the lettering panel
+  });
+  if (!ctr) return;
+  float c0 = m - w + 0.10f, c1 = m + w - 0.10f, dd = pl + s * 0.62f;
+  KMAT(SMAT_WOOD, {
+    SKB(c0, 0.0f, pl + s * 0.02f, c1, 0.92f, dd, wood);
+    SKB(c0 - 0.03f, 0.92f, pl + s * 0.01f, c1 + 0.03f, 0.97f, dd + s * 0.03f, v3_scale(wood, 0.80f));
+  });
+  // the goods, one kind per shop
+  int kind = (int)(4.0f * khash(m, pl, salt + 4)) % 4;
+  float dc = pl + s * 0.32f;
+  int n = (int)((c1 - c0) / 0.46f);
+  for (int i = 0; i < n; i++) {
+    float u = c0 + 0.23f + 0.46f * (float)i;
+    v3 g = sk_cloth(u, pl, salt + 10 + i);
+    if (kind == 0) {          // spice mounds in trays: a tray, a heap, its crown
+      static const float SP[5][3] = {{0.86f, 0.54f, 0.12f}, {0.70f, 0.18f, 0.10f}, {0.92f, 0.76f, 0.20f},
+                                     {0.40f, 0.46f, 0.18f}, {0.50f, 0.28f, 0.16f}};
+      int k = (int)(5.0f * khash(u, pl, salt + 20)) % 5;
+      v3 sp = rgb(SP[k][0], SP[k][1], SP[k][2]);
+      KMAT(SMAT_WOOD, SKB(u - 0.19f, 0.97f, dc - 0.21f, u + 0.19f, 1.02f, dc + 0.21f, rgb(0.42f, 0.30f, 0.20f)));
+      KMAT(SMAT_STUCCO, {
+        SKB(u - 0.16f, 1.02f, dc - 0.18f, u + 0.16f, 1.10f, dc + 0.18f, sp);
+        SKB(u - 0.10f, 1.10f, dc - 0.11f, u + 0.10f, 1.17f, dc + 0.11f, v3_scale(sp, 1.06f));
+      });
+    } else if (kind == 1) {   // bolts of cloth, stacked in pairs
+      SKB(u - 0.20f, 0.97f, dc - 0.24f, u + 0.20f, 1.09f, dc + 0.24f, g);
+      SKB(u - 0.17f, 1.09f, dc - 0.21f, u + 0.17f, 1.21f, dc + 0.21f, sk_cloth(u, dc, salt + 30 + i));
+    } else if (kind == 2) {   // fruit crates
+      static const float FR[4][3] = {{0.86f, 0.40f, 0.10f}, {0.64f, 0.70f, 0.16f}, {0.62f, 0.12f, 0.18f},
+                                     {0.92f, 0.78f, 0.24f}};
+      int k = (int)(4.0f * khash(u, pl, salt + 40)) % 4;
+      KMAT(SMAT_WOOD, SKB(u - 0.20f, 0.97f, dc - 0.22f, u + 0.20f, 1.12f, dc + 0.22f, rgb(0.56f, 0.42f, 0.26f)));
+      KMAT(SMAT_STUCCO, SKB(u - 0.17f, 1.12f, dc - 0.19f, u + 0.17f, 1.18f, dc + 0.19f, rgb(FR[k][0], FR[k][1], FR[k][2])));
+    } else {                  // brass and copper ware
+      v3 br = kt_(rgb(0.78f, 0.56f, 0.24f), u, pl, salt + 50, 0.85f, 1.10f);
+      KMAT(SMAT_STEEL, {
+        SKB(u - 0.12f, 0.97f, dc - 0.12f, u + 0.12f, 1.20f, dc + 0.12f, br);
+        SKB(u - 0.06f, 1.20f, dc - 0.06f, u + 0.06f, 1.30f, dc + 0.06f, v3_scale(br, 0.9f));
+      });
+    }
+  }
+}
+// A rug hung on a wall to dry: a border and a field 2 mm proud of it.
+// A crate in the band frame (k_crate itself is x/z).
+static void sk_crate(float a, float d, float hw, float h, v3 c) {
+  if (g_sk_ax == 0) k_crate(a, d, hw, hw, h, c); else k_crate(d, a, hw, hw, h, c);
+}
+static void sk_rug(float a0, float a1, float y0, float y1, float pl, float s, int salt) {
+  v3 b = sk_cloth(a0, pl, salt), f = sk_cloth(a1, pl, salt + 7);
+  if (b.x == f.x) f = v3_scale(f, 0.62f);
+  SKB(a0, y0, pl, a1, y1, pl + s * 0.012f, b);
+  SKB(a0 + 0.10f, y0 + 0.12f, pl + s * 0.002f, a1 - 0.10f, y1 - 0.12f, pl + s * 0.016f, f);
+}
+// THE ARCADE over a0..a1: timber beams every 3.2 m resting on the two walls,
+// a plank roof over 2.2 m of each bay and a skylight slot over the rest, a
+// lantern on every other beam and a banner on the ones between. `nosh`:
+// spans of a with no shops (the passages through the inner row), as pairs.
+static void sk_arcade(float a0, float a1, float wall, const float *nosh, int nn, int salt) {
+  v3 beam = rgb(0.30f, 0.21f, 0.14f), plank = rgb(0.44f, 0.32f, 0.21f);
+  v3 pave = kt_(rgb(0.60f, 0.53f, 0.43f), a0, SK_IN, salt, 0.97f, 1.0f);
+  KMAT(SMAT_STONE, SKB(a0 + 0.01f, 0.0f, SK_IN + 0.01f, a1 - 0.01f, 0.006f, SK_A1 - 0.01f, pave));
+  int bay = 0;
+  for (float u = a0 + 0.3f; u < a1 - 1.0f; u += 3.2f, bay++) {
+    KMAT(SMAT_WOOD, {
+      SKB(u, 3.26f, SK_IN, u + 0.16f, 3.40f, SK_A1, beam);
+      if (u + 2.4f < a1) SKB(u - 0.02f, 3.40f, SK_IN, u + 2.2f, 3.48f, SK_A1,
+                            kt_(plank, u, SK_IN, salt + 1, 0.88f, 1.08f));
+    });
+    float lc = u + 0.08f;
+    if (bay & 1) sk_lantern(lc, 0.5f * (SK_IN + SK_A1), 3.26f, salt + 2);
+    else SKB(lc - 0.45f, 2.62f, 25.68f, lc + 0.45f, 3.26f, 25.72f, sk_cloth(lc, 25.7f, salt + 3));
+  }
+  // shops along the inner wall (|a| < wall: past it the hall turns the
+  // corner), a counter at every other one so the hall keeps 3 m; the outer
+  // wall's shops belong to the blocks (sk_block), which know where they stand
+  int k = 0;
+  for (float u = -wall + 0.6f; u + 3.0f < wall; u += 3.6f, k++) {
+    int skip = 0;
+    for (int i = 0; i < nn; i++) if (u + 3.0f > nosh[2 * i] - 0.3f && u < nosh[2 * i + 1] + 0.3f) skip = 1;
+    if (skip) continue;
+    if (k % 4 == 3) sk_rug(u + 0.8f, u + 2.2f, 0.70f, 2.20f, SK_IN, 1.0f, salt + 300 + k);
+    else sk_shop(u, u + 3.0f, SK_IN, 1.0f, (k & 1) == 0, salt + 100 + k);
+  }
+}
+// A SHOP BLOCK a0..a1 between the arcade and the street, `h` tall: render,
+// a cornice on its two long faces, a parapet with a gap where `stair` (-1 at
+// a0, +1 at a1, 0 none) arrives, shops on both faces, awnings on the street
+// face and windows up top on a two-storey block. Returns nothing.
+static void sk_block(float a0, float a1, float h, int stair, int salt) {
+  static const float PL[5][3] = {{0.86f, 0.78f, 0.62f}, {0.80f, 0.62f, 0.46f}, {0.90f, 0.86f, 0.76f},
+                                 {0.76f, 0.64f, 0.50f}, {0.84f, 0.70f, 0.52f}};
+  int pi = (int)(5.0f * khash(a0, a1, salt)) % 5;
+  v3 pc = kt_(rgb(PL[pi][0], PL[pi][1], PL[pi][2]), a0, a1, salt + 1, 0.94f, 1.02f);
+  v3 cc = v3_scale(pc, 0.86f);
+  KMAT(SMAT_STUCCO, {
+    SKB(a0, 0.0f, SK_A1, a1, h, SK_B1, pc);
+    SKB(a0 + 0.02f, 0.0f, SK_A1 - 0.06f, a1 - 0.02f, 0.28f, SK_A1, v3_scale(pc, 0.78f));   // plinths
+    SKB(a0 + 0.02f, 0.0f, SK_B1, a1 - 0.02f, 0.28f, SK_B1 + 0.06f, v3_scale(pc, 0.78f));
+    SKB(a0, h - 0.30f, SK_A1 - 0.10f, a1, h - 0.14f, SK_A1, cc);                           // cornices
+    SKB(a0, h - 0.30f, SK_B1, a1, h - 0.14f, SK_B1 + 0.10f, cc);
+    // parapet: the long edges whole, the ends between them, the stair end split
+    SKB(a0, h, SK_A1, a1, h + 0.60f, SK_A1 + 0.25f, cc);
+    SKB(a0, h, SK_B1 - 0.25f, a1, h + 0.60f, SK_B1, cc);
+  });
+  const float RUN = 0.485f, LAND = 1.45f;
+  int n = (int)(h / PF_RISE + 0.5f);
+  float g0 = SK_A1 + 0.1f + (float)(n - 1) * RUN, g1 = g0 + LAND;     // the landing's span in d
+  for (int e = -1; e <= 1; e += 2) {
+    float x0 = e < 0 ? a0 : a1 - 0.25f, x1 = x0 + 0.25f;
+    KMAT(SMAT_STUCCO, {
+      if (stair == e) {
+        if (g0 - (SK_A1 + 0.25f) > 0.2f) SKB(x0, h, SK_A1 + 0.25f, x1, h + 0.60f, g0, cc);
+        if ((SK_B1 - 0.25f) - g1 > 0.2f) SKB(x0, h, g1, x1, h + 0.60f, SK_B1 - 0.25f, cc);
+      } else {
+        SKB(x0, h, SK_A1 + 0.25f, x1, h + 0.60f, SK_B1 - 0.25f, cc);
+      }
+    });
+  }
+  if (stair) {
+    // The stair stands in the alley against the block's end wall, rising
+    // from the arcade toward the street. stair_up's frame: a wall at
+    // `plane` running along d, so its axis is the band's other one.
+    float pl = stair < 0 ? a0 : a1;
+    int inw = stair < 0 ? 1 : -1;
+    v3 st = rgb(0.62f, 0.56f, 0.46f);
+    int mf = g_mat_force; g_mat_force = SMAT_STONE;
+    stair_up(1 - g_sk_ax, g_ks * pl, (int)g_ks * inw, g_ks * (SK_A1 + 0.1f), (int)g_ks, 1.20f, h,
+             RUN, LAND, st, v3_scale(st, 0.86f));
+    g_mat_force = mf;
+  }
+  // the faces: shops, awnings over the street, windows above
+  int k = 0;
+  for (float u = a0 + 0.4f; u + 2.8f <= a1 - 0.3f; u += 3.4f, k++) {
+    sk_shop(u, u + 3.0f, SK_B1, 1.0f, k % 2 == 0, salt + 10 + k);
+    if (k % 3 != 2) sk_shop(u + 0.2f, u + 3.2f, SK_A1, -1.0f, 0, salt + 40 + k);
+    else sk_rug(u + 0.9f, u + 2.4f, 0.70f, 2.20f, SK_A1, -1.0f, salt + 40 + k);
+    if (k & 1) {
+      SKB(u + 0.1f, 3.04f, SK_B1, u + 2.9f, 3.08f, SK_B1 + 0.95f, sk_cloth(u, SK_B1, salt + 70 + k));
+    }
+    if (h > 5.0f) KMAT(SMAT_WOOD, {
+      v3 gl = rgb(0.10f, 0.12f, 0.15f), sh = sk_cloth(u, h, salt + 80 + k);
+      SKB(u + 1.0f, 3.70f, SK_B1, u + 2.0f, 4.60f, SK_B1 + 0.015f, gl);
+      SKB(u + 0.55f, 3.70f, SK_B1, u + 0.98f, 4.60f, SK_B1 + 0.025f, sh);
+      SKB(u + 2.02f, 3.70f, SK_B1, u + 2.45f, 4.60f, SK_B1 + 0.025f, sh);
+      SKB(u + 1.0f, 3.70f, SK_A1 - 0.015f, u + 2.0f, 4.60f, SK_A1, gl);
+    });
+  }
+}
+// A CROSS-ALLEY a0..a1 through the blocks: if `lines` (a wall on both sides
+// and no stair in it), cloth strung across at three heights; a crate or a
+// barrel against a wall.
+static void sk_alley(float a0, float a1, int lines, float pa, int salt) {
+  for (int i = 0; i < 3 && lines; i++) {
+    float d = SK_A1 + 1.6f + 1.9f * (float)i, y = 3.70f + 0.25f * (float)i;
+    SKB(a0, y, d - 0.01f, a1, y + 0.02f, d + 0.01f, rgb(0.20f, 0.18f, 0.16f));                // the line
+    for (float u = a0 + 0.35f; u + 0.6f < a1 - 0.2f; u += 0.95f)
+      if (khash(u, d, salt + i) < 0.7f)
+        SKB(u, y - 0.75f, d - 0.012f, u + 0.6f, y, d + 0.012f, sk_cloth(u, d, salt + 10 + i));  // washing
+  }
+  // the crate or barrel stands at a = pa (clear of any stair in the alley)
+  if (khash(a0, a1, salt + 20) < 0.5f) sk_crate(pa, SK_A1 + 2.2f, 0.45f, 0.9f, rgb(0.56f, 0.42f, 0.26f));
+  else if (g_sk_ax == 0) barrel(g_ks * pa, g_ks * (SK_B1 - 1.2f), rgb(0.30f, 0.36f, 0.46f));
+  else barrel(g_ks * (SK_B1 - 1.2f), g_ks * pa, rgb(0.30f, 0.36f, 0.46f));
+}
+// THE MARKET STREET over a0..a1: striped canopies wall to wall, a lantern
+// under every other one, goods against the outer houses.
+static void sk_street(float a0, float a1, int salt) {
+  v3 pave = kt_(rgb(0.58f, 0.51f, 0.41f), a0, SK_B1, salt, 0.97f, 1.0f);
+  KMAT(SMAT_STONE, SKB(a0 + 0.01f, 0.0f, SK_B1 + 0.01f, a1 - 0.01f, 0.006f, SK_S1 - 0.01f, pave));
+  int k = 0;
+  for (float u = a0 + 0.2f; u + 2.6f < a1; u += 3.2f, k++) {
+    v3 c = sk_cloth(u, SK_S1, salt + k);
+    SKB(u, 3.22f, SK_B1 + 0.03f, u + 2.6f, 3.26f, SK_S1 - 0.03f, c);
+    SKB(u, 3.18f, SK_B1 + 0.05f, u + 2.6f, 3.22f, SK_B1 + 0.33f, v3_scale(c, 0.7f));         // the hem
+    if (k & 1) sk_lantern(u + 1.3f, 0.5f * (SK_B1 + SK_S1), 3.18f, salt + 50 + k);
+    float h = khash(u, SK_S1, salt + 80);
+    float gd = SK_S1 - 0.5f;
+    if (h < 0.22f) sk_crate(u + 1.3f, gd, 0.40f, 0.8f, rgb(0.56f, 0.42f, 0.26f));
+    else if (h < 0.36f) {
+      if (g_sk_ax == 0) sack_pallet(g_ks * (u + 1.3f), g_ks * (gd - 0.05f), g_ks > 0 ? 0 : 2, rgb(0.62f, 0.55f, 0.40f));
+      else sack_pallet(g_ks * (gd - 0.05f), g_ks * (u + 1.3f), g_ks > 0 ? 1 : 3, rgb(0.62f, 0.55f, 0.40f));
+    } else if (h < 0.50f) {
+      KMAT(SMAT_WOOD, {   // a basket stack: three woven drums
+        SKB(u + 0.9f, 0.0f, gd - 0.30f, u + 1.5f, 0.55f, gd + 0.30f, rgb(0.62f, 0.48f, 0.28f));
+        SKB(u + 1.55f, 0.0f, gd - 0.25f, u + 2.05f, 0.45f, gd + 0.25f, rgb(0.58f, 0.44f, 0.26f));
+        SKB(u + 0.98f, 0.55f, gd - 0.22f, u + 1.42f, 0.90f, gd + 0.22f, rgb(0.66f, 0.52f, 0.30f));
+      });
+    }
+  }
+}
+// A STONE LANTERN (the pagoda yard's): plinth, post, a glowing fire box, a
+// cap and its finial. Built in the band frame.
+static void sk_stone_lantern(float a, float d) {
+  v3 st = rgb(0.56f, 0.54f, 0.50f);
+  KMAT(SMAT_STONE, {
+    SKB(a - 0.32f, 0.0f, d - 0.32f, a + 0.32f, 0.22f, d + 0.32f, st);
+    SKB(a - 0.13f, 0.22f, d - 0.13f, a + 0.13f, 1.05f, d + 0.13f, st);
+    SKB(a - 0.28f, 1.05f, d - 0.28f, a + 0.28f, 1.15f, d + 0.28f, st);
+    SKB(a - 0.36f, 1.53f, d - 0.36f, a + 0.36f, 1.64f, d + 0.36f, st);
+    SKB(a - 0.18f, 1.64f, d - 0.18f, a + 0.18f, 1.76f, d + 0.18f, st);
+    SKB(a - 0.06f, 1.76f, d - 0.06f, a + 0.06f, 1.92f, d + 0.06f, st);
+  });
+  KMAT(SMAT_LAMP, SKB(a - 0.20f, 1.15f, d - 0.20f, a + 0.20f, 1.53f, d + 0.20f, rgb(1.0f, 0.70f, 0.32f)));
+}
+// THE PAGODA CROWN over a climbing tower's lookout at height H (world centre
+// cx, cz, core half-width hc): red lacquered posts, three tiers of green tile
+// roof with upturned corners, a glowing lantern room, a gilded spire.
+static void sk_pagoda_crown(float cx, float cz, float hc, float H) {
+  v3 lac = rgb(0.62f, 0.16f, 0.10f), tile = rgb(0.16f, 0.30f, 0.26f), gold = rgb(0.84f, 0.64f, 0.22f);
+  const float RT = 0.12f, p = 0.20f, ph = 2.3f;
+  int mf = g_mat_force; g_mat_force = SMAT_WOOD;
+  bx(cx - hc + RT, H, cz - hc + RT, cx - hc + RT + p, H + ph, cz - hc + RT + p, lac);
+  bx(cx + hc - RT - p, H, cz - hc + RT, cx + hc - RT, H + ph, cz - hc + RT + p, lac);
+  bx(cx - hc + RT, H, cz + hc - RT - p, cx - hc + RT + p, H + ph, cz + hc - RT, lac);
+  bx(cx + hc - RT - p, H, cz + hc - RT - p, cx + hc - RT, H + ph, cz + hc - RT, lac);
+  float y = H + ph;
+  static const float TW[3] = {1.70f, 1.25f, 0.85f}, CW[3] = {0.95f, 0.70f, 0.0f};
+  for (int i = 0; i < 3; i++) {
+    float w = hc + TW[i] - 1.0f + 0.6f;
+    g_mat_force = SMAT_CLAD;
+    bx(cx - w, y, cz - w, cx + w, y + 0.20f, cz + w, tile);                      // the tier
+    for (int c = 0; c < 4; c++) {                                                 // upturned corners
+      float sx = (c & 1) ? 1.0f : -1.0f, sz = (c & 2) ? 1.0f : -1.0f;
+      bx(cx + sx * (w - 0.34f), y + 0.20f, cz + sz * (w - 0.34f), cx + sx * w, y + 0.42f, cz + sz * w,
+         v3_scale(tile, 1.15f));
+    }
+    bx(cx - w * 0.62f, y + 0.20f, cz - w * 0.62f, cx + w * 0.62f, y + 0.34f, cz + w * 0.62f, v3_scale(tile, 0.85f));
+    y += 0.34f;
+    if (CW[i] > 0.0f) {                                                           // the room over it
+      g_mat_force = SMAT_LAMP;
+      bx(cx - CW[i], y, cz - CW[i], cx + CW[i], y + 0.62f, cz + CW[i], rgb(0.98f, 0.46f, 0.22f));
+      y += 0.62f;
+    }
+  }
+  g_mat_force = SMAT_STEEL;
+  bx(cx - 0.10f, y, cz - 0.10f, cx + 0.10f, y + 1.8f, cz + 0.10f, gold);
+  bx(cx - 0.22f, y + 0.5f, cz - 0.22f, cx + 0.22f, y + 0.62f, cz + 0.22f, gold);
+  bx(cx - 0.18f, y + 0.9f, cz - 0.18f, cx + 0.18f, y + 1.0f, cz + 0.18f, gold);
+  g_mat_force = mf;
+}
+// One band of the souk: a from a0 to a1 (the +z band runs -41.9..41.9 and
+// ends in corner houses; the +x band runs between them, -23.9..23.9).
+static void sk_band(int ax, int salt) {
+  g_sk_ax = ax;
+  v3 core = rgb(0.80f, 0.70f, 0.54f), step = rgb(0.64f, 0.58f, 0.48f);
+  if (ax == 0) {
+    // passages through the inner row: no shop is painted across them
+    static const float NOSH[4] = {-14.0f, -11.0f, 11.0f, 14.0f};
+    sk_arcade(-38.0f, 38.0f, SK_IN, NOSH, 2, salt);
+    sk_block(-23.9f, -14.0f, 4.4f, -1, salt + 1);
+    sk_alley(-14.0f, -11.0f, 1, -12.0f, salt + 2);
+    sk_block(-11.0f, -4.0f, 6.2f, 0, salt + 3);
+    sk_block(4.0f, 11.0f, 6.2f, 0, salt + 4);
+    sk_alley(11.0f, 14.0f, 1, 13.0f, salt + 5);
+    sk_block(14.0f, 23.9f, 4.4f, 1, salt + 6);
+    sk_alley(-27.5f, -23.9f, 0, -26.8f, salt + 7);
+    sk_alley(23.9f, 27.5f, 0, 26.6f, salt + 8);
+    sk_alley(-38.0f, -34.0f, 0, -35.5f, salt + 9);
+    sk_alley(34.0f, 38.0f, 0, 36.5f, salt + 10);
+    sk_street(-38.0f, 38.0f, salt + 11);
+    k_shopfront(0, -38.0f, 38.0f, SK_S1, SK_OUT, salt + 12, 5.2f, 3.6f);
+    // the corner houses, their front on the alley that closes each street,
+    // and a plain corner block behind the end of the outer row
+    // (the corner houses stop 10 cm short of the street's end, so their
+    // plinth never meets the outer row's in the corner; the block fills it)
+    k_shopfront(1, SK_IN, SK_S1 - 0.1f, 38.0f, SK_OUT, salt + 13, 6.5f, 2.5f);
+    k_shopfront(1, SK_IN, SK_S1 - 0.1f, -38.0f, -SK_OUT, salt + 14, 6.5f, 2.5f);
+    KMAT(SMAT_STUCCO, {
+      KB(38.0f, 0.0f, SK_S1 - 0.1f, SK_OUT, 8.6f, SK_OUT, kt_(core, 1, 1, salt + 15, 0.90f, 0.96f));
+      KB(-SK_OUT, 0.0f, SK_S1 - 0.1f, -38.0f, 8.2f, SK_OUT, kt_(core, 2, 2, salt + 16, 0.90f, 0.96f));
+    });
+    // the corner towers, each in its courtyard, and the pagoda over the
+    // yard in the middle of the side with its stone lanterns
+    tower(g_ks * 30.75f, g_ks * 30.75f, 1.3f, 8.0f, core, step, 1, -1);
+    tower(g_ks * -30.75f, g_ks * 30.75f, 1.3f, 8.0f, core, step, 1, -1);
+    tower(0.0f, g_ks * 30.75f, 1.3f, 9.6f, kt_(core, 3, 3, salt + 17, 1.0f, 1.04f), step, 0, -1);
+    sk_pagoda_crown(0.0f, g_ks * 30.75f, 1.3f, 9.6f);
+    sk_stone_lantern(-3.3f, 28.2f);
+    sk_stone_lantern(3.3f, 33.3f);
+  } else {
+    static const float NOSH[4] = {-14.0f, -11.0f, 11.0f, 14.0f};
+    sk_arcade(-23.9f, 23.9f, SK_IN, NOSH, 2, salt);
+    sk_block(-23.9f, -14.0f, 6.2f, 0, salt + 1);
+    sk_alley(-14.0f, -11.0f, 1, -12.0f, salt + 2);
+    sk_block(-11.0f, -1.5f, 4.4f, 0, salt + 3);
+    sk_alley(-1.5f, 1.5f, 0, -0.8f, salt + 4);
+    sk_block(1.5f, 11.0f, 4.4f, -1, salt + 5);
+    sk_alley(11.0f, 14.0f, 1, 13.0f, salt + 6);
+    sk_block(14.0f, 23.9f, 6.2f, 0, salt + 7);
+    sk_street(-23.9f, 23.9f, salt + 8);
+    k_shopfront(1, -23.9f, 23.9f, SK_S1, SK_OUT, salt + 9, 5.2f, 3.6f);
+  }
+}
 static void map_bazaar(void) {
   small_map_style();
   const theme_t *t = &g_theme;
-  k_shell_piers(t->wall);
-  // the outer street's shopfronts, a row along each wall (the 180-degree
+  // timber rails on the towers, and stone for their crowns
+  g_town.trim = rgb(0.40f, 0.28f, 0.18f);
+  g_town.stone = rgb(0.62f, 0.56f, 0.46f);
+  // (no shell piers: the outer houses stand in front of the whole shell)
+  // the old outer street's shopfronts, a row along each side of the core,
+  // now pierced by the passages to the arcade behind them (the 180-degree
   // symmetry is kept by building each half's two rows through g_ks)
   for (int hh = 0; hh < 2; hh++) {
     g_ks = hh ? -1.0f : 1.0f;
-    k_shopfront(0, -24.0f, 24.0f, 22.0f, 23.9f, 300);   // along the +z wall, facing -z
-    k_shopfront(1, -21.8f, 21.8f, 22.0f, 23.9f, 400);   // along the +x wall, facing -x
+    k_shopfront(0, -SK_IN, -14.0f, 22.0f, SK_IN, 300, 3.6f, 2.4f);   // the +z row, facing -z
+    k_shopfront(0, -11.0f, 11.0f, 22.0f, SK_IN, 310, 3.6f, 2.4f);
+    k_shopfront(0, 14.0f, SK_IN, 22.0f, SK_IN, 320, 3.6f, 2.4f);
+    k_shopfront(1, -21.8f, -14.0f, 22.0f, SK_IN, 400, 3.6f, 2.4f);  // the +x row, facing -x
+    k_shopfront(1, -11.0f, 11.0f, 22.0f, SK_IN, 410, 3.6f, 2.4f);
+    k_shopfront(1, 14.0f, 21.8f, 22.0f, SK_IN, 420, 3.6f, 2.4f);
+    sk_band(0, 500);
+    sk_band(1, 600);
   }
   g_ks = 1.0f;
   // THE FOUNTAIN: an octagonal stone basin with water, a column, an upper
@@ -1934,7 +2309,7 @@ static void supply_place(void) {
   const float H = ARENA_HALF;
   int sym = sup_rows() == NULL;              // the 48 m maps are 180-degree symmetric
   int per_kind = sym ? 1 : 3;                // per half on the small maps
-  enum { NC = 1600 };
+  enum { NC = 7200 };   // 1600 filled up on kind 0 alone past ~60 m
   static float cx[NC], cz[NC], cmx[NC], cmz[NC];
   static int cq[NC], ck[NC];
   int nc = 0;
@@ -2199,7 +2574,7 @@ typedef struct {
 static const map_def_t MAP_DEFS[] = {
   {"ARENA",    "arena",    -1, -1, 24.0f, 0.0f,  0, NULL},
   {"FOUNDRY",  "foundry",   1,  4, 52.0f, 0.45f, 1, map_foundry},  // SLATE, STORMFRONT: the yard + the works
-  {"BAZAAR",   "bazaar",    2,  1, 24.0f, 0.0f,  0, map_bazaar},    // SAND, GOLDEN HOUR
+  {"BAZAAR",   "bazaar",    2,  1, 42.0f, 0.45f, 1, map_bazaar},    // SAND, GOLDEN HOUR: the core + the souk
   {"OUTPOST",  "outpost",   0,  0, 24.0f, 0.0f,  0, map_outpost},   // QUARTZ, HIGH NOON
   {"CITADEL",  "citadel",   2,  6, 52.0f, 0.45f, 1, map_citadel},   // SAND, CLEAR AFTERNOON
   {"HARBOR",   "harbor",    1,  3, 52.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN

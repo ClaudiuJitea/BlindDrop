@@ -527,10 +527,11 @@ static int home_input(int act) {
 static float home_dip(void) {
   float u;
   const home_shot_t *sh = &HOME_SHOT[home_where(&u)];
-  // 0.30, not 0.20: the cut has to cover a WEAPON SWAP, whose raise animation is
-  // 0.30 s (GUN_SWITCH_TICKS), and a dip shorter than the thing it is hiding
-  // hides nothing.
-  float t = u * sh->len, in = t / 0.30f, out = (sh->len - t) / 0.30f;
+  // The cut has to cover a WEAPON SWAP, whose raise animation is
+  // GUN_SWITCH_TICKS long, and a dip shorter than the thing it is hiding
+  // hides nothing — so the dip is the raise's own length.
+  const float SWD = (float)GUN_SWITCH_TICKS / (float)TICK_HZ;
+  float t = u * sh->len, in = t / SWD, out = (sh->len - t) / SWD;
   float e = in < out ? in : out;
   return e >= 1.0f ? 0.0f : 1.0f - smooth01(f_clamp(e, 0.0f, 1.0f));
 }

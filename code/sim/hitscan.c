@@ -103,7 +103,12 @@ static float aabb_exit(v3 o, v3 d, v3 mn, v3 mx) {
 // through its arris and 1.20 m at 60 degrees of obliquity — so the angle you
 // take a wall at still decides whether the round arrives, and shooting the
 // corner of cover is still the cheap way through.
-#define PEN_PATH  1.20f    // metres of material ANY round may cross, full damage
+// ZERO: ROUNDS STOP AT THE FIRST WALL (2026-11-20). Wallbangs read as bullets
+// going through walls, which is not the game wanted — cover now stops every
+// round. Everything below is kept intact and still correct at 0: `left > 0`
+// fails at the first solid, pen_span is never called and the round stops on the
+// entry face. Raise this again to bring penetration back.
+#define PEN_PATH  0.0f     // metres of material ANY round may cross, full damage
 #define PEN_EPS   0.0015f  // step past a face before re-testing containment
 // The two below are COST bounds on the search, NOT rules of the mechanic, and
 // they are sized so PEN_PATH is the only thing a player can ever run into.

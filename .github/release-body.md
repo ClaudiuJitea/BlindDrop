@@ -1,14 +1,14 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.6
+## What's new in 0.8.7
 
-- **Simpler modes:** four modes (Deathmatch, Elimination, Gun Game, Hostage Rescue), plus **Teams** (on/off) and **Weapons** (all, snipers only, knives + nades) as settings. Any mix works, such as Team Elimination with snipers only. Old settings carry over.
-- **Elimination with teams:** no respawns, last side standing takes the round.
-- **Build your own Gun Game:** pick up to 10 guns in any order on the Ladder page. When you host, your ladder is the one every player climbs (`--ladder` on a dedicated server).
-- **New forearm displays:** kills this life, health and ammo bars, a radar or a compass. Pick one under Settings > HUD or Armory > Gear.
-- Ballistics moved to Host Settings and Dev > Assist.
+- **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter: a roofed souk hallway with paper lanterns and shop counters, alleys strung with washing, a market street under striped canopies, and tall houses all round.
+- **Stairs and towers:** stone stairs to six roof terraces, a lantern tower in each corner and two pagoda towers to climb. Bots find their way round it.
+- **New outfits:** Sahara, Viper, Nightshade and Abyss replace Coyote, Ranger and Shadow. Slate, Arctic and Reaper stay, and a saved Arctic or Reaper pick carries over.
+- **A readable compass:** the forearm compass shows your heading in three big digits over a scrolling N / E / S / W strip.
+- **Calmer weapon swaps:** the new weapon comes up in 0.55 s instead of 0.30 s.
 
-0.8.6 uses network protocol 23, so it can't play with older versions.
+0.8.7 uses network protocol 24, so it can't play with older versions.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

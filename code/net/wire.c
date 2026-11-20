@@ -44,7 +44,9 @@
 // its three weapon bits — a 16 peer would read the sniper bit as a button or drop it.
 // The same release also rebuilds the Citadel's street (pickups, bins, motorbikes,
 // cafe tables, tyre stacks, roof tanks — all solid): a 16 peer would fail the hash.
-#define NET_PROTO 23   // 23: TEAM LAST MAN STANDING (mode 7 in NP_SCORES; a side as
+#define NET_PROTO 24   // 24: THE BAZAAR SOUK (an 84 m map, STEP_H 0.45, routed) and a
+                       //     0.55 s weapon raise (GUN_SWITCH_TICKS 66, predicted)
+                       // 23: TEAM LAST MAN STANDING (mode 7 in NP_SCORES; a side as
                        //     round_win, MAX_ENTS + team)
                        // 22: SUPPLY STATIONS (EV_PICKUP, new solids on every map),
                        //     three of each grenade at spawn

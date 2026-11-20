@@ -615,19 +615,23 @@ static const gear_theme_t GEAR_THEMES[GEAR_THEME_COUNT] = {
   // a saturated accent on kit that has no business glowing. model_draw draws
   // them as moulded polymer in these colours (g_md_led), never lit.
   {{0}, {0}, {0}, {0}, {0}, {0.300f, 0.262f, 0.200f}},        // SLATE: identity
-  {{0.50f, 0.42f, 0.30f}, {0.42f, 0.37f, 0.29f}, {0.44f, 0.37f, 0.27f},
-   {0.25f, 0.23f, 0.20f}, {0.24f, 0.20f, 0.15f}, {0.300f, 0.262f, 0.200f}},
-  {{0.29f, 0.32f, 0.21f}, {0.33f, 0.34f, 0.27f}, {0.27f, 0.30f, 0.20f},
-   {0.64f, 0.54f, 0.40f}, {0.16f, 0.16f, 0.13f}, {0.235f, 0.262f, 0.200f}},
-  // SHADOW's accent plate was a saturated red (0.62, 0.12, 0.09): the hostile
-  // hue on a friendly glove. Graphite now, a value step over the shell.
-  {{0.13f, 0.13f, 0.14f}, {0.22f, 0.22f, 0.23f}, {0.12f, 0.12f, 0.13f},
-   {0.300f, 0.300f, 0.315f}, {0.09f, 0.09f, 0.10f}, {0.190f, 0.190f, 0.200f}},
+  // SAHARA: bright sand shell, umber accents and leather.
+  {{0.70f, 0.58f, 0.40f}, {0.56f, 0.47f, 0.34f}, {0.62f, 0.50f, 0.34f},
+   {0.36f, 0.27f, 0.18f}, {0.30f, 0.23f, 0.16f}, {0.300f, 0.262f, 0.200f}},
+  // VIPER: jungle green over black-green webbing.
+  {{0.20f, 0.32f, 0.17f}, {0.28f, 0.36f, 0.24f}, {0.17f, 0.27f, 0.14f},
+   {0.12f, 0.13f, 0.10f}, {0.10f, 0.11f, 0.08f}, {0.220f, 0.300f, 0.180f}},
+  // NIGHTSHADE: deep violet, charcoal plate. (Never red on a friendly glove.)
+  {{0.27f, 0.18f, 0.34f}, {0.36f, 0.28f, 0.42f}, {0.23f, 0.15f, 0.30f},
+   {0.150f, 0.140f, 0.165f}, {0.10f, 0.08f, 0.12f}, {0.260f, 0.200f, 0.300f}},
   {{0.70f, 0.72f, 0.75f}, {0.50f, 0.52f, 0.56f}, {0.80f, 0.82f, 0.85f},
    {0.28f, 0.31f, 0.36f}, {0.30f, 0.31f, 0.34f}, {0.250f, 0.275f, 0.300f}},
   // REAPER: black on black, a value step apart.
   {{0.105f, 0.108f, 0.118f}, {0.170f, 0.172f, 0.182f}, {0.110f, 0.114f, 0.126f},
    {0.210f, 0.214f, 0.228f}, {0.085f, 0.087f, 0.094f}, {0.170f, 0.175f, 0.185f}},
+  // ABYSS: navy shell, a steel-grey plate a clear step up.
+  {{0.14f, 0.18f, 0.31f}, {0.24f, 0.28f, 0.38f}, {0.12f, 0.15f, 0.27f},
+   {0.420f, 0.440f, 0.470f}, {0.08f, 0.09f, 0.13f}, {0.200f, 0.240f, 0.320f}},
 };
 // ...and the same colourway on the WHOLE third-person kit, not just the hands:
 // fatigues, trousers, plate carrier, helmet, webbing, boots, pads, balaclava
@@ -646,11 +650,12 @@ typedef struct {
 // the ramp, MEASURED (Rec.709 luminance of the display value):
 //            boot   pants  uni    carrier helm
 //   SLATE    .131   .318   .371   .619    .657
-//   COYOTE   .166   .376   .437   .345    .538
-//   RANGER   .141   .274   .320   .551    .582
-//   SHADOW   .081   .121   .141   .231    .301
+//   SAHARA   .187   .558   .653   .298    .784
+//   VIPER    .073   .234   .291   .120    .418
+//   NIGHTSH. .064   .166   .211   .144    .361
 //   ARCTIC   .261   .619   .718   .327    .838
 //   REAPER   .055   .107   .138   .198    .262
+//   ABYSS    .065   .136   .171   .438    .298
 static const body_kit_t BODY_KITS[GEAR_THEME_COUNT] = {
   // SLATE: the helmet was the brand's blaze orange (0.90, 0.48, 0.12) — and the
   // pauldrons, which wear the helmet colour, with it. A light grey composite
@@ -658,18 +663,21 @@ static const body_kit_t BODY_KITS[GEAR_THEME_COUNT] = {
   {{0.335f, 0.375f, 0.440f}, {0.290f, 0.320f, 0.380f}, {0.700f, 0.610f, 0.470f},   // SLATE
    {0.660f, 0.660f, 0.620f}, {0.150f, 0.160f, 0.190f}, {0.130f, 0.130f, 0.150f},
    {0.160f, 0.168f, 0.190f}, {0.260f, 0.275f, 0.305f}, {0.050f, 0.057f, 0.066f}},
-  // COYOTE: the carrier a clear step UNDER the uniform (it sat at 0.88x).
-  {{0.500f, 0.430f, 0.320f}, {0.430f, 0.370f, 0.280f}, {0.360f, 0.350f, 0.265f},   // COYOTE
-   {0.620f, 0.530f, 0.380f}, {0.240f, 0.200f, 0.150f}, {0.200f, 0.160f, 0.120f},
-   {0.300f, 0.260f, 0.200f}, {0.360f, 0.310f, 0.240f}, {0.072f, 0.062f, 0.048f}},
-  // RANGER: the shell was BELOW the sand carrier (0.434 against 0.551).
-  {{0.300f, 0.335f, 0.235f}, {0.260f, 0.285f, 0.210f}, {0.640f, 0.540f, 0.400f},   // RANGER
-   {0.570f, 0.600f, 0.450f}, {0.160f, 0.160f, 0.130f}, {0.150f, 0.140f, 0.120f},
-   {0.200f, 0.210f, 0.170f}, {0.240f, 0.250f, 0.200f}, {0.055f, 0.061f, 0.050f}},
-  // SHADOW: graphite shell, smoked lens (it was a violet glow; before that red).
-  {{0.140f, 0.140f, 0.150f}, {0.120f, 0.120f, 0.130f}, {0.230f, 0.230f, 0.240f},   // SHADOW
-   {0.300f, 0.300f, 0.320f}, {0.090f, 0.090f, 0.100f}, {0.080f, 0.080f, 0.090f},
-   {0.180f, 0.180f, 0.190f}, {0.120f, 0.120f, 0.130f}, {0.046f, 0.046f, 0.054f}},
+  // SAHARA: bright desert sand, a dark umber carrier a clear step UNDER it,
+  // a bone shell at the peak — the one light, warm operator.
+  {{0.760f, 0.640f, 0.460f}, {0.660f, 0.545f, 0.385f}, {0.380f, 0.285f, 0.190f},   // SAHARA
+   {0.860f, 0.780f, 0.600f}, {0.300f, 0.230f, 0.160f}, {0.230f, 0.180f, 0.130f},
+   {0.420f, 0.340f, 0.250f}, {0.620f, 0.530f, 0.400f}, {0.072f, 0.060f, 0.045f}},
+  // VIPER: saturated jungle green on black-green webbing and carrier, a leaf
+  // green shell at the peak.
+  {{0.200f, 0.330f, 0.170f}, {0.160f, 0.265f, 0.140f}, {0.110f, 0.125f, 0.095f},   // VIPER
+   {0.340f, 0.460f, 0.230f}, {0.080f, 0.090f, 0.070f}, {0.070f, 0.075f, 0.060f},
+   {0.130f, 0.180f, 0.110f}, {0.150f, 0.230f, 0.130f}, {0.045f, 0.060f, 0.045f}},
+  // NIGHTSHADE: deep violet fatigues, a charcoal carrier under them, a lilac
+  // shell at the peak.
+  {{0.270f, 0.180f, 0.340f}, {0.215f, 0.140f, 0.275f}, {0.150f, 0.140f, 0.165f},   // NIGHTSHADE
+   {0.440f, 0.320f, 0.540f}, {0.090f, 0.075f, 0.105f}, {0.070f, 0.060f, 0.080f},
+   {0.200f, 0.150f, 0.240f}, {0.180f, 0.120f, 0.230f}, {0.050f, 0.042f, 0.060f}},
   // ARCTIC: boots brought under the webbing so they are the floor again.
   {{0.700f, 0.720f, 0.750f}, {0.600f, 0.620f, 0.660f}, {0.300f, 0.330f, 0.380f},   // ARCTIC
    {0.820f, 0.840f, 0.870f}, {0.280f, 0.300f, 0.340f}, {0.250f, 0.260f, 0.290f},
@@ -680,6 +688,11 @@ static const body_kit_t BODY_KITS[GEAR_THEME_COUNT] = {
   {{0.135f, 0.138f, 0.148f}, {0.105f, 0.107f, 0.115f}, {0.200f, 0.198f, 0.190f},   // REAPER
    {0.255f, 0.262f, 0.275f}, {0.085f, 0.086f, 0.090f}, {0.055f, 0.055f, 0.060f},
    {0.150f, 0.152f, 0.158f}, {0.100f, 0.100f, 0.105f}, {0.048f, 0.047f, 0.050f}},
+  // ABYSS: navy fatigues under a steel-grey carrier (the value peak), a blue
+  // composite shell as the accent.
+  {{0.130f, 0.170f, 0.300f}, {0.105f, 0.135f, 0.240f}, {0.420f, 0.440f, 0.470f},   // ABYSS
+   {0.230f, 0.300f, 0.480f}, {0.070f, 0.080f, 0.120f}, {0.060f, 0.065f, 0.085f},
+   {0.150f, 0.180f, 0.260f}, {0.110f, 0.140f, 0.230f}, {0.040f, 0.050f, 0.075f}},
 };
 static const mdl_ref_t *armory_knife(void) {
   return &KNIFE_MODELS[armory_idx(g_cfg.knife_model, KNIFE_MODEL_COUNT)];

@@ -101,8 +101,17 @@ static void gun_round(int ent, weapon_t *w, const wpn_def_t *def, v3 o, v3 dir, 
     // A body in flight (see proj_tick). The tracer still leaves now, down the
     // line the round started on; what it hits arrives as an EV_IMPACT later.
     proj_spawn(ent, w->cur, o, dir);
-    ev_push((event_t){.type = EV_FIRE, .a = v3_add(o, v3_scale(dir, GUN_RANGE)), .b = dir,
-                      .f = GUN_RANGE, .g = w->ads_s, .i = w->idx, .k = 0,
+    // THE TRACER ENDS AT THE FIRST WALL. `a`/`f` are the streak's far end (and
+    // the fly-by crack's segment), and they used to be GUN_RANGE flat — so with
+    // ballistics on, every streak flew 200 m straight THROUGH whatever wall the
+    // round itself stopped on, which reads exactly as bullets going through
+    // walls. The straight line is the round's path to within its drop, which
+    // over any wall a tracer can be seen against is centimetres.
+    v3 twn;
+    int tws;
+    float tend = trace_world(o, dir, &twn, &tws);
+    ev_push((event_t){.type = EV_FIRE, .a = v3_add(o, v3_scale(dir, tend)), .b = dir,
+                      .f = tend, .g = w->ads_s, .i = w->idx, .k = 0,
                       .wpn = w->cur, .src = ent, .dst = -1});
     return;
   }

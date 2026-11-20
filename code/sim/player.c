@@ -100,7 +100,7 @@ static float ease_k(float rate) { return 1.0f - expf(-rate * TICK_DT); }
 
 // Weapon behavior constants shared by every weapon — per-weapon structure is
 // in WPN_DEF, per-weapon feel in g_cfg.wp.
-#define GUN_SWITCH_TICKS 36      // 0.3 s weapon raise on swap
+#define GUN_SWITCH_TICKS 66      // 0.55 s weapon raise on swap (0.30 s read as a snap)
 #define GUN_BLOOM_CAP    0.6f    // deg: full-auto spread growth tops out here
 #define GUN_MOVE_SPREAD  0.5f    // deg added at full run speed
 #define GUN_AIR_SPREAD   4.0f    // x: total spread multiplier while airborne
