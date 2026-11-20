@@ -17,7 +17,7 @@
   <img src="media/refinery.jpg" alt="Refinery: a road under coloured pipe racks on a clear morning" width="49%">
 </p>
 
-## New in 0.8.7
+## New in 0.8.7 and 0.8.8
 
 - **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter. Passages
   lead into a roofed souk hallway with paper lanterns, shop blocks split by narrow alleys, a market
@@ -28,8 +28,9 @@
 - **A readable compass:** the forearm compass shows your heading in big digits over a scrolling
   N / E / S / W strip.
 - **Calmer weapon swaps:** the new weapon comes up in 0.55 s instead of 0.30 s.
+- **0.8.8:** a cleaner third-person seat on light outfits: one trouser surface under the belt.
 
-0.8.7 uses network protocol 24, so it can't play with older versions.
+0.8.7 and 0.8.8 use network protocol 24, so they can't play with older versions.
 
 <p align="center">
   <img src="media/bazaar_aerial.jpg" alt="The new Bazaar from above: the market square, the ring of souk buildings, a pagoda tower and a lantern tower" width="100%">

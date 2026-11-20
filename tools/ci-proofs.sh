@@ -190,7 +190,8 @@ n="$(run "bots 0; warp 0 0 -10; fire 0 0 -10; wait 200" | grep -c '^hit ')"
 # grip and fore-end in the carry instead of being slid off them by fig_hand's
 # clamp, and a seated palm bites the tube by design. Every other class is
 # byte-identical; zfight 0 on every tier.
-WANT_NEAR="59 59 64 52"
+# -3 -3 0 0 with the CLEFTLESS SEAT (2026-11-20, see WANT_CROSS).
+WANT_NEAR="56 56 64 52"
 [ "$NEAR" = "$WANT_NEAR" ] || { say "GATE near '$NEAR' != baseline '$WANT_NEAR'"; fail=1; }
 
 # `cross` — surfaces passing THROUGH each other at 1.8-15 degrees, the tier the
@@ -493,7 +494,16 @@ WANT_NEAR="59 59 64 52"
 # gun-up, gun-right) the grips stay seated at every attitude and fewer
 # glove/gun/forearm surfaces cross. open/flip/zfight/degen 0, `near` unchanged,
 # figbury unchanged (AR 6.5 mm, SR 0.0).
-WANT_CROSS="242 242 168 135"
+# +22 +22 -1 0 with the CLEFTLESS SEAT (2026-11-20, 0.8.7 follow-up): the two
+# seat panels met 27 mm short of their crowns, and in light trousers from
+# behind the seat read as two cheeks with a lump in the groove. The panels are
+# 12-14 mm shallower (FIG_SEAT_ST in step), one broad mass fills the groove,
+# and the crouch's two seat balls are pulled in to merge. By `figv` class at
+# DIST 0 every changed pair is a seat pair: seat/seat 6 -> 162 tri pairs (the
+# filler blending into the panels, by design), seat/thigh 952 -> 441 and
+# torso/seat 175 -> 37 (fewer crossings), plus belt/pistolpouch 0 -> 19 (belt
+# kit sits on the shallower trouser surface). open/flip/zfight/degen 0.
+WANT_CROSS="264 264 167 135"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows

@@ -1,6 +1,12 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.7
+## What's new in 0.8.8
+
+- **Cleaner third-person seat:** from behind, the trousers now read as one surface under the belt, standing, running and crouched. In light outfits like Sahara and Arctic, the seat used to show two round cheeks with a lump between them.
+
+0.8.8 still uses network protocol 24, so it plays with 0.8.7.
+
+## Also in 0.8.7
 
 - **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter: a roofed souk hallway with paper lanterns and shop counters, alleys strung with washing, a market street under striped canopies, and tall houses all round.
 - **Stairs and towers:** stone stairs to six roof terraces, a lantern tower in each corner and two pagoda towers to climb. Bots find their way round it.

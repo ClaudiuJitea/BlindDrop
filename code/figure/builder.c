@@ -903,7 +903,7 @@ static v3 fig_torso_front(const pose_t *P, v3 spine, v3 prt, v3 Rc, float tw,
 #define FIG_BELT_RZ 0.130f
 static const float FIG_SEAT_ST[FIG_SEAT_N][5] = {   // T, L, F, rx, rz
   {-0.070f, 0.095f, -0.022f, 0.101f, 0.112f},
-  {-0.020f, 0.072f, -0.028f, 0.112f, 0.114f},
+  {-0.020f, 0.072f, -0.020f, 0.112f, 0.100f},
   { 0.040f, 0.048f, -0.013f, 0.088f, 0.087f}};
 // Farthest root t of the ray t*(c, s) on an ellipse centred (cx, cf), radii a, b;
 // -1 when the ray misses it.

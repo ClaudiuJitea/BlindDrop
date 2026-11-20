@@ -1499,14 +1499,31 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // (any shallower and the two seats' backs meet at a graze under the belt).
       fnode_t sp[5] = {
         {SEAT_P(0.040f, 0.048f, -0.013f), kt.pants, kt.pants, 0.088f, 0.087f, 0, 0.0f},   // well inside the belt
-        {v3_add(seat_mid, v3_scale(pfw_, -0.012f)), kt.pants, kt.pants, 0.112f, 0.114f, 0, 0.0f},  // over the seat
-        {v3_add(hipn, v3_scale(pfw_, -0.010f)), kt.pants, kt.pants, 0.101f, 0.112f, 0, 0.0f},      // behind the hip joint
+        {v3_add(seat_mid, v3_scale(pfw_, -0.004f)), kt.pants, kt.pants, 0.112f, 0.100f, 0, 0.0f},  // over the seat
+        {v3_add(hipn, v3_scale(pfw_, -0.004f)), kt.pants, kt.pants, 0.101f, 0.102f, 0, 0.0f},      // behind the hip joint
         {thmid, kt.pants, kt.pants, 0.097f, 0.116f, 0, 0.0f},                             // a tenth down the leg
         {low, kt.pants, kt.pants, 0.064f, 0.074f, 0, 0.0f}};                              // into the thigh
       #undef SEAT_P
       probe("seat");
       g_fig_jit = 0.0f;   // one cloth with the thigh: no band jitter, no darkened ends
       if (!kt.ins) fig_chain(sp, 5, 16, 1, 1, prt);   // the insurgent's tunic is his seat
+      // THE SEAT HAS NO CLEFT (0.8.7). The two panels are ellipses 72 mm off
+      // the midline, so where they meet their backs had fallen 27 mm short of
+      // their crowns: from behind, two round cheeks with a groove down the
+      // middle — in light trousers (SAHARA, ARCTIC) with the sun behind the
+      // camera, a cartoon backside. One broad mass across the seat, its back
+      // flush with the panels' (140 mm behind the pelvis), fills the groove, so
+      // the trouser seat reads as one surface. Short along the spine (its
+      // bottom 75 mm under the pelvis) so a stride never shows it between the
+      // legs, and drawn once, with the second leg.
+      if (!kt.ins && i == 1) {
+        // In a squat the seat rolls back over the hips: the mass follows it
+        // (fl, this leg's squat flexion), so it never shows as a flap between
+        // the two rounded seat masses the crouch grows below.
+        v3 sc_ = v3_add(pv, v3_add(v3_scale(spine, -0.030f - 0.020f * fl), v3_scale(pfw_, -0.036f - 0.040f * fl)));
+        probe("seat");
+        fig_ball(sc_, 0.150f, 0.070f + 0.020f * fl, 0.086f + 0.020f * fl, spine, prt, 16, kt.pants);
+      }
       // ...and the ROUND OF THE SEAT in a squat. Thighs forward, the leg tubes
       // are seen end-on from behind — two flat discs where a seat should be —
       // and no panel swept down from the belt can close a disc that faces
@@ -1516,10 +1533,13 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       if (fl > 0.02f) {
         // centred 2 cm in from the hip joint and wider, so the two overlap well
         // past the midline: one seat with a soft seam, not two balls
-        v3 bc = v3_add(v3_add(P.hip[i], v3_scale(td, -0.046f * fl)),
-                       v3_add(v3_scale(spine, 0.006f), v3_scale(prt, -s_ * 0.022f * fl)));
+        // (0.8.7: pulled in to 5 cm off the midline and a little shallower —
+        // 2.2 cm in left two 12 cm balls side by side, a cartoon backside in
+        // light trousers; now the two masses merge into one seat)
+        v3 bc = v3_add(v3_add(P.hip[i], v3_scale(td, -0.040f * fl)),
+                       v3_add(v3_scale(spine, 0.006f), v3_scale(prt, -s_ * 0.050f * fl)));
         probe("seat");
-        fig_ball(bc, 0.076f + 0.046f * fl, 0.050f + 0.060f * fl, 0.080f + 0.040f * fl, td, prt, 16, kt.pants);
+        fig_ball(bc, 0.076f + 0.040f * fl, 0.050f + 0.055f * fl, 0.080f + 0.030f * fl, td, prt, 16, kt.pants);
       }
       g_fig_jit = 1.0f;
     }
