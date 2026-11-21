@@ -585,6 +585,7 @@ static struct { v3 from; float x, y, r; int life, max, placed; uint32_t seed; } 
 static int g_splat_head;
 static float g_hurt_u[4];
 static float g_dmg_u[4][4];   // per attacker: screen dir x, y (up), strength, -
+static float g_slide_fx;      // 0..1 1P high-speed slide rush intensity (post.c)
 static float splat_rand(uint32_t *h) {
   *h ^= *h << 13; *h ^= *h >> 17; *h ^= *h << 5;
   return (float)(*h & 0xFFFFu) / 65535.0f;

@@ -136,7 +136,12 @@ static void pose_gun_frame(const pose_t *P, int wpn,
 // follows about half of that, which is what puts the eye over the sight instead
 // of beside it. Scaled by ads_s so a walking figure keeps his head level.
 static float anim_head_cant(const anim_t *A) {
-  return 0.26f * A->ads_s;
+  // During a lean, the head counter-rolls ~38% back toward level (matching 1P's
+  // LEAN_VIEW_K vestibulo-ocular stabilization) and tempers stacked right-lean
+  // ADS cheek-weld cant so the helmet never tips past a natural ~18 deg.
+  float lean_cr = -A->lean_s * LEAN_ANGLE * (1.0f - LEAN_VIEW_K);
+  float ads_c = 0.26f * A->ads_s * (1.0f - 0.55f * fmaxf(A->lean_s, 0.0f));
+  return ads_c + lean_cr;
 }
 
 // THE HEAD'S OWN FRAME, and the EYE in it — one copy, because the renderer
@@ -342,7 +347,8 @@ typedef struct {
   float sy, sz, sr;
   float mag_y, mag_z;
   float reld_y, reld_z, reld_ay, reld_az;
-  float fore_dz, ads_push, mag_k;
+  float fore_dz, fore_dy, fore_vfg;
+  float ads_push, mag_k, mag_drop;
   float grip_rot, grip_dy, grip_dz;
 } vm_var_t;
 #define HAND_WRIST_Y (-0.080f)   // the firing hand's wrist (hand_r's W_R), its pose pivot
@@ -351,59 +357,64 @@ typedef struct {
 #define VM_HOLO_Z_ 0.1680f
 #define VM_HOLO_R_ 0.0133f
 static const vm_var_t VM_VAR[3][WPN_VARS] = {
-  { {0.022f, 0.492f, 0, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},       // M4A4
-    {0.022f, 0.492f, 1, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},       // AK-47 (Kobra)
-    {0.022f, 0.500f, 2, 0.0600f, -0.1400f, 0.0026f, -0.076f, -0.146f,                       // FAMAS
-     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, 0.070f, 1, 0, 0, 0},
-    {0.022f, 0.640f, 2, 0.0600f, -0.0080f, 0.0024f, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},              // M4A1-S
-    {0.020f, 0.500f, 2, 0.0600f, -0.0180f, 0.0024f, -0.100f, 0.128f, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},   // GALIL AR
-    {0.019f, 0.490f, 3, 0.0750f, 0.1500f, 0.0136f, 0, 0, 0, 0, 0, 0, 0, -0.090f, 1, 0, 0, 0},         // SG 553 (objective)
-    {0.020f, 0.480f, 3, 0.0780f, 0.1260f, 0.0126f, -0.076f, -0.146f,                        // AUG (objective)
-     -0.0520f, -0.1420f, 0.990f, 0.140f, 0, -0.060f, 1, 0, 0, 0},
-    {0.019f, 0.225f, 2, 0.0460f, -0.0480f, 0.0022f, -0.1354f, 0.0047f,                      // MAC-10
-     -0.1413f, 0.0009f, 0.983f, 0.176f, -0.104f, 0, 1, -0.22f, -0.0231f, 0.0317f},         //   its own near-vertical grip
-    {0.019f, 0.235f, 2, 0.0520f, -0.0450f, 0.0022f, -0.115f, -0.032f,                       // MP9
-     -0.1200f, -0.0360f, 0.921f, 0.386f, -0.114f, 0, 1, 0, 0, 0},
-    {0.019f, 0.235f, 2, 0.0580f, -0.0550f, 0.0024f, -0.1288f, -0.0202f,                     // MP7
-     -0.1342f, -0.0236f, 0.955f, 0.292f, -0.116f, 0, 1, -0.10f, -0.0120f, 0.0120f},        //   its own hooked grip
-    {0.019f, 0.420f, 2, 0.0600f, -0.0400f, 0.0026f, -0.090f, 0.095f,                        // MP5-SD
-     -0.0600f, 0.0920f, 0.990f, 0.140f, 0, 0, 1, 0, 0, 0},
-    {0.019f, 0.240f, 2, 0.0620f, -0.0400f, 0.0026f, -0.085f, 0.095f,                        // UMP-45
-     -0.0620f, 0.0950f, 1.0f, 0.0f, -0.104f, 0, 1, 0, 0, 0},
-    {0.019f, 0.230f, 1, 0.0840f, 0.0900f, 0.0100f, 0.052f, -0.030f,                         // P90
-     0.0620f, -0.0300f, 0.0f, 1.0f, -0.136f, 0, -1, -0.22f, -0.0251f, 0.0197f},            //   the thumbhole bar
-    {0.019f, 0.440f, 2, 0.0580f, 0.2000f, 0.0024f, -0.020f, 0.205f,                         // PP-BIZON
-     -0.0200f, 0.2050f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
+  { {0.022f, 0.492f, 0, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, -0.097f, 0.127f,                // M4A4
+     -0.078f, 0.124f, 0.995f, -0.100f,  0.000f,  0.000f, 0,  0.000f,  1, 0.132f, 0, 0, 0},
+    {0.022f, 0.492f, 1, VM_HOLO_Y_, VM_HOLO_Z_, VM_HOLO_R_, -0.093f, 0.136f,                // AK-47 (Kobra)
+     -0.082f, 0.132f, 0.985f, -0.174f,  0.000f,  0.000f, 0,  0.000f,  1, 0.150f, 0, 0, 0},
+    {0.021f, 0.450f, 2, 0.0600f, -0.1400f, 0.0026f, -0.074f, -0.144f,                       // FAMAS F1
+     -0.068f, -0.144f, 0.998f,  0.050f, -0.050f, -0.008f, 0,  0.070f,  1, 0.118f, 0, 0, 0},
+    {0.022f, 0.640f, 2, 0.0600f, -0.0080f, 0.0024f, -0.078f, 0.126f,                        // M4A1-S (20-rd straight)
+     -0.068f, 0.124f, 0.999f, -0.045f,  0.000f,  0.000f, 0,  0.000f,  1, 0.118f, 0, 0, 0},
+    {0.020f, 0.500f, 2, 0.0600f, -0.0180f, 0.0024f, -0.104f, 0.139f,                        // GALIL AR (35-rd curved)
+     -0.088f, 0.135f, 0.985f, -0.174f,  0.000f, -0.004f, 0,  0.000f,  1, 0.154f, 0, 0, 0},
+    {0.019f, 0.490f, 3, 0.0750f,  0.1500f, 0.0136f, -0.096f, 0.127f,                        // SG 553 (objective)
+     -0.078f, 0.124f, 0.995f, -0.100f,  0.000f, -0.004f, 0, -0.090f,  1, 0.132f, 0, 0, 0},
+    {0.020f, 0.480f, 3, 0.0780f,  0.1260f, 0.0126f, -0.079f, -0.150f,                       // AUG (objective)
+     -0.070f, -0.148f, 0.996f,  0.090f,  0.000f, -0.006f, 0, -0.060f,  1, 0.120f, 0, 0, 0},
+    {0.019f, 0.225f, 2, 0.0460f, -0.0480f, 0.0022f, -0.1145f, -0.0010f,                     // MAC-10 (strap hold)
+     -0.1380f, -0.0050f, 0.983f, 0.176f, -0.064f, -0.014f, 0,  0.000f,  1, 0.150f, -0.22f, -0.0231f,  0.0317f},
+    {0.019f, 0.235f, 2, 0.0520f, -0.0450f, 0.0022f, -0.1012f, -0.0210f,                     // MP9 (integral VFG!)
+     -0.1280f, -0.0270f, 0.971f, 0.234f, -0.110f, -0.072f, 1,  0.000f,  1, 0.145f, -0.16f, -0.0109f,  0.0115f},
+    {0.019f, 0.235f, 2, 0.0580f, -0.0550f, 0.0024f, -0.1115f, -0.0231f,                     // MP7 (deployed VFG!)
+     -0.1360f, -0.0300f, 0.955f, 0.292f, -0.096f, -0.072f, 1,  0.000f,  1, 0.152f, -0.10f, -0.0120f,  0.0120f},
+    {0.019f, 0.420f, 2, 0.0600f, -0.0400f, 0.0026f, -0.0880f, 0.1076f,                      // MP5-SD
+     -0.0740f,  0.1040f, 0.985f, -0.174f,  0.000f, -0.004f, 0,  0.000f,  1, 0.134f, 0, 0, 0},
+    {0.019f, 0.310f, 2, 0.0620f, -0.0400f, 0.0026f, -0.0940f, 0.1010f,                      // UMP-45
+     -0.0780f,  0.1000f, 0.998f, -0.056f, -0.055f, -0.012f, 0,  0.000f,  1, 0.140f, 0, 0, 0},
+    {0.019f, 0.230f, 1, 0.0840f,  0.0900f, 0.0100f,  0.0522f, -0.0835f,                     // P90 (top mag)
+      0.0620f, -0.0300f, 0.000f,  1.000f, -0.120f, -0.030f, 0,  0.000f, -1, 0.068f, -0.22f, -0.0251f,  0.0197f},
+    {0.019f, 0.440f, 2, 0.0580f,  0.2000f, 0.0024f, -0.0151f,  0.2100f,                     // PP-BIZON (helical drum)
+     -0.0200f,  0.2050f, 0.000f,  1.000f,  0.000f, -0.004f, 0,  0.000f,  1, 0.074f, 0, 0, 0},
     // THE SHOTGUNS: group 1 is ONE SHELL at the loading port, the support hand
     // thumbs it in along the bore (hold axis along z); group 3 the pump.
-    {0.036f, 0.550f, 2, 0.0520f, -0.0300f, 0.0022f, -0.014f, 0.085f,                        // NOVA
-     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
-    {0.036f, 0.540f, 2, 0.0560f, -0.0300f, 0.0024f, -0.014f, 0.085f,                        // XM1014
-     -0.0380f, 0.0850f, 0.0f, 1.0f, 0, 0, 1, 0, 0, 0},
-    {0.036f, 0.360f, 2, 0.0520f, 0.0000f, 0.0022f, -0.014f, 0.085f,                         // SAWED-OFF
-     -0.0380f, 0.0850f, 0.0f, 1.0f, -0.030f, 0, 1, 0, 0, 0},
-    {0.030f, 0.420f, 2, 0.0560f, -0.0400f, 0.0022f, -0.120f, -0.035f,                       // MAG-7 (box in the grip)
-     -0.1250f, -0.0400f, 0.921f, 0.386f, -0.020f, 0, 1, 0, 0, 0},
-    // THE MACHINE GUNS: the ammunition box hangs at the magwell.
-    {0.022f, 0.560f, 2, 0.0640f, 0.0200f, 0.0026f, -0.075f, 0.118f,                         // M249
-     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1, 0, 0, 0},
-    {0.022f, 0.580f, 2, 0.0640f, 0.0100f, 0.0026f, -0.075f, 0.118f,                         // NEGEV
-     -0.0600f, 0.1180f, 1.0f, 0.0f, 0, 0.010f, 1, 0, 0, 0} },
-  { {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // P2000
-    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // GLOCK-18
-    {0.006f, 0.196f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // DESERT EAGLE
-    {0.006f, 0.300f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // USP-S (the can)
-    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // P250
-    {0.006f, 0.152f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // FIVE-SEVEN
-    {0.006f, 0.215f, 2, 0, 0, 0, 0, 0, -0.1100f, 0.1050f, 1.0f, 0.0f, 0, 0, 1,   // TEC-9: mag ahead of the guard,
-     -0.10f, -0.0140f, 0.0200f},                                                 //   its own fat grip
-    {0.006f, 0.142f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // CZ75-AUTO
-    {0.006f, 0.205f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // R8 REVOLVER
-    {0.006f, 0.150f, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0} },  // DUAL BERETTAS (the right gun)
-  { {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // AWP
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // SCAR-20
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0},    // SSG 08
-    {0.016f, 0.506f, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0} },  // G3SG1
+    {0.036f, 0.550f, 2, 0.0520f, -0.0300f, 0.0022f, -0.014f, 0.087f,                        // NOVA
+     -0.0380f,  0.0850f, 0.0f, 1.0f,  0.000f,  0.000f, 0, 0.000f, 1, 0.060f, 0.28f, 0.0250f, -0.0194f},
+    {0.036f, 0.540f, 2, 0.0560f, -0.0300f, 0.0024f, -0.014f, 0.087f,                        // XM1014
+     -0.0380f,  0.0850f, 0.0f, 1.0f,  0.000f,  0.000f, 0, 0.000f, 1, 0.060f, 0, 0, 0},
+    {0.036f, 0.360f, 2, 0.0520f,  0.0000f, 0.0022f, -0.014f, 0.087f,                        // SAWED-OFF
+     -0.0380f,  0.0850f, 0.0f, 1.0f, -0.030f,  0.000f, 0, 0.000f, 1, 0.060f, 0.30f, 0.0268f, -0.0202f},
+    {0.030f, 0.420f, 2, 0.0560f, -0.0400f, 0.0022f, -0.1007f, -0.0156f,                     // MAG-7 (box in grip)
+     -0.1260f, -0.0200f, 0.983f, 0.176f, -0.020f, -0.020f, 0, 0.000f, 1, 0.144f, -0.22f, -0.0146f,  0.0162f},
+    // THE MACHINE GUNS: the ammunition box/drum hangs at the magwell.
+    {0.022f, 0.560f, 2, 0.0640f, 0.0200f, 0.0026f, -0.075f, 0.119f,                         // M249
+     -0.0750f,  0.1180f, 1.0f, 0.0f,  0.000f, -0.006f, 0, 0.010f, 1, 0.115f, 0, 0, 0},
+    {0.022f, 0.580f, 2, 0.0640f, 0.0100f, 0.0026f, -0.074f, 0.118f,                         // NEGEV
+     -0.0740f,  0.1180f, 1.0f, 0.0f,  0.000f, -0.006f, 0, 0.010f, 1, 0.115f, 0, 0, 0} },
+  { {0.006f, 0.150f, 2, 0, 0, 0, -0.069f, -0.011f, -0.112f, -0.017f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.105f, 0, 0, 0},  // P2000
+    {0.006f, 0.150f, 2, 0, 0, 0, -0.070f, -0.012f, -0.114f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.108f, 0, 0, 0},  // GLOCK-18
+    {0.006f, 0.196f, 2, 0, 0, 0, -0.070f, -0.013f, -0.114f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.108f, 0, 0, 0},  // DESERT EAGLE
+    {0.006f, 0.300f, 2, 0, 0, 0, -0.072f, -0.012f, -0.116f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.110f, 0, 0, 0},  // USP-S
+    {0.006f, 0.142f, 2, 0, 0, 0, -0.071f, -0.012f, -0.114f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.108f, 0, 0, 0},  // P250
+    {0.006f, 0.152f, 2, 0, 0, 0, -0.075f, -0.012f, -0.118f, -0.019f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.115f, 0, 0, 0},  // FIVE-SEVEN
+    {0.006f, 0.215f, 2, 0, 0, 0, -0.099f,  0.104f, -0.098f,  0.105f, 0.999f, 0.028f, 0, 0, 0, 0, 1, 0.146f,            // TEC-9 (long stick mag)
+     -0.10f, -0.0140f, 0.0200f},
+    {0.006f, 0.164f, 2, 0, 0, 0, -0.071f, -0.012f, -0.114f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.108f, 0, 0, 0},  // CZ75-AUTO
+    {0.006f, 0.205f, 2, 0, 0, 0, -0.005f,  0.019f, -0.018f,  0.018f, 0.990f, 0.100f, 0, 0, 0, 0, 1, 0.068f, 0, 0, 0},  // R8 REVOLVER
+    {0.006f, 0.150f, 2, 0, 0, 0, -0.071f, -0.012f, -0.114f, -0.018f, 0.921f, 0.386f, 0, 0, 0, 0, 1, 0.105f, 0, 0, 0} },// DUAL BERETTAS
+  { {0.016f, 0.506f, 3, 0, 0, 0, -0.065f, 0.052f, -0.056f, 0.052f, 0.999f, 0.020f, 0, 0, 0, 0, 1, 0.098f, 0, 0, 0},    // AWP
+    {0.016f, 0.506f, 3, 0, 0, 0, -0.065f, 0.052f, -0.056f, 0.052f, 0.999f, 0.020f, 0, 0, 0, 0, 1, 0.098f, 0, 0, 0},    // SCAR-20
+    {0.016f, 0.506f, 3, 0, 0, 0, -0.052f, 0.052f, -0.048f, 0.052f, 0.999f, 0.020f, 0, 0, 0, 0, 1, 0.082f, 0, 0, 0},    // SSG 08
+    {0.016f, 0.506f, 3, 0, 0, 0, -0.065f, 0.052f, -0.056f, 0.052f, 0.999f, 0.020f, 0, 0, 0, 0, 1, 0.098f, 0, 0, 0} },  // G3SG1
 };
 static const vm_var_t *vm_var(int cur, int var) {
   int row = wpn_var_row(cur);
@@ -422,20 +433,29 @@ static v3 vm_mag_centre_v(int cur, int var) {
   if (vv && (vv->mag_y != 0.0f || vv->mag_z != 0.0f)) return (v3){{0.0f, vv->mag_y, vv->mag_z}};
   return cur == WPN_SR ? (v3){{0.0f, -0.066f, 0.053f}} : (v3){{0.0f, -0.097f, 0.127f}};
 }
-// The second magazine held in the same hand during a tactical reload: beside
-// the first, forward along the bore and a little toward the camera.
+// The second magazine held in the same hand during a tactical reload: cleanly
+// side-by-side to the left of the old magazine (not driven forward into the
+// trigger guard or handguard on long magazines).
 static v3 gun_pair_ofs(v3 gx, v3 gz) {
-  return v3_add(v3_scale(gz, 0.046f), v3_scale(gx, -0.016f));
+  return v3_add(v3_scale(gx, -0.030f), v3_scale(gz, 0.008f));
 }
-// The spent magazine's free fall, for `t` seconds after release: gravity, a
-// small push out of the well, and a forward tumble about its own centre.
-// Returns the model origin to draw the magazine group at, and its basis.
+// The spent magazine's free fall, for `t` seconds after release: slides straight
+// out along the gun's own magwell axis first so long magazines clear the receiver
+// and pistol grip before tumbling away under gravity.
 static v3 gun_drop_pose(int cur, int var, v3 org, v3 gx, v3 *gy, v3 *gz, float t) {
+  const vm_var_t *vv = vm_var(cur, var);
   v3 L = vm_mag_centre_v(cur, var);
   v3 c = v3_add(org, v3_add(v3_scale(*gy, L.y), v3_scale(*gz, L.z)));
-  v3 fall = {{0.0f, -(0.5f * 9.81f * t * t + 0.35f * t), 0.0f}};
-  fall = v3_add(fall, v3_scale(gx, -0.18f * t));
-  float a = 2.2f * t;
+  float ay = (vv && (vv->reld_ay != 0.0f || vv->reld_az != 0.0f) && fabsf(vv->reld_ay) > 0.5f)
+           ? vv->reld_ay : 1.0f;
+  float az = (vv && (vv->reld_ay != 0.0f || vv->reld_az != 0.0f) && fabsf(vv->reld_ay) > 0.5f)
+           ? vv->reld_az : 0.0f;
+  v3 out_ax = v3_norm(v3_add(v3_scale(*gy, -ay), v3_scale(*gz, -az)));
+  float clr = f_clamp((t - 0.08f) / 0.14f, 0.0f, 1.0f);
+  v3 fall = v3_add(v3_scale(out_ax, 0.72f * t),
+                   (v3){{0.0f, -0.5f * 9.81f * t * t, 0.0f}});
+  fall = v3_add(fall, v3_scale(gx, -0.14f * t * clr));
+  float a = 1.9f * fmaxf(0.0f, t - 0.07f);
   float ca = cosf(a), sa = sinf(a);
   v3 ny = v3_add(v3_scale(*gy, ca), v3_scale(*gz, sa));
   v3 nz = v3_sub(v3_scale(*gz, ca), v3_scale(*gy, sa));
@@ -910,8 +930,15 @@ static void gun_tp_draw(const mdl_ref_t *m, int cur, v3 org, v3 gx, v3 gy, v3 gz
   model_draw(m->v, m->p, m->np, 0, org, gx, gy, gz);
   model_draw(m->v, m->p, m->np, 2, org, gx, gy, gz);
   model_draw(m->v, m->p, m->np, 3, org, gx, gy, gz);
-  float md = cur < WPN_KN ? md01 * GUN_MAG_TRAVEL[cur][0] * g_gun_girth : 0.0f;
-  model_draw(m->v, m->p, m->np, 1, v3_sub(org, v3_scale(gy, md)), gx, gy, gz);
+  int row = wpn_var_row(cur), shell_gun = 0;
+  if (row >= 0 && m >= &TP_VAR_MODELS[row][0] && m < &TP_VAR_MODELS[row][WPN_VARS]) {
+    int v = (int)(m - &TP_VAR_MODELS[row][0]);
+    shell_gun = WPN_VAR[row][v].shell_t > 0;
+  }
+  if (!shell_gun) {
+    float md = cur < WPN_KN ? md01 * GUN_MAG_TRAVEL[cur][0] * g_gun_girth : 0.0f;
+    model_draw(m->v, m->p, m->np, 1, v3_sub(org, v3_scale(gy, md)), gx, gy, gz);
+  }
   g_md_matte = 0;
   g_md_scale = s0;
 }

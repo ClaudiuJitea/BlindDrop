@@ -229,7 +229,7 @@ static const char *POST_FS =
   "in vec2 vUV;\n"
   "uniform sampler2D uTex, uAO, uVol, uBloom, uAdapt, uDepth, uVmD;\n"
   "uniform float uSat, uCon, uVig; uniform vec3 uTint, uLift;\n"
-  "uniform float uFx, uBloomK, uCA, uMotion, uAds, uVmOn, uTime, uAspect;\n"
+  "uniform float uFx, uBloomK, uCA, uMotion, uAds, uVmOn, uTime, uAspect, uSlide;\n"
   "uniform vec4 uHeat;\n"       // screen xy, radius, strength
   "uniform float uDbg;\n"
   "uniform vec2 uVmVel;\n"      // the weapon's own screen motion this frame
@@ -342,6 +342,20 @@ static const char *POST_FS =
   "  c *= exp2(texture(uAdapt, vec2(0.5)).r);\n"
   "  c = sqrt(aces(c));\n"
   "  c = grade(c, vUV, uFx);\n"
+  // SLIDE SPEED RUSH: crisp peripheral radial wind streaks + subtle edge
+  // vignette around the outer 28% of the screen during high-speed 1P slides,
+  // leaving the centre sight picture 100% untouched.
+  "  if (uSlide > 0.005 && uFx > 0.5) {\n"
+  "    vec2 sq = (vUV - 0.5) * vec2(uAspect, 1.0);\n"
+  "    float sr = length(sq) * 1.45;\n"
+  "    float rim = smoothstep(0.55, 1.18, sr);\n"
+  "    float ang = atan(sq.y, sq.x);\n"
+  "    float ray = 0.55 + 0.45 * sin(ang * 26.0 + uTime * 2.5)\n"
+  "              * sin(ang * 41.0 - uTime * 4.2 + sr * 4.0);\n"
+  "    float streak = smoothstep(0.68, 0.98, ray) * rim * uSlide;\n"
+  "    c *= 1.0 - 0.14 * rim * uSlide;\n"
+  "    c += vec3(0.14, 0.15, 0.17) * streak;\n"
+  "  }\n"
   // WOUNDED: the colour drains from the frame with the missing health, the
   // edge closes in blood-dark red (breathing with the heartbeat when it is
   // low), and a fresh hit flashes the same edge. Display-referred, after the

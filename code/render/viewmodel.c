@@ -316,9 +316,22 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   vm_clip_pose(v, cur, alpha, vc);
   if (cur == WPN_KN) for (int i = 0; i < 6; i++) ga_.kn[i] += vc[i];
   if (cur == WPN_PT) ga_.slide = fmaxf(ga_.slide, vc[6]);
-  // Swap: the incoming weapon rises from below, muzzle tilted down.
-  float sw = smooth01(w->prev_switch +
-                      ((float)w->switch_t / GUN_SWITCH_TICKS - w->prev_switch) * alpha);
+  // Swap: deliberate quintic curved draw from holster/sling side with subtle
+  // arc sweep, natural cant roll, and soft weighted settle (no rigid elevator).
+  float sw_raw = f_clamp(w->prev_switch +
+                         ((float)w->switch_t / GUN_SWITCH_TICKS - w->prev_switch) * alpha,
+                         0.0f, 1.0f);
+  float sw = sw_raw * sw_raw * sw_raw * (sw_raw * (sw_raw * 6.0f - 15.0f) + 10.0f);
+  float sw_arc = sinf(F_PI * sw_raw);
+  // Slide presentation channels: low-drag combat tuck + ground-scrape rumble.
+  float sl_s = VLERP(sl_s);
+  float sl_spd = VLERP(sl_spd);
+  float sl_carve = VLERP(sl_carve);
+  float sl_rum = sl_s * f_clamp((sl_spd - 0.30f) / 0.70f, 0.0f, 1.15f);
+  float sl_ph = v->sl_t;
+  float sl_jx = (sinf(sl_ph * 1.0f) * 0.65f + sinf(sl_ph * 2.37f + 1.1f) * 0.35f) * 0.0014f * sl_rum;
+  float sl_jy = (sinf(sl_ph * 1.43f + 0.6f) * 0.60f + cosf(sl_ph * 2.91f) * 0.40f) * 0.0012f * sl_rum;
+  float sl_jr = sinf(sl_ph * 1.71f + 2.0f) * 0.0075f * sl_rum;
 
   // Pose: hip vs sight-aligned, then every spring offset on top.
   // FRAMING. The hip pose used to sit 155 mm below the eye and 300 mm forward
@@ -372,26 +385,15 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   float px = (ptl ? 0.112f : 0.148f) * hip + VLERP(bob_x) + VLERP(lag_x) + rl * 0.030f
            + VM_POS_X * vmo * hip
            + rk * 0.011f + rch * (srcyc ? -0.062f : 0.026f)
-           + (lean_d * 0.16f - lean * 0.028f) * hip;
-  // DOWN a little and NOT toward the eye. The comment used to call this a "dip
-  // down-right" while the numbers raised the weapon 36 mm and pulled it 55 mm
-  // CLOSER, which at a 62-degree pass magnifies it and pushes the magwell — the
-  // one part of the gun a magazine change is about — off the bottom of the
-  // frame. 28 mm down is a fifth of the 100 mm that once put the whole weapon
-  // below frame, so the old failure is not being re-created.
+           + (lean_d * 0.18f - lean * 0.036f) * hip
+           + (ptl ? 0.044f : 0.052f) * sw + (ptl ? 0.010f : 0.018f) * sw_arc
+           + (-0.022f * sl_s + 0.012f * sl_carve * sl_s + sl_jx) * hip;
   float py = (ptl ? -0.105f : -0.063f) * hip - sight_y * ads + VLERP(bob_y) + VLERP(lag_y)
            - 0.12f * dual_dip + 0.05f * dual_ej                 // the Berettas: up to dump, down to the belt
            - VM_POS_Y * vmo * hip
-           // sw * 0.125, not 0.22: THE SWAP PUT THE WHOLE WEAPON BELOW THE FRAME,
-           // which is the identical failure the reload dip above was already fixed
-           // for. At sw = 1 the origin sat 0.340 m under an axis whose half-height
-           // at 0.248 m is 0.149 m, and the muzzle another 0.32 m under that.
-           // Measured over the 36-tick raise: ticks 1-10 were byte-identical to an
-           // empty frame — 83 ms, 28% of every weapon switch, with nothing on
-           // screen — and it took 22 ticks to reach half the settled area. After:
-           // 11034 px of weapon already visible on tick 1 and monotone from there.
            - dip * 0.5f - rl * 0.070f + rch * (srcyc ? 0.044f : 0.020f)
-           - rk * 0.020f - sw * 0.125f;
+           - rk * 0.020f - (ptl ? 0.100f : 0.132f) * sw
+           + (-0.012f * fabsf(lean) - 0.026f * sl_s + sl_jy) * hip;
   // The sniper pulls closer to the eye in ADS so the scope window opens up.
   // TAKE-UP: the weapon comes back into the grip as the finger closes on it.
   // This is the term that makes the press READ, and it is not a stylistic
@@ -422,9 +424,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   float pz = (ptl ? 0.37f : 0.30f) - 0.0015f * trig * tkick
            - 0.008f * hip - (cur == WPN_SR ? 0.152f : 0.06f) * ads - kick
            + (cur == WPN_AR && vv ? vv->ads_push : 0.0f) * ads
-           + VLERP(lag_z) - sw * 0.03f + rl * 0.050f
+           + VLERP(lag_z) - (ptl ? 0.072f : 0.052f) * sw + 0.014f * sw_arc + rl * 0.050f
            - rch * (srcyc ? 0.062f : 0.030f) + rk * 0.016f
-           - 0.17f * wallk - 0.08f * dual_dip;
+           - 0.17f * wallk - 0.08f * dual_dip + 0.026f * sl_s * hip;
   float twist = VLERP(twist);
 
   // THE BARREL POINTS AT THE CROSSHAIR. The hip hold is angled in (yaw) and up
@@ -459,32 +461,18 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
   // as it was measured, and the hip gets 4.8 deg instead of 3.1.
   rot2(&gz, &gy, -(VLERP(sway_p) + kick * (cur == WPN_SR ? 6.0f + 3.2f * hip : 2.6f + 1.2f * hip)
                  + rl * 0.055f - rch * 0.045f
-                 - rk * 0.075f + sw * 0.42f - dual_ej * 0.85f) + aim_p * hip
+                 - rk * 0.075f + (ptl ? 0.35f : 0.44f) * sw - 0.028f * sw_arc * (1.0f - sw)
+                 - dual_ej * 0.85f) + (aim_p - 0.045f * sl_s) * hip
                  + 0.62f * wallk + (ptl ? vc[3] : 0.0f));                  // pitch
   rot2(&gx, &gz, VLERP(sway_y) + rl * 0.10f
-                 + (aim_y + lean_d * 0.22f) * hip + twist * 0.25f
+                 + (aim_y + lean_d * 0.24f) * hip + twist * 0.25f
+                 - (ptl ? 0.16f : 0.22f) * sw - (ptl ? 0.04f : 0.08f) * sw_arc
                  - 0.20f * wallk + (ptl ? vc[4] : 0.0f));                  // yaw
-  // THE CANT HAS A SIGN, and it decides whether the reload is about the magazine
-  // or about the top rail. A positive roll swings the magwell AWAY from the eye
-  // (the weapon sits right of centre at the hip, so the camera is on its left);
-  // negative turns the magwell's own face toward the camera. At +0.85 the player
-  // watched the receiver's right side for 1.3 s; at -0.55 the magazine is the
-  // largest moving thing in the frame, which is what a magazine change is about.
-  // The second beat's cant is POSITIVE — the opposite sign from the magazine
-  // change above — precisely so it does not read as a second, smaller mag swap:
-  // the magwell rolls away and the receiver's top and left, where the charging
-  // handle is, turn toward the eye.
-  // A BOLT HANDLE IS ON THE WEAPON'S RIGHT AND THE FIRST-PERSON CAMERA IS ON ITS
-  // LEFT, so a bolt cycle is invisible unless the weapon is rolled to present
-  // that side. This is what a shooter actually does — the rifle comes off the
-  // shoulder and rotates so the action faces up and inboard — and it is the
-  // opposite roll from the magazine change, which is also what stops the two
-  // halves of the reload reading as one long wobble. 49 degrees, against the
-  // AR's 19: the AR's charging handle is already on the camera's side.
   float cyroll = cur == WPN_SR ? 0.86f : 0.34f;
   rot2(&gx, &gy, VLERP(roll) + rl * -0.46f + rch * cyroll - rk * 0.16f + twist
-                 + 0.30f * wallk +
-                 (-0.086f - lean * 0.10f + lean_d * 0.30f) * hip +
+                 + 0.30f * wallk
+                 + (ptl ? (0.30f * sw + 0.08f * sw_arc) : (-0.36f * sw - 0.12f * sw_arc))
+                 + (-0.086f - lean * 0.16f + lean_d * 0.32f + sl_jr) * hip +
                  (ptl ? vc[5] : 0.0f));                                    // roll
   int fistw = cur == WPN_KN || cur == WPN_GR;
   float gr_arm = 0.0f;   // grenade: how much the forearm runs straight out of the wrist
@@ -810,12 +798,20 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     // sight picture.
     else if ((ads < 0.5f || g_vm_stock_ads) && !nade_gone && ga_.spoon < 0.5f)
       model_draw(mv, mp, mn, 2, org, gx, gy, gz);
-    float md = mag_k * mdrop * GUN_MAG_TRAVEL[cur][0], mx = mag_k * mdrop * -GUN_MAG_TRAVEL[cur][1];
+    // Per-variant magazine extraction vector: every magazine slides straight along
+    // ITS OWN magwell axis (and full mag_drop clearance), shared identically by the
+    // magazine geometry and the support hand so neither ever clips or decouples.
+    float md_len = (vv && vv->mag_drop > 0.0f) ? vv->mag_drop : GUN_MAG_TRAVEL[cur][0];
+    int vert_mag = vv && (vv->reld_ay != 0.0f || vv->reld_az != 0.0f) && fabsf(vv->reld_ay) > 0.5f;
+    float mag_ay = vert_mag ? vv->reld_ay : 1.0f;
+    float mag_az = vert_mag ? vv->reld_az : 0.0f;
+    v3 mag_disp = v3_add(v3_scale(gy, -mag_k * mdrop * md_len * mag_ay),
+                         v3_scale(gz, -mag_k * mdrop * md_len * mag_az));
     {
       // Old and fresh magazines (see gun_anim_t.pair): each sits at the well's
       // travel, rides as much of the hand's pouch trip as it is in the hand
       // for, and the pair is offset sideways by the shift across.
-      v3 well = v3_add(org, v3_add(v3_scale(gy, -md), v3_scale(ar ? gz : gx, mx)));
+      v3 well = v3_add(org, mag_disp);
       v3 L = vm_mag_centre_v(cur, vvar);
       v3 wc = v3_add(well, v3_add(v3_scale(gy, L.y), v3_scale(gz, L.z)));
       v3 po = (ar || cur == WPN_SR) ? vm_pouch_disp(wc, eye, rgt, upv, fwd, ga_.pouch)
@@ -825,10 +821,9 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         model_draw(mv, mp, mn, 1, v3_add(v3_add(well, v3_scale(po, ga_.old_pouch)),
                                          v3_scale(so, -ga_.pair)), gx, gy, gz);
       if (ga_.fresh_vis) {
-        // INDEXED: tilted nose-forward about its own centre on the way up, so
-        // the front of the magazine meets the well first and the hand rocks it
-        // straight as it goes in.
-        float ta = 0.55f * ga_.index;
+        // Gentle nose-forward rock-in tilt on arrival from the pouch, clearing
+        // straight to 0 before the magazine drives up into the magwell.
+        float ta = 0.24f * ga_.index;
         float ca = cosf(ta), sa = sinf(ta);
         v3 ty = v3_add(v3_scale(gy, ca), v3_scale(gz, sa));
         v3 tz = v3_sub(v3_scale(gz, ca), v3_scale(gy, sa));
@@ -838,7 +833,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       }
     }
     // The spent magazine, falling free of the well (empty reloads only).
-    if (ga_.drop_t >= 0.0f && ga_.drop_t < 0.6f && (ar || cur == WPN_SR)) {
+    if (ga_.drop_t >= 0.0f && ga_.drop_t < 0.6f && (ar || cur == WPN_SR || (cur == WPN_PT && !dual))) {
       v3 dy = gy, dz = gz;
       v3 dorg = gun_drop_pose(cur, vvar, org, gx, &dy, &dz, ga_.drop_t);
       model_draw(mv, mp, mn, 1, dorg, gx, dy, dz);
@@ -1012,50 +1007,45 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
     for (int h = 0; h < 2; h++) {
       v3 gc, ga; float gr;
       gun_hold(cur, h == 0 ? GH_GRIP : GH_FORE, org, gx, gy, gz, &gc, &ga, &gr);
-      // The support hand slides along the bore to the gun's own fore-end.
-      if (h == 1 && vv && cur == WPN_AR) gc = v3_add(gc, v3_scale(gz, vv->fore_dz));
+      // The support hand slides along the bore (and drops by fore_dy on boxier
+      // SMGs/shotguns) onto the gun's own fore-end or vertical foregrip.
+      if (h == 1 && vv && cur == WPN_AR)
+        gc = v3_add(gc, v3_add(v3_scale(gz, vv->fore_dz), v3_scale(gy, vv->fore_dy)));
       if (h == 1 && pump) gc = v3_add(gc, v3_scale(gz, -ga_.slide * PUMP_TRAVEL));   // it rides the pump
       if (h == 1 && mgv > 0.0f) {
         v3 rc, ra; float rr;
         gun_hold(cur, GH_RELD, org, gx, gy, gz, &rc, &ra, &rr);
         if (vv && (vv->reld_ay != 0.0f || vv->reld_az != 0.0f)) {
-          // The gun's own magazine hold (VM_VAR): high on a bullpup's box behind
-          // the grip, low on an SMG's stick out of the grip, on top of a P90.
           rc = v3_add(org, v3_add(v3_scale(gy, vv->reld_y), v3_scale(gz, vv->reld_z)));
           ra = v3_norm(v3_add(v3_scale(gy, vv->reld_ay), v3_scale(gz, vv->reld_az)));
         }
-        // The AR's magazine drops away on the same curve the model uses, so the
-        // hand has to travel with it or it grips where the mag no longer is.
-        // Exactly the magazine's own travel, not the pose arc's. They were
-        // decoupled: the hand followed `rl * 0.052` while the magazine dropped
-        // `md01 * 0.150`, so mid-reload the hand gripped 10 cm of empty air
-        // above a magazine that had already left.
-        // BOTH components of the magazine's travel, not just the drop — the mag
-        // now swings toward the camera as well as down (see `mdx` in gun_build),
-        // and a hand that only follows the vertical half grips 34 mm to the side
-        // of the thing it is holding. Exactly the decoupling this line was written
-        // to fix, in the other axis.
-        rc = v3_add(rc, v3_add(v3_scale(gy, -mag_k * mdrop * GUN_MAG_TRAVEL[cur][0]),
-                               v3_scale(gx, -mag_k * mdrop * GUN_MAG_TRAVEL[cur][1])));
+        // EXACT SAME magazine travel vector as the magazine mesh above (zero drift!).
+        float md_len = (vv && vv->mag_drop > 0.0f) ? vv->mag_drop : GUN_MAG_TRAVEL[cur][0];
+        int vert_mag = vv && (vv->reld_ay != 0.0f || vv->reld_az != 0.0f) && fabsf(vv->reld_ay) > 0.5f;
+        float mag_ay = vert_mag ? vv->reld_ay : 1.0f;
+        float mag_az = vert_mag ? vv->reld_az : 0.0f;
+        v3 mdisp = v3_add(v3_scale(gy, -mag_k * mdrop * md_len * mag_ay),
+                          v3_scale(gz, -mag_k * mdrop * md_len * mag_az));
+        rc = v3_add(rc, mdisp);
         if (cur == WPN_AR || cur == WPN_SR) {
-          float md2 = mag_k * mdrop * GUN_MAG_TRAVEL[cur][0], mx2 = mag_k * mdrop * -GUN_MAG_TRAVEL[cur][1];
           v3 L = vm_mag_centre_v(cur, vvar);
-          v3 wc = v3_add(org, v3_add(v3_scale(gy, -md2 + L.y),
-                         v3_add(v3_scale(gz, L.z), v3_scale(cur == WPN_AR ? gz : gx, mx2))));
+          v3 wc = v3_add(v3_add(org, mdisp), v3_add(v3_scale(gy, L.y), v3_scale(gz, L.z)));
           rc = v3_add(rc, vm_pouch_disp(wc, eye, rgt, upv, fwd, ga_.pouch));
           // The hand turns with the magazine it is indexing.
-          float ta = 0.55f * ga_.index;
+          float ta = 0.24f * ga_.index;
           ra = v3_norm(v3_add(v3_scale(ra, cosf(ta)), v3_scale(v3_cross(gx, ra), sinf(ta))));
         } else {
           rc = v3_add(rc, gun_pouch_ofs(gx, gy, gz, ga_.pouch));
         }
         if (ga_.retain) {
-          // Two in the hand: grip between them. One (the old, after the seat):
-          // grip it.
+          // Two in the hand: grip between them. One (the old, after the seat): grip it.
           float both = (float)(ga_.old_vis && ga_.fresh_vis && ga_.fresh_pouch > 0.5f);
           float k = both ? 0.5f - ga_.pair : (ga_.fresh_pouch > 0.5f ? 1.0f - ga_.pair : -ga_.pair);
           rc = v3_add(rc, v3_scale(gun_pair_ofs(gx, gz), k));
         }
+        // Clear outward to the left slightly while transitioning off a seated mag back to fore-end.
+        if (ga_.pouch < 0.05f && mgv < 0.99f && !ga_.fresh_pouch)
+          rc = v3_add(rc, v3_scale(gx, -0.036f * sinf(mgv * F_PI)));
         gc = v3_lerp(gc, rc, mgv);
         ga = v3_norm(v3_lerp(ga, ra, mgv));
         gr = gr + (rr - gr) * mgv;
@@ -1332,6 +1322,15 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         lo = v3_add(lo, v3_add(v3_scale(upv, -0.26f * a7),
                     v3_add(v3_scale(rgt, -0.05f * a7), v3_scale(fwd, -0.06f * a7))));
       }
+      // During a weapon draw, the left support hand rises smoothly from below-left
+      // to catch the handguard / cup the pistol grip instead of riding welded on
+      // from frame 1. Moves strictly away from the receiver (vmcheck-clean).
+      if (sw_raw > 0.16f && !dual && (cur == WPN_AR || cur == WPN_SR || cur == WPN_PT)) {
+        float su = f_clamp((sw_raw - 0.16f) / 0.74f, 0.0f, 1.0f);
+        su = su * su * su * (su * (su * 6.0f - 15.0f) + 10.0f);
+        lo = v3_add(lo, v3_add(v3_scale(rgt, -0.095f * su),
+                    v3_add(v3_scale(upv, -0.130f * su), v3_scale(fwd, -0.065f * su))));
+      }
       v3 or_p = v3_add(org, ro);
       // THE GUN'S OWN GRIP: a variant with its own grip angle carries the firing
       // hand onto it — rotated about the wrist and shifted (VM_VAR grip_*), and
@@ -1383,6 +1382,48 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
       // it frames the blade instead of covering the target.
       v3 kshoulder = v3_add(eye, v3_add(v3_scale(rgt, -0.22f),
                      v3_add(v3_scale(upv, -0.46f), v3_scale(fwd, 0.02f))));
+      // VERTICAL-GRIP LEFT FIST (HAND_KL): used both at rest on vertical-foregrip
+      // SMGs (MP9, MP7) AND while gripping vertical/angled magazines during reloads
+      // (switching cleanly at the belt pouch so the hand always wraps the magazine
+      // tightly instead of staying a flat horizontal barrel-cradling palm!).
+      int vfg_rest = cur == WPN_AR && vv && vv->fore_vfg > 0.5f;
+      int vert_reld = (cur == WPN_AR || cur == WPN_SR) && vv && fabsf(vv->reld_ay) > 0.5f && mag_k > 0.0f;
+      int mag_kl = vert_reld && mgv > 0.5f && (ga_.fresh_vis && (ga_.fresh_pouch > 0.5f || ga_.old_vis));
+      int use_kl = !knf && !ptl && (vfg_rest || mag_kl);
+      v3 lkx = gx, lky = gy, lkz = gz, lko = v3_add(org, lo);
+      if (use_kl) {
+        // Target upward cylinder axis in the gun's (gy, gz) plane:
+        // vertical foregrip leans ~8 deg forward (-0.14 rad); magazine uses reld axis + index tilt.
+        float th_vfg = -0.14f;
+        float th_mag = atan2f(vv->reld_az, vv->reld_ay) + 0.24f * ga_.index;
+        float th_tgt = vfg_rest ? (th_vfg + (th_mag - th_vfg) * mgv) : th_mag;
+        // HAND_KL's sculpted grip axis sits at atan2(0.386, 0.921) = +0.3968 rad from +gy.
+        float ang = th_tgt - 0.3968f;
+        float ck = cosf(ang), sk = sinf(ang);
+        lky = v3_add(v3_scale(gy, ck), v3_scale(gz, sk));
+        lkz = v3_sub(v3_scale(gz, ck), v3_scale(gy, sk));
+        // Anchor HAND_KL's grip center (0, -0.0500, -0.0078) directly onto hd[1].gc (+ draw offset).
+        v3 tgt = hd[1].gc;
+        if (sw_raw > 0.16f && !dual) {
+          float su = f_clamp((sw_raw - 0.16f) / 0.74f, 0.0f, 1.0f);
+          su = su * su * su * (su * (su * 6.0f - 15.0f) + 10.0f);
+          tgt = v3_add(tgt, v3_add(v3_scale(rgt, -0.095f * su),
+                      v3_add(v3_scale(upv, -0.130f * su), v3_scale(fwd, -0.065f * su))));
+        }
+        // TURNED 90 DEGREES ABOUT ITS OWN GRIP AXIS. Square to the bore, the
+        // mirrored fist showed the camera its curled fingers end-on beside a
+        // narrow edge of the hand, which read as a hand on the grip the wrong way
+        // round. Turned, the thumb lies over the top of the foregrip and the
+        // fingers wrap its front, the left-hand mirror of the trigger hand behind
+        // it. The turn is about the grip cylinder through its centre, so the
+        // fist's channel still sits exactly on the foregrip or magazine.
+        {
+          v3 A = v3_norm(v3_add(v3_scale(lky, 0.921f), v3_scale(lkz, 0.386f)));
+          float be = -90.0f * DEG2RAD;
+          lkx = v3_rot_axis(lkx, A, be); lky = v3_rot_axis(lky, A, be); lkz = v3_rot_axis(lkz, A, be);
+        }
+        lko = v3_sub(tgt, v3_add(v3_scale(lky, -0.0500f), v3_scale(lkz, -0.0078f)));
+      }
       if (cur == WPN_KN && gk > 0.01f) {
         float dn = 1.0f - gk;
         rot2(&kly, &klz, 0.48f - 0.55f * dn);   // fingers lean toward the threat
@@ -1409,6 +1450,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
         model_draw(HAND_RL_V, HAND_RL_P, HAND_RL_NP, 0, MIR(or_p), v3_scale(MIRD(rx), -1.0f), MIRD(ry), MIRD(rz));
       } else if (cur == WPN_PT) {
         model_draw(HAND_P_V, HAND_P_P, HAND_P_NP, 0, v3_add(org, lo), gx, gy, gz);
+      } else if (use_kl) {
+        model_draw(HAND_KL_V, HAND_KL_P, HAND_KL_NP, 0, lko, lkx, lky, lkz);
       } else if (!knf) {
         model_draw(HAND_L_V, HAND_L_P, HAND_L_NP, 0, v3_add(org, lo), gx, gy, gz);
       }
@@ -1429,6 +1472,8 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
                          v3_add(v3_scale(kly, -0.080f), v3_scale(klz, -0.066f))))
           : dual ? MIR(v3_add(or_p, v3_add(v3_scale(rx, 0.018f),
                          v3_add(v3_scale(ry, -0.080f), v3_scale(rz, -0.066f)))))
+          : use_kl ? v3_add(lko, v3_add(v3_scale(lkx, -0.018f),
+                         v3_add(v3_scale(lky, -0.080f), v3_scale(lkz, -0.066f))))
           : ptl ? v3_add(VP(-0.038f, -0.102f, -0.018f), lo)
                 : v3_add(VP(-0.031f, -0.035f, 0.198f), lo);
         // A rifle pins the arm's angle; a swinging knife does not, and a forearm
@@ -1450,6 +1495,7 @@ static void vm_build(const player_t *p, float alpha, v3 eye, v3 rgt, v3 upv, v3 
           : cur == WPN_GR ? v3_scale(kly, -1.0f)      // the pin hand's wrist is straight
           : knf ? v3_add(v3_scale(klx, -0.32f), v3_add(v3_scale(kly, -0.66f), v3_scale(klz, -0.68f)))
           : dual ? MIRD(v3_add(v3_scale(rx, 0.32f), v3_add(v3_scale(ry, -0.66f), v3_scale(rz, -0.68f))))
+          : use_kl ? v3_add(v3_scale(lkx, -0.32f), v3_add(v3_scale(lky, -0.66f), v3_scale(lkz, -0.68f)))
           : ptl ? VD(-0.50f, -0.52f, -0.69f) : VD(-0.41f, -0.82f, -0.39f));
         v3 te = v3_sub(eye, wr);                 // the armour faces the eye
         v3 on = v3_norm(v3_sub(te, v3_scale(ax, v3_dot(te, ax))));

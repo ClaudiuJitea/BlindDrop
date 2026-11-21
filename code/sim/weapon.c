@@ -500,22 +500,54 @@ static void vm_tick(player_t *p) {
   // off two arms, so it arrives at the new lean a beat late and settles. The
   // whole tell is the DIFFERENCE between this and the player's lean, which is
   // zero except while the lean is actually moving.
-  vm_spring(&v->lean_lag, &v->lean_v, p->lean, 1.9f, 0.62f);
+  vm_spring(&v->lean_lag, &v->lean_v, p->lean, 2.2f, 0.56f);
 
-  // Roll: slide tilt plus a strafe hint.
-  float roll_t = (p->sliding ? 0.09f : 0.0f);
+  // Slide presentation state: drop-in impact kick, slide-jump launch kick,
+  // dynamic carve steer, ground-scrape micro-rumble clock, tactical cant & bank.
+  v->prev_sl_s = v->sl_s;
+  v->prev_sl_spd = v->sl_spd;
+  v->prev_sl_carve = v->sl_carve;
+  if (p->sliding && !v->was_sliding) {
+    v->lag_yv -= 0.16f * sc * damp;     // weighty drop-in compression
+    v->roll_v += 0.95f * sc * damp;     // crisp snap into tactical slide cant
+    v->sway_pv += 0.34f * sc * damp;    // subtle muzzle dip-and-settle
+  } else if (!p->sliding && v->was_sliding && !p->grounded && p->vel.y > 1.0f) {
+    v->lag_yv += 0.14f * sc * damp;     // energetic slide-jump vault flourish
+    v->roll_v -= 0.75f * sc * damp;     // crisp un-cant snap on launch
+  }
+  v->was_sliding = p->sliding;
+  v->sl_s += ((p->sliding ? 1.0f : 0.0f) - v->sl_s) * ease_k(p->sliding ? 15.0f : 9.0f);
+  float sl_spd_t = p->sliding ? f_clamp(hs / fmaxf(g_cfg.mv[MV_RUN], 0.1f), 0.0f, 1.4f) : 0.0f;
+  v->sl_spd += (sl_spd_t - v->sl_spd) * ease_k(12.0f);
   float side = p->vel.x * fz * -1.0f + p->vel.z * fx;
-  roll_t += f_clamp(-side / g_cfg.mv[MV_RUN], -1, 1) * 0.018f * damp;
-  vm_spring(&v->roll, &v->roll_v, roll_t * sc, 1.8f, 0.60f);
-  // THE CAMERA BANKS INTO A SLIDE: a few degrees, toward the side the body is
-  // drifting (a straight slide banks to the weapon side). A roll about the
-  // view axis never moves the crosshair, so it is free against point of aim.
+  float carve_t = 0.0f;
+  if (p->sliding) {
+    float lat_v = f_clamp(side / fmaxf(hs, 1.0f), -1.0f, 1.0f);
+    carve_t = f_clamp(lat_v * 1.15f - (dyaw / TICK_DT) * 0.18f, -1.0f, 1.0f);
+    if (hs > 2.2f) {
+      v->sl_t += TICK_DT * (18.0f + hs * 1.35f);
+      if (v->sl_t > F_TAU * 32.0f) v->sl_t -= F_TAU * 32.0f;
+    }
+  }
+  v->sl_carve += (carve_t - v->sl_carve) * ease_k(10.0f);
+
+  // Roll: badass tactical inward cant during hip-slide (~22 deg, responding to
+  // carve turns; eases out in ADS so the sight stays crisp) plus strafe hint.
+  float roll_t = p->sliding
+               ? (0.38f * (1.0f - 0.85f * p->wp.ads_s) + v->sl_carve * 0.11f * damp)
+               : 0.0f;
+  roll_t += f_clamp(-side / g_cfg.mv[MV_RUN], -1, 1) * 0.022f * damp;
+  vm_spring(&v->roll, &v->roll_v, roll_t * sc, 2.2f, 0.58f);
+  // THE CAMERA BANKS INTO A SLIDE: ~6.6 deg into the carve/drift direction
+  // (softer in ADS so aiming mid-slide stays rock-steady). Free against PoA.
   float bank = 0.0f;
   if (p->sliding) {
     float lat = f_clamp(side / fmaxf(sp_h_(p), 1.0f), -1.0f, 1.0f);
-    bank = (fabsf(lat) > 0.15f ? -lat : -0.6f) * 0.052f;
+    float spk = f_clamp(hs / 4.5f, 0.35f, 1.15f);
+    float dir = fabsf(lat) > 0.12f ? -lat : -0.78f;
+    bank = (dir + v->sl_carve * -0.22f) * 0.112f * spk * (1.0f - 0.48f * p->wp.ads_s);
   }
-  vm_spring(&v->cam_roll, &v->cam_roll_v, bank, 1.6f, 0.75f);
+  vm_spring(&v->cam_roll, &v->cam_roll_v, bank, 2.0f, 0.72f);
 }
 
 // One tick of the lean. The command eases toward the held keys (both keys, or

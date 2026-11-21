@@ -38,30 +38,25 @@
 #define LAND_DIP_RECOVER 15.0f  // /s: spring back, ~95% recovered in 200 ms
 
 // --- Lean ------------------------------------------------------------------
-// A lean is ONE geometric fact — the torso bends sideways about the waist by
-// LEAN_ANGLE while the hips counter-shift LEAN_HIP the other way — and
-// everything else is derived from it: how far the first-person eye travels, how
-// far it sinks, how much the view rolls, and how far the third-person head has
-// to end up if the two views are to show the same man. Writing the eye offset
-// and the body's bend as independent numbers is how a camera ends up peeking
-// 40 cm around a corner while the body it belongs to bends 10.
-#define LEAN_ANGLE   0.54f    // rad (31 deg) of lateral spine bend at full lean
-#define LEAN_ARM     0.64f    // m from the bend (waist, ~L3) up to the eye
-#define LEAN_HIP     0.05f    // m the hips push out the OTHER way as a counterweight
-// The neck gives back half the torso's roll: a leaning shooter keeps their eyes
-// nearer level than their chest, and a full 31 degrees of camera roll is
-// nauseating rather than tactical.
-#define LEAN_VIEW_K  0.50f
-// How much of the head's travel the TORSO hitbox takes with it (the boots take
-// none, the shoulders nearly all of it, and one box has to average that).
-#define LEAN_BODY_K  0.55f
-// Fraction of the bend the PELVIS takes. The hips are not a rigid bar the trunk
-// hinges off: leaning right puts the weight on the LEFT leg (the trunk went
-// right, so the hips went left to keep the mass over the feet), and a loaded leg
-// hikes its own hip. Small — 9 degrees over a 0.1 m half-width is about 1.5 cm —
-// but a pelvis that stays perfectly level while the chest bends 31 degrees is
-// the tell that the top half is one rigid object bolted to the bottom half.
-#define LEAN_PELV_K  0.30f
+// A lean is ONE geometric fact — the hips lunge LEAN_HIP INTO the peek over the
+// loaded foot (dropping LEAN_DROP as that knee flexes) while the upper spine
+// bends a natural ~17 deg (LEAN_ANGLE) instead of snapping 31 deg at a rigid
+// waist hinge — and everything else is derived from it: how far the 1P eye
+// travels (~0.28 m, preserving peek reach), how far it sinks, how much the view
+// rolls (~10.7 deg), and where the 3P head lands so both views always agree.
+#define LEAN_ANGLE   0.30f    // rad (~17.2 deg) of natural lateral spine bend at full lean
+#define LEAN_ARM     0.62f    // m from the waist bend up to the eye
+#define LEAN_HIP     0.095f   // m the hips shift INTO the lean over the loaded foot
+#define LEAN_DROP    0.042f   // m the hips dip into the loaded knee at full lean
+// The neck counter-rolls ~38% back toward level: crisp ~10.7 deg tactical roll
+// in 1P (and matching head counter-roll in 3P) instead of a dizzying 15-31 deg.
+#define LEAN_VIEW_K  0.62f
+// How much of the head's travel the TORSO hitbox takes with it (hips shifted
+// into the lean + bent upper trunk).
+#define LEAN_BODY_K  0.65f
+// Subtle pelvic tilt into the lean (~3.8 deg): loaded lean-side hip dips gently
+// as the knee bends while the trailing leg braces straighter.
+#define LEAN_PELV_K  0.22f
 #define LEAN_IN_RATE  11.0f   // /s toward the held command (~0.27 s to full)
 #define LEAN_OUT_RATE 14.0f   // /s back to upright — recovering is faster than committing
 #define LEAN_CLR_RATE 16.0f   // /s the wall clearance eases, so a corner cannot pop the head
@@ -69,19 +64,16 @@
 #define LEAN_LOOK    0.15f    // s of velocity the clearance probe looks ahead
 #define LEAN_LOOK_MAX 0.60f   // ...capped, so speed cannot anticipate a wall a room early
 // Leaning is a stationary/walking move. Past this fraction of run speed the
-// command fades out: at 12 m/s a 31 degree body roll fights the stride, and a
-// slide has a roll of its own that this would sit on top of.
+// command fades out: at 12 m/s a body roll fights the stride, and a slide has
+// a carve bank of its own that this would sit on top of.
 #define LEAN_SPD_LO  0.55f
 #define LEAN_SPD_HI  0.90f
 
-// Eye travel and drop at lean amount l, both DERIVED from the bend above so the
-// camera and the skeleton can never disagree: 0.28 m out and 0.09 m down at full
-// lean. They follow the ARC, not a straight line — the head is on the end of a
-// 0.64 m lever, so it barely sinks over the first third of the travel and then
-// drops away, and interpolating either one linearly puts the first-person eye
-// and the third-person head up to 6 mm apart in mid-lean for no reason.
-static float lean_eye_off(float l)  { return LEAN_ARM * sinf(l * LEAN_ANGLE) - LEAN_HIP * l; }
-static float lean_eye_drop(float l) { return LEAN_ARM * (1.0f - cosf(l * LEAN_ANGLE)); }
+// Eye travel and drop at lean amount l, both DERIVED from the stance above so
+// camera and skeleton stay locked together (~0.278 m out and ~0.070 m down at
+// full lean — same corner-peek reach with half the spine kink).
+static float lean_eye_off(float l)  { return LEAN_ARM * sinf(l * LEAN_ANGLE) + LEAN_HIP * l; }
+static float lean_eye_drop(float l) { return LEAN_ARM * (1.0f - cosf(l * LEAN_ANGLE)) + LEAN_DROP * l * l; }
 
 // ACCEL/STOP TIME sliders are "ms to cover 95% of the speed gap" — three time
 // constants of the exponential approach the ground move performs each tick.
@@ -386,6 +378,10 @@ typedef struct {
   float breath;                       // phase of the idle figure-8
   float cam_roll, cam_roll_v, prev_cam_roll;  // rad: slide bank of the CAMERA
   int   was_grounded;
+  // Slide presentation channels: smooth blend, normalized speed, dynamic carve
+  // steer (-1..+1), ground-scrape rumble phase, and edge latch for entry/jump kicks.
+  float sl_s, prev_sl_s, sl_spd, prev_sl_spd, sl_carve, prev_sl_carve, sl_t;
+  int   was_sliding;
   // INSPECT AND IDLE FIDGET (knife, pistol): one short keyframed clip at a time,
   // layered on the hold by vm_build. `clip` is a VMC_* (0 = none), `clip_w` the
   // weapon it was started on, `clip_t` ticks into it. `clip_k` is its weight,

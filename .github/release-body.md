@@ -1,23 +1,16 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.9
+## What's new in 0.9
 
-- **Arena is a military training zone:** an 88 m camp with a concrete shoot house and a catwalk over it, a six-lane firing range with pop-up targets, an obstacle course, a range control tower and a container village.
-- **Six maps grew:** Harbor, Refinery, Citadel, Foundry and Compound now span 140 m, and Outpost 80 m:
-  - **Harbor:** a moored cargo ship you can board.
-  - **Refinery:** LPG spheres and a tanker loading rack.
-  - **Citadel:** a rampart you can walk along, bastions with cannons and a lower town.
-  - **Foundry:** a rail yard and a coil warehouse.
-  - **Compound:** anti-aircraft guns and a ruined village.
-  - **Outpost:** a whole camp with a helipad, a motor pool, a fuel point and a satellite dish.
-- **Climbing fixed:** ladders no longer knock you off at the top. All Outpost towers can be climbed, the Refinery tower stairs have headroom, and bots can now reach the Bazaar souk.
-- **Pick one gun:** the Weapons setting is now ALL or any single gun + nades, such as AK-47 + NADES or DESERT EAGLE + NADES. Everyone, bots too, spawns with it. Servers take `--weapons all` or a gun key such as `sr0` (the AWP); `snipers` and `blades` still work.
-- **Rebuilt guns:** a real banana magazine on the AK-47, and new R8 Revolver and Nova models.
-- **Real hostages:** the three hostages are built like the operators: an older man, a young man and a woman, each in their own clothes. They wear bomb vests with a blinking detonator and kneel hooded with their hands tied. Once you cut them loose, the lamp turns green and they follow you.
-- **Clearer wounds:** a dark red edge closes in as your health drops, the screen edge facing the shooter glows, and the hit marker points to them for a second.
-- **More natural hands:** reshaped shoulders, a firing hand that sits behind the grip, and every finger on the grenade.
+- **Power slides:** a slide now hits the ground with a dust burst, drags a dust wake and gravel behind the boot and knee, and throws sparks off the glove. The camera banks into the carve, the gun cants in at the hip, and a fast slide streaks wind past the edges of the screen.
+- **A natural lean:** the hips shift into the peek over the loaded knee and the upper body bends about 17 degrees instead of snapping over 31, so the view rolls about 11 degrees. The peek reaches as far as before.
+- **Smoother weapon swaps:** each gun is drawn on a curve from the holster or sling and settles with a little weight. The support hand comes up to catch it, and in third person the shoulders and torso turn into the reach.
+- **Real magazine changes:** every magazine slides out along its own magwell and the hand stays on it. Pistols swap magazines at the belt pouch, and the tactical reload moves without pausing.
+- **Proper grips on the MP9 and MP7:** the support hand closes round the vertical foregrip.
+- **Dual Berettas:** the slides are whole again, with the open-top slot of a real 92.
+- **Compound:** stone-capped perimeter walls with buttresses and wire, a fortified gatehouse, sandbag emplacements, sandstone outcrops, roads and a helipad.
 
-0.8.9 uses network protocol 25, so it can't play with older versions.
+0.9 uses network protocol 26, so it can't play with older versions.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

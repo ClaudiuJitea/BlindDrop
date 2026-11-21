@@ -44,7 +44,10 @@
 // its three weapon bits — a 16 peer would read the sniper bit as a button or drop it.
 // The same release also rebuilds the Citadel's street (pickups, bins, motorbikes,
 // cafe tables, tyre stacks, roof tanks — all solid): a 16 peer would fail the hash.
-#define NET_PROTO 25   // 25: THE WEAPONS RULE is ALL or ONE GUN + NADES (its own byte
+#define NET_PROTO 26   // 26: THE LEAN lunges the hips into the peek (LEAN_HIP/DROP,
+                       //     a 17 deg bend: the eye and hit boxes move) and the
+                       //     Compound's walls, gatehouse and rocks are new solids
+                       // 25: THE WEAPONS RULE is ALL or ONE GUN + NADES (its own byte
                        //     in NP_SCORES: 0 = ALL, else 1 + the rung code)
                        // 24: THE BAZAAR SOUK (an 84 m map, STEP_H 0.45, routed) and a
                        //     0.55 s weapon raise (GUN_SWITCH_TICKS 66, predicted)

@@ -64,7 +64,7 @@
 // was un-hittable, and aiming at the visible head was a miss. Standing is the
 // contract this has to match: crown 1788.2 against a 1800 box.
 #define ANIM_HIP_CR   0.44f   // crouched
-#define ANIM_HIP_SL   0.19f   // sliding: the trail-leg HIP is the contact
+#define ANIM_HIP_SL   0.21f   // sliding: low athletic knee/hip power-slide
 // Arm segments, measured rather than eyeballed. ANSUR II (n=4082 male soldiers)
 // puts acromion-radiale at 335 mm p50 and radiale-stylion at 267; taking the
 // ~20 mm from the acromion in to the glenohumeral joint centre leaves a 315 mm
@@ -279,6 +279,7 @@ typedef struct {
   float   slide_ld;          // 0 = the LEFT leg leads the skid, 1 = the right.
                              // A BLEND: a slide aimed dead ahead sits exactly on
                              // the boundary and a boolean flips there
+  float   slide_carve;       // eased lateral carve steer (-1..+1) during a slide
   int     was_grounded;
   float   idle_t;            // always-advancing clock for idle breathing
   float   bwd;               // eased 0..1 how much of the travel is backward
@@ -619,11 +620,13 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
     hip_h -= bob_drop;
   }
   hip_h += (ANIM_HIP_SL - hip_h) * a->slide_s;
-  hip_h -= expf(-9.0f * a->slide_t) * 0.14f * a->slide_s;  // violent 100-150 ms drop-in
-  // Exit beats 2+3: as the skid bleeds out the pelvis rises over the
-  // gathering trail leg — mid and late slide must not photograph alike.
+  // Grounded entry compression (quadratic in slide_s so entry never tucks into a
+  // floating fetal ball before the legs extend out along the floor).
+  hip_h -= expf(-7.5f * a->slide_t) * 0.045f * a->slide_s * a->slide_s;
+  // Exit beats 2+3: as the skid bleeds out the pelvis rises forward over the
+  // lead knee into an athletic push-off.
   float sl_exit = a->slide_s * (1.0f - f_clamp(a->slide_v, 0.0f, 1.0f));
-  hip_h += 0.09f * sl_exit;
+  hip_h += 0.11f * sl_exit;
   // A landing is absorbed THROUGH THE KNEES, so a body that is still folded
   // from an air tuck has none of that travel left to spend: stacking the full
   // dip on an unpaid root_off is what put the pelvis 24-76 mm BELOW the ankles
@@ -696,17 +699,17 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // (backward) travel so the head-plumb line lands between the boots.
   pelvis = v3_add(pelvis, v3_scale(F, 0.062f * runT * ground * (1.0f - a->bwd)
                                     - 0.038f * a->bwd * movT * ground));
-  // Hips trail the legs — which means they LEAD into the travel on a
-  // backward butt-slide (slide_pd is the mirrored leg direction).
-  pelvis = v3_add(pelvis, v3_scale(a->slide_pd, (-0.082f - 0.052f * a->slide_v) * a->slide_s));
-  // Lean, part 1 of 2: the hips push OUT against the bend. Nobody leans by
-  // hinging a rigid body at the waist — the pelvis counterweights, which is why
-  // the feet can stay where they are and why the lean has any balance in it at
-  // all. The bend itself is applied to everything above the waist at the very
-  // end of the solve, once the head is known.
+  // Hips trail the lead leg during the skid, then drive forward over the front
+  // knee as the slide exits into a stand/run.
+  pelvis = v3_add(pelvis, v3_scale(a->slide_pd,
+      (-0.095f - 0.045f * a->slide_v + 0.12f * sl_exit) * a->slide_s));
+  // Lean, part 1 of 2: weight lunges INTO the peek over the loaded foot while
+  // that knee bends slightly (LEAN_DROP), so the upper trunk only needs a
+  // natural ~17 deg bend instead of snapping 31 deg over rigid upright legs.
   if (fabsf(a->lean_s) > 1e-4f) {
     v3 Ra = {{cosf(yaw), 0, sinf(yaw)}};   // aim-relative: you lean where you look
-    pelvis = v3_add(pelvis, v3_scale(Ra, -LEAN_HIP * a->lean_s));
+    pelvis = v3_add(pelvis, v3_scale(Ra, LEAN_HIP * a->lean_s));
+    pelvis.y -= LEAN_DROP * a->lean_s * a->lean_s;
   }
 
   // Keep stance feet PLANTED by sinking the body, not by lifting the foot: when
@@ -770,22 +773,14 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
                  0.10f * a->bwd;         // backpedal: trunk pitches FORWARD —
                  // reclining behind the hips while both feet land ahead of the
                  // CoM is the geometry of a fall, held every stride
-  float rec_mag = (0.45f + 0.55f * a->slide_v) * (1.0f - 0.45f * a->slide_bk)
-                  - 0.55f * (1.0f - f_clamp(a->slide_v, 0.0f, 1.0f));
+  // How much the sliding shooter is actively aiming/firing (keeps the trunk
+  // steadier, barrel downrange, and brings the support hand back to the rifle).
+  float sl_shoot = f_clamp(fmaxf(a->ads_s, a->ready_s * 0.85f), 0.0f, 1.0f);
+  float rec_mag = (0.36f + 0.44f * a->slide_v) * (1.0f - 0.35f * sl_shoot) * (1.0f - 0.45f * a->slide_bk)
+                  - 0.60f * (1.0f - f_clamp(a->slide_v, 0.0f, 1.0f));
   // (negative recline late in the slide = the forward pitch over the lead
   // foot that reads as "standing up out of it")
-  // The slide recline acts on the FORE/AFT component of the travel only. Applied
-  // to the full travel vector it tipped the torso sideways in a lateral slide —
-  // away from the travel, which lifts the bracing shoulder and left the hand
-  // hanging 11 cm off the ground exactly when it should be planted on it.
   float sfd = a->slide_dir.x * F.x + a->slide_dir.z * F.z;
-  // Gait list: the trunk tips 2-4 deg toward the stance side in phase with
-  // the pelvis shift — 4 cm of pure pelvis slide under a plumb trunk is
-  // sub-pixel at 10 m, the list is what actually reads.
-  // v5: x (1 - 0.65 ads_s) — the TACTICAL WALK. Aimed, a shooter rolls the
-  // step through the knees and keeps the trunk plumb under the optic; with the
-  // full list the cheek weld carried the rifle 99 mm side to side per stride
-  // (`gait` ads_walk head_x), a sight picture nobody could hold.
   float glist = sinf(bph * F_TAU) * 0.055f * movT * ground *
                 (1.0f - 0.55f * a->crouch_s) * (1.0f - a->slide_s) * (1.0f - 0.65f * a->ads_s);
   v3 spine = v3_norm(v3_add(U,
@@ -793,7 +788,8 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
              v3_scale(R, a->lean_r * (1.0f - a->slide_s) + glist
                          + 0.11f * hs_ * hitr
                          - 0.40f * hs_ * hrol   // rolls AWAY from the wound
-                         - 0.30f * a->slide_s * (0.35f + 0.65f * fabsf(sfd))))));
+                         - 0.24f * a->slide_s * (1.0f - 0.55f * sl_shoot) * (0.35f + 0.65f * fabsf(sfd))
+                         + 0.24f * a->slide_carve * a->slide_s))));
   v3 chest = v3_add(pelvis, v3_scale(spine, 0.40f));
   // ...and everything above the waist rides the compliance (see anim_tick):
   // neck, head, both shoulders, the gun anchor and both wrists are all built
@@ -1021,14 +1017,17 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
     if (dl > mx) ank = v3_add(hip, v3_scale(dd, mx / dl));
     float fy = a->foot[i].yaw;
     v3 footF = {{sinf(fy), 0, -cosf(fy)}};
-    // Trail-leg knee points up when folded; on a butt-slide it flattens
-    // toward the lead leg's soft bend. Backward, both heels dig — toes up.
-    float trail_u = 0.68f - 0.34f * a->slide_bk;
+    // Tactical power-slide leg geometry: lead knee stays soft-up over the
+    // skidding heel, trail knee sweeps forward-outboard low near the floor (knee
+    // pad skidding while shin/boot trail cleanly behind the hip). On a backward
+    // butt-slide both knees flatten forward with heels digging.
     float sld = i ? a->slide_ld : 1.0f - a->slide_ld;
+    float trail_u = 0.28f + 0.24f * a->slide_bk;
     float uw = 0.22f + 0.5f * a->air_s +
-               (sld * 0.45f + (1.0f - sld) * trail_u) * a->slide_s;
-    v3 pole = v3_norm(v3_add(v3_scale(footF, 1.0f - 0.55f * a->slide_s),
-                             v3_scale(U, uw)));
+               (sld * 0.48f + (1.0f - sld) * trail_u) * a->slide_s;
+    float out_k = (1.0f - sld) * (1.0f - a->slide_bk) * 0.52f * a->slide_s;
+    v3 pole = v3_norm(v3_add(v3_scale(footF, 1.0f - 0.22f * a->slide_s),
+                      v3_add(v3_scale(U, uw), v3_scale(R, s * out_k))));
     // --- ankle pitch -------------------------------------------------------
     // Swinging: toe pointed just after toe-off, toe up for the heel strike.
     // Toe-DOWN is gated on how far the foot has actually left the ground, or it
@@ -1081,12 +1080,10 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
       // Crouch-walking rides the balls of the feet — the heels barely settle.
       want -= 0.16f * a->crouch_s * g;
     }
-    // Sliding: the lead foot rides heel-first with the toe well up. Expressing
-    // that as a PITCH rather than as a toe offset is what keeps the heel on the
-    // ground — the pivot logic below rotates about whichever end is loaded, so a
-    // toe-up foot lifts its toe instead of burying its heel (measured: the heel
-    // used to sink 1.9 cm into the floor).
-    want += (sld * 0.50f + (1.0f - sld) * (0.06f + 0.42f * a->slide_bk)) *
+    // Sliding: lead boot rides heel-first with toe up (~23 deg); trailing boot
+    // drags behind on forward slides (toe gently back/down) and digs heel on
+    // backward butt-slides.
+    want += (sld * 0.40f + (1.0f - sld) * (-0.18f + 0.58f * a->slide_bk)) *
             a->slide_s;
     // Ease, never snap: the foot does not reach its plant at a fixed point of the
     // cycle (measured sp ~0.17 at 2 m/s), so switching from the swing formula to
@@ -1206,19 +1203,14 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
     v3 b1 = v3_rot_axis(v3_rot_axis(b0, gr0, -down), U, yin);
     carry_pin = v3_sub(b0, b1);
   }
-  // A SLIDE IS A ONE-HANDED CARRY, MUZZLE UP. The support hand is already on
-  // the ground behind the hip — that contact is most of what sells a slide, and
-  // it is what leaves the weapon in one hand — but the weapon itself kept the
-  // low-ready angle, so it lay along a reclined belly and vanished: filmed from
-  // the tracking camera the figure was a crouched mass with no rifle anywhere
-  // in it. What a man actually does with a rifle he cannot control two-handed
-  // is get the muzzle out of the way and up. 66 degrees about the weapon's own
-  // right, blended with the slide, and the anchor rises with it so the receiver
-  // clears the chest instead of ploughing through it.
+  // COMBAT-READY SLIDE HOLD. Instead of rotating the rifle 66 deg straight up
+  // into a skyward flagpole, keep it aggressive and forward-oriented: a crisp
+  // ~15 deg muzzle lift when cruising one-handed (paired with an inward tactical
+  // cant below), dropping cleanly to dead-on-target when aiming or firing mid-slide.
   if (a->slide_s > 0.001f) {
     v3 gr1 = v3_cross(gd, U);
     gr1 = v3_dot(gr1, gr1) > 1e-6f ? v3_norm(gr1) : Rc;
-    gd = v3_norm(v3_rot_axis(gd, gr1, 1.15f * a->slide_s));
+    gd = v3_norm(v3_rot_axis(gd, gr1, 0.26f * a->slide_s * (1.0f - sl_shoot)));
   }
   // Sliding, the torso reclines and its belly swings forward into the space the
   // rifle occupies, so the hold is pushed out and up while the recline lasts.
@@ -1248,67 +1240,15 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // must NOT pull it closer (-0.06 gd drove the rotated butt INTO the chest).
   v3 gun_o = v3_add(v3_add(chest, carry_pin),
              v3_add(v3_scale(gd, 0.185f + 0.175f * a->ready_s + 0.000f * a->ads_s
-                                                + 0.105f * a->slide_s
+                                                + 0.095f * a->slide_s
                                                 + 0.045f * a->crouch_s
                                                 - 0.05f * runT      // tucked in at sprint
                                                 - 0.05f * a->fire_k),
-             // The carry rides 165 mm FURTHER OUTBOARD and 30 mm higher than
-             // the ready, where it used to ride 65 mm inboard and 110 mm lower.
-             // Measured with figbury: the AR went from 14.6% of the weapon
-             // buried in the trunk to 5.7%, the deepest point from 95 mm to 46,
-             // and the butt pad from 20 mm inside to clear of every part of the
-             // body. What is left is the magazine's floor plate against the
-             // strong-side thigh, which is what a carried rifle does.
-             // ...and ADS pulls it 90 mm INBOARD, not 50: the head can only
-             // come so far across before the neck is doing something a neck
-             // does not do, so the last of the lateral gap between eye and
-             // sight line is closed from the weapon's side.
              v3_add(v3_scale(Rc, 0.150f - 0.072f * a->ads_s + 0.165f * rl
-                                       + 0.070f * a->slide_s),
-             // ...and 65 mm STRAIGHT OUT OF THE CHEST at the low ready, along
-             // the trunk's own forward rather than along the (dropped, crossed)
-             // bore. The outboard push above moves the weapon ACROSS the plate
-             // carrier and never off it, which the AR survives — its receiver is
-             // flat — and the sniper does not: the optic tower stands 90 mm over
-             // the bore and the carry rotation tips that tower INBOARD, straight
-             // into the sternum. `figbury` on the sniper's low ready: 12.9% of
-             // the whole weapon inside the trunk, deepest 40 mm at chest height,
-             // i.e. the scope. A man at the low ready holds the rifle in front of
-             // himself; this is that 65 mm, and it is the one term in the hold
-             // that is perpendicular to the body rather than along the weapon.
-             // ...and 160 mm, not 65: at 65 the trigger wrist sat 60 mm ahead
-             // of its own shoulder and 259 mm from it, so a 580 mm arm had to
-             // fold to 52 degrees and throw the elbow 26 cm out sideways with
-             // the forearm flat across the chest — a chicken wing seen from
-             // behind. At 160 the reach is 333 mm, the wrist 22 cm forward,
-             // and the elbow hangs beside the ribs; `figbury` stays at 0.
+                                       + 0.045f * a->slide_s * (1.0f - 0.60f * sl_shoot)),
              v3_add(v3_scale(F, 0.160f * rl),
-                    // THE STOCK STAYS IN THE POCKET WHEN THE RIFLE COMES UP.
-                    // Going from ready to ADS used to LIFT the whole weapon
-                    // 170 mm and pull it 95 mm inboard onto the cheek, which
-                    // took the butt pad clean off the shoulder: measured with
-                    // `puppet ads`, it sat 43 mm clear of the body in ADS
-                    // against an 11 mm bite at the ready — a rifle held in
-                    // front of a man rather than against him. Real shouldering
-                    // rotates about the pocket and brings the HEAD down to the
-                    // stock; the pose has the bore locked to the aim axis
-                    // already, so all that is left is not to translate away
-                    // from the shoulder. 0.110/0.050 puts the ADS bite at
-                    // 11.8 mm, i.e. exactly where the ready pose has it.
-                    // ...and 0.185/0.090 is where the WELD put it. The stock
-                    // staying seated was necessary and not sufficient: `figm
-                    // weld` measured the eye 182 mm off the sight line (161 up,
-                    // 85 to the weak side), i.e. a rifle held up in FRONT of a
-                    // face rather than behind an eye. The last 35 mm of lift and
-                    // 40 mm of inboard pull close the half of that gap the head
-                    // cannot reach without craning, and the butt still bites
-                    // 10 mm into the deltoid — seated, not floating.
-                    v3_scale(U, -0.020f + 0.205f * a->ads_s + 0.20f * a->slide_s
-                                + 0.070f * rl)))));   // ...and 70 mm of carry LIFT,
-             // not 30: the shortened magazine still dipped 49 mm into the
-             // strong-side thigh at the low ready, which is the one part of a
-             // carried rifle that hangs into a leg. 22 mm now — a magazine
-             // touching a trouser, which is what a carried rifle does.
+                    v3_scale(U, -0.020f + 0.205f * a->ads_s + 0.095f * a->slide_s * (1.0f - 0.55f * sl_shoot)
+                                + 0.070f * rl)))));
   // A braced weapon is held steady against the body's bob for the same reason
   // the head is: the shooter is keeping the sights on a point, not riding the
   // hips. The arms take up the slack through the elbow IK.
@@ -1422,26 +1362,15 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
              v3_add(v3_scale(gwu, -0.038f),
                     v3_scale(gwr, -0.020f))));
   if (a->slide_s > 0.001f) {
-    // Off hand braces ON THE GROUND behind the hip — that contact is most of what
-    // sells a slide. Aim at the floor and clamp to arm's length rather than at a
-    // fixed shoulder offset: clamping is what keeps the elbow bent instead of
-    // straightening the arm into a rigid pole, and the torso roll above (-0.30 in
-    // R) drops that shoulder far enough for the glove to actually get down there.
-    // Placed relative to the BODY, not to the travel direction. Keying it off
-    // `slide_pd` put the hand almost under the hips on a leftward slide (the
-    // lateral and travel terms cancelled) — the hand is on the bracing arm's own
-    // side and slightly behind the hip in every slide direction, which is where
-    // an arm that length can actually plant.
-    v3 want = v3_add(base, v3_add(v3_scale(R, -0.34f), v3_scale(F, -0.20f)));
-    // The wrist rides a fist-height over the floor, so the KNUCKLES are the
-    // contact — this is the hand the player reads as dragging on the ground
-    // (at 0.004 the old flat-palm wrap wound the fingers under the floor).
-    want.y = base.y + 0.072f;  // an override, not an offset: R and F are horizontal
-    // The hand plants hard while the slide is fast and LIFTS as it bleeds out
-    // (first beat of the exit: hand up, then rock over the lead foot, then
-    // rise) — a brace held at walking speed reads as glued.
-    float bk2 = a->slide_s * f_clamp(0.42f + 0.75f * a->slide_v, 0.0f, 1.0f);
-    wriL = brace_hand(chest, Rc, want, 0.80f * a->slide_s, wriL, bk2);
+    // Off hand skims ON THE GROUND wide and behind the hip while cruising —
+    // throwing sparks/dust — and smoothly lifts back onto the rifle's fore-end
+    // whenever the shooter aims or fires mid-slide!
+    v3 want = v3_add(base, v3_add(v3_scale(R, -0.38f), v3_scale(F, -0.22f)));
+    want.y = base.y + 0.074f;
+    float bk2 = a->slide_s * f_clamp(0.42f + 0.75f * a->slide_v, 0.0f, 1.0f) *
+                (1.0f - sl_shoot);
+    float broll = (0.62f * (1.0f - 0.55f * sl_shoot) + 0.24f * a->slide_carve) * a->slide_s;
+    wriL = brace_hand(chest, Rc, want, broll, wriL, bk2);
   }
   // Hard landing: a hand goes down. `land` is the impact impulse (1.0 ~ 10 m/s),
   // so this only fires on a real drop, not on every step.
@@ -1457,36 +1386,16 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // from a yaw and is therefore always horizontal, so a reclined, rolled torso
   // still carried perfectly level shoulders — and the bracing arm could never
   // reach the ground however far the spine tipped.
-  float troll = 0.80f * a->slide_s + 0.24f * a->hdown;
+  float troll = (0.62f * (1.0f - 0.55f * sl_shoot) + 0.24f * a->slide_carve) * a->slide_s +
+                0.24f * a->hdown;
   float trc = cosf(troll), trs = sinf(troll);
-  // BLADE THE SHOULDERS. This is the one thing the stance was missing and the
-  // reason every other number fought every other number: with the shoulder line
-  // held SQUARE to the target, the butt pad can be in the shoulder pocket or the
-  // support hand can be on the handguard, but never both. The arithmetic says so
-  // — the AR's fore-end sits 0.61 m ahead of its butt at GUN_GIRTH_3P and the
-  // figure's arm is 0.58, so a pocketed stock puts that hand 0.72 m from a weak
-  // shoulder that cannot reach 0.58. A real shooter solves it by turning: the
-  // support shoulder leads and the firing shoulder drops back, which brings the
-  // weak hand 100 mm nearer the handguard AND opens the pocket the stock sits
-  // in. 30 degrees on the shoulder line alone (the deltoids hang off these
-  // points, so they follow), eased in with the carry -> ready blend so a walking
-  // figure stays square and a shouldered one is bladed.
-  // ...and a RUNNING figure blades too, which the carry-gated version could not
-  // express: at `ready_s` 0 the shoulders were square, and square shoulders are
-  // exactly the arithmetic above with no solution. Measured at a 7 m/s sprint,
-  // the support wrist sat 590 mm from a 580 mm arm and the elbow came out at
-  // 162 degrees — a dead-straight arm pointing at a handguard it cannot touch,
-  // the same defect the shouldered stance was fixed for and still live in the
-  // one pose a player spends most of a round in. A man running with a rifle
-  // across his body turns his shoulders into it; 0.20 rad is a fifth of the
-  // shouldered blade and it is enough.
-  // ...and a man STANDING at the low ready blades too (0.30 rad): the carry
-  // now holds the rifle 160 mm out of the chest (see gun_o), which put the
-  // fore-end 682 mm from a square weak shoulder; leading with that shoulder
-  // brings it back to 555, inside the 557 the reach guard below allows.
   float blade = 0.52f * a->ready_s + (0.20f * runT + 0.30f * (1.0f - runT)) * (1.0f - a->ready_s);
+  // Leaning left as a right-handed shooter opens the chest slightly so the
+  // rifle clears cover cleanly instead of crossing the firing elbow in front.
+  if (a->lean_s < -1e-4f) blade -= 0.14f * (-a->lean_s) * a->ready_s;
   float blc = cosf(blade), bls = sinf(blade);
   v3 fwdh = v3_norm((v3){{aimd.x, 0.0f, aimd.z}});
+  float ln_abs = fabsf(a->lean_s);
   for (int i = 0; i < 2; i++) {
     float s = i ? 1.0f : -1.0f;
     v3 sho = v3_add(chest, v3_add(v3_add(v3_scale(Rc, s * ANIM_SHO_HALF * trc * blc),
@@ -1494,38 +1403,18 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
                                         v3_scale(fwdh, -s * ANIM_SHO_HALF * bls))),
                                   v3_scale(spine, 0.05f)));
     v3 wri = i ? wriR : wriL;
-    // Elbows are driven wide and down: a rifle stance reads as a triangle, and
-    // an elbow tucked against the ribs is exactly where an upper arm starts
-    // ploughing through the chest.
-    // The two elbows do OPPOSITE things in a rifle stance and used to do the
-    // same thing: both were driven wide and down, which is the shape of someone
-    // holding a tray. The firing elbow rides UP and OUT (that is what opens the
-    // shoulder pocket for the stock); the support elbow drops DOWN and INBOARD
-    // under the handguard, tucked toward the ribs, carrying the weapon's weight.
-    // ...but only at the READY. In the carry the firing hand is down at the
-    // hip, and the same wide pole stuck the elbow straight out sideways at
-    // shoulder height — a chicken wing that the shoulder camera, looking down
-    // on the figure, shows from directly above. A man carrying a rifle at low
-    // ready lets the firing elbow hang, a little out and behind him; it rises
-    // and opens with the weapon as it comes up (ready_s). The "behind" term is
-    // the HORIZONTAL forward: on the aim it turned into "up" looking down.
-    // ...and UP AND OUT is a lift of the elbow, not a horizontal one. At the
-    // old ready values (1.30 out, -0.30 down) the elbow pointed straight out
-    // sideways at shoulder height, and with the arm folded to ~52 degrees the
-    // forearm doubled back along the upper arm — a chicken wing that the boot
-    // reel's behind-the-shoulder shots put in the middle of the frame. A real
-    // firing elbow sits out and roughly 40 degrees BELOW horizontal.
     float rk_ = a->ready_s;
-    v3 pole = i ? v3_norm(v3_add(v3_scale(Rc, 0.45f + 0.40f * rk_ + 0.30f * a->crouch_s),
+    float sl_br = a->slide_s * (1.0f - sl_shoot);
+    v3 pole = i ? v3_norm(v3_add(v3_scale(Rc, 0.45f + 0.40f * rk_ + 0.30f * a->crouch_s - 0.22f * ln_abs),
                           v3_add(v3_scale(U, -1.00f + 0.30f * rk_ + 0.55f * a->air_s),
                                  v3_add(v3_scale(aimd, -0.18f * rk_),
                                         v3_scale(fwdh, -0.35f * (1.0f - rk_))))))
-                : v3_norm(v3_add(v3_scale(Rc, -0.60f - 0.20f * a->crouch_s
-                                              - 0.85f * a->slide_s
+                : v3_norm(v3_add(v3_scale(Rc, -0.60f - 0.20f * a->crouch_s + 0.18f * ln_abs
+                                              - 0.65f * sl_br
                                               - 0.40f * a->air_s),
-                          v3_add(v3_scale(U, -0.95f + 0.75f * a->slide_s
+                          v3_add(v3_scale(U, -0.95f + 0.65f * sl_br
                                               + 0.50f * a->air_s),
-                                 v3_scale(aimd, -0.10f - 0.30f * a->slide_s))));
+                                 v3_scale(aimd, -0.10f - 0.35f * sl_br))));
     // (airborne both elbows flare up and out — the braced-in-flight look)
     // A WRIST NEVER GETS FURTHER FROM ITS SHOULDER THAN THE ARM CAN REACH, and
     // the guard is set at 96% rather than 100 for the reason this file already
@@ -1557,6 +1446,11 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   v3 gr = v3_cross(gd, U);
   if (v3_dot(gr, gr) < 1e-6f) gr = Rc;
   P->gun_u = v3_norm(v3_cross(v3_norm(gr), gd));
+  // Tactical inward rifle cant during a power-slide (~30 deg cruising, ~13 deg aimed).
+  if (a->slide_s > 0.001f) {
+    float scant = -(0.52f * (1.0f - 0.55f * a->ads_s) - 0.22f * a->slide_carve) * a->slide_s;
+    P->gun_u = v3_norm(v3_rot_axis(P->gun_u, gd, scant));
+  }
 
   // Lean, part 2 of 2: ONE rigid rotation of everything above the waist, about
   // the aim's horizontal forward axis. The pivot sits LEAN_ARM below the HEAD on
@@ -1911,8 +1805,15 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
   // 50/50 at dead-straight is exactly what the boolean gave either side of it.
   {
     float lat = a->slide_pd.x * rx + a->slide_pd.z * rz;
-    float w = smooth01(f_clamp(lat * (1.0f / 0.36f) + 0.5f, 0.0f, 1.0f));
-    a->slide_ld += (w - a->slide_ld) * ease_k(12.0f);
+    // Dead-straight forward slides cleanly commit to LEFT-leg-lead (left heel
+    // out front, right knee tucked & skidding behind) instead of sitting at a
+    // 50/50 symmetric squat; strong rightward slides smoothly swap to right-lead.
+    float w = smooth01(f_clamp((lat - 0.08f) * (1.0f / 0.28f), 0.0f, 1.0f));
+    a->slide_ld += (w - a->slide_ld) * ease_k(18.0f);
+    // Dynamic carve bank: responds to lateral skid velocity & yaw steering rate
+    // during a slide so curved corner slides bank fluidly into the turn.
+    float carve_t = slide ? f_clamp(lat * 1.15f - a->yaw_vel * 0.22f, -1.0f, 1.0f) : 0.0f;
+    a->slide_carve += (carve_t - a->slide_carve) * ease_k(10.0f);
   }
 
   // Landing: remember the fall speed for the dip, plant both feet where the
@@ -2056,28 +1957,25 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
       foot_ride(&a->foot[i], base, tgt, vel, a->leg_yaw, kf);
     }
   } else if (slide) {
-    // Slide: heel-first lead leg extends along the pose direction (further
-    // the faster we go, pulling in as the slide bleeds off), trail leg folds
-    // tight under the hips; both skid with the body — that IS the contact.
-    // Backward (butt-slide, slide_bk -> 1): the trail leg joins the lead out
-    // front with the heel down instead of folding under.
+    // Tactical knee/baseball power-slide: lead leg extends forward-low on the
+    // skidding heel with a soft athletic knee bend; trail leg sweeps cleanly
+    // behind and outboard so the trail knee pad skims near the floor while the
+    // shin and boot trail behind the hip. Backward butt-slides bring both heels
+    // forward smoothly.
     v3 pd = a->slide_pd;
-    float kf = ease_k(22.0f);
+    float kf = ease_k(26.0f);
     float syaw = atan2f(pd.x, -pd.z);
     for (int i = 0; i < 2; i++) {
       float s = i ? 1.0f : -1.0f;
       float ld = i ? a->slide_ld : 1.0f - a->slide_ld;  // how much THIS leg leads
-      float along = ld * (0.44f + 0.22f * a->slide_v) +
-                    (1.0f - ld) * (0.01f + 0.42f * a->slide_bk);
+      float along = ld * (0.48f + 0.14f * a->slide_v) +
+                    (1.0f - ld) * (-0.30f + 0.68f * a->slide_bk);
       float footy = ld * 0.075f +
-                    (1.0f - ld) * (0.135f - 0.060f * a->slide_bk);
-      v3 tgt = {{base.x + pd.x * along + rx * s * 0.17f,
+                    (1.0f - ld) * (0.088f - 0.013f * a->slide_bk);
+      float lat_w = ld * 0.15f + (1.0f - ld) * (0.23f - 0.07f * a->slide_bk);
+      v3 tgt = {{base.x + pd.x * along + rx * s * lat_w,
                  base.y + footy,
-                 base.z + pd.z * along + rz * s * 0.17f}};
-      // Skid HORIZONTALLY only. This branch is `else if (slide)` under
-      // `if (!grounded)`, so the body is on the floor and move_axis has already
-      // zeroed vel.y — but zeroing it here explicitly is what makes that a
-      // statement rather than a bet on another function's post-condition.
+                 base.z + pd.z * along + rz * s * lat_w}};
       foot_ride(&a->foot[i], base, tgt, (v3){{vel.x, 0.0f, vel.z}}, syaw, kf);
     }
   } else {
@@ -2118,10 +2016,10 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
       float half = (0.14f + 0.11f * f_clamp(lath / 3.0f, 0.0f, 1.0f)) *
                    (1.0f + 0.14f * a->crouch_s);
       // Idle stagger: nobody stands with their boots on a line. The lead
-      // (support-side) foot sits ~7 cm forward, the trigger-side foot ~5 cm
-      // back — it fades in as the body stops, and the re-step logic walks the
-      // feet into it on its own.
+      // (support-side) foot sits ~9 cm forward, the trigger-side foot ~9 cm
+      // back — and leaning widens the base into a solid athletic lunge stance.
       float idle_k = 1.0f - f_clamp(a->spd / 0.7f, 0.0f, 1.0f);
+      half += 0.055f * fabsf(lean) * idle_k;
       // v5: 9 cm forward / 9 back (was 7 / 5): the bladed shooter's stance,
       // trigger-side foot back. The SAME numbers seed anim_reset, so a figure
       // that spawns or is lined up stands in it rather than square.
@@ -2137,7 +2035,8 @@ static void anim_tick(anim_t *a, v3 base, v3 vel, float yaw, float pitch,
         float ddx = f->pos.x - home.x, ddz = f->pos.z - home.z;
         float d = sqrtf(ddx * ddx + ddz * ddz);
         float ye = wrap_pi(a->leg_yaw - f->yaw);
-        int idle_fix = !moving && o->t >= 1.0f && (d > 0.10f || fabsf(ye) > 0.45f);
+        float lean_thr = fabsf(lean) > 0.35f ? 0.048f : 0.10f;
+        int idle_fix = !moving && o->t >= 1.0f && (d > lean_thr || fabsf(ye) > 0.45f);
         // A planted foot also has to re-step once the body has slid far enough
         // sideways that the foot would end up across the midline — the clamp
         // above only constrains where a step LANDS, not where the body goes

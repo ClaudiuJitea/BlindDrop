@@ -163,61 +163,104 @@ static void vfx_rag_sparks(const rag_t *r, v3 pos) {
 static void vfx_skid(const anim_t *A, int ent) {
   short *clk = &g_skid_t[ent];
   float sp = sqrtf(A->vel_s.x * A->vel_s.x + A->vel_s.z * A->vel_s.z);
-  // A body in the air scrapes nothing, and only a real skid marks a floor.
-  if (A->slide_s < 0.55f || A->air_s > 0.35f || sp < 3.0f) { *clk = -1; return; }
+  // A body in the air scrapes nothing, and wait until touchdown (slide_s >= 0.72)
+  // so the spark burst & dust plume erupt right as the knee/glove hits the floor.
+  if (A->slide_s < 0.72f || A->air_s > 0.35f || sp < 3.0f) { *clk = -1; return; }
   float hot = f_clamp((sp - SKID_V_LO) / (SKID_V_HI - SKID_V_LO), 0.0f, 1.0f);
-
-  // --- boot: dust ----------------------------------------------------------
-  // The old emitter, unchanged in rate, velocity, lifetime and level: a boot
-  // skidding raises dust and a knuckle on concrete throws sparks, and only the
-  // second one needed rewriting. The lower ankle IS the planted boot, so with
-  // the airborne case already rejected above there is nothing left for a
-  // height gate to say.
+  v3 fwd = {{A->vel_s.x / sp, 0.0f, A->vel_s.z / sp}};
+  v3 lat = {{-fwd.z, 0.0f, fwd.x}};
+  int sand = g_theme.surf == SURF_SAND;
+  v3 dc = sand ? (v3){{0.24f, 0.19f, 0.11f}}
+               : v3_lerp((v3){{0.16f, 0.16f, 0.15f}}, v3_scale(g_theme.ground, 0.36f), 0.45f);
+  int trail = A->slide_ld >= 0.5f ? 0 : 1;
   v3 ank = A->pose.ankle[0].y < A->pose.ankle[1].y ? A->pose.ankle[0]
                                                   : A->pose.ankle[1];
+  v3 knee = A->pose.knee[trail];
+  float fy = fmaxf(ank.y - 0.04f, 0.02f);
+
+  // --- boot & knee: dust wake + gravel chips -------------------------------
   if ((g_tick % 3) == 1)
     for (int i = 0; i < MAX_PARTICLES; i++)
       if (g_parts[i].life <= 0) {
         v3 v = {{-A->vel_s.x * 0.22f + rng_rangef(&g_rng_vfx, -0.5f, 0.5f),
                  rng_rangef(&g_rng_vfx, 0.5f, 1.4f),
                  -A->vel_s.z * 0.22f + rng_rangef(&g_rng_vfx, -0.5f, 0.5f)}};
-        float y = fmaxf(ank.y - 0.04f, 0.02f);   // just under the sole
-        g_parts[i] = (particle_t){.pos = {{ank.x, y, ank.z}}, .vel = v,
-                                  .y0 = y, .sz = 1.0f,
+        g_parts[i] = (particle_t){.pos = {{ank.x, fy, ank.z}}, .vel = v,
+                                  .y0 = fy, .sz = 1.0f,
                                   .life = PARTICLE_TICKS + 6,
                                   .life0 = PARTICLE_TICKS + 6, .kind = 1};
         break;
       }
 
-  // --- knuckle: sparks -----------------------------------------------------
-  v3 fist = A->pose.wri[0];                     // the dragging brace glove
-  // The contact gate is a SCHMITT TRIGGER, the same idiom as the pad's
-  // 0.30/0.20 analog trigger and for the same reason: `strike` fires on every
-  // 0->1 edge, so a fist that chatters across one threshold — which it does at
-  // the end of every slide (measured: fist clearance -0.015 m at t=265,
-  // +0.018 at t=271) and over any step in the floor — would slap the ground
-  // twice.
-  if (fist.y > ank.y + (*clk < 0 ? SKID_CONTACT_DY : SKID_CONTACT_DY + 0.05f)) {
-    *clk = -1;
-    return;
-  }
-  int strike = *clk < 0;                        // the tick the knuckle lands
+  int strike = *clk < 0;
   *clk = (short)(*clk < 0 || *clk > 30000 ? 0 : *clk + 1);
-  // Rate is CONTINUOUS, not a period/burst pair. The old gate emitted
-  // 1+(int)(2*hot) sparks every period-th tick — three integer steps over the
-  // whole speed range, and a 40 Hz strobe at the bottom of it. The FLARE rode
-  // the same gate, so the one thing that marks WHERE the contact is blinked
-  // out two ticks in three for the entire tail of a slide. Here a fixed number
-  // of attempts each survive with probability `rate`: smooth, stateless, and —
-  // because the draw comes from a hash of (tick, entity, attempt) rather than
-  // of the POOL SLOT — a spark no longer changes what it looks like because
-  // somebody else's shower took the low slots first.
-  float rate = hot * (0.30f + 0.70f * hot);     // 0.30 at a crawl, 1.0 flat out
+  uint32_t dh = fx_hash((uint32_t)g_tick * 2654435761u + (uint32_t)ent * 40503u + 0x534C4944u);
+  // Slide-entry touchdown burst: billowing ground dust plume + kicked-up chips!
+  if (strike) {
+    int np = sand ? 5 : 4;
+    for (int k = 0; k < np; k++) {
+      v3 p0 = v3_add((v3){{knee.x, fy + 0.05f, knee.z}},
+                     v3_scale(lat, skid_r(&dh, -0.18f, 0.18f)));
+      v3 dv = v3_add(v3_scale(fwd, sp * skid_r(&dh, -0.18f, 0.12f)),
+              v3_add(v3_scale(lat, skid_r(&dh, -1.6f, 1.6f)),
+                     (v3){{0.0f, skid_r(&dh, 0.7f, 1.7f), 0.0f}}));
+      float b = sand ? 1.35f : 1.05f;
+      dust_add(p0, dv, v3_scale(dc, skid_r(&dh, 1.25f, 1.75f)),
+               0.10f * b, skid_r(&dh, 0.42f, 0.66f) * b, (int)skid_r(&dh, 54.0f, 88.0f));
+    }
+    for (int k = 0; k < 4; k++) {
+      chip_t *c = &g_chips[g_chip_at];
+      g_chip_at = (g_chip_at + 1) % MAX_CHIPS;
+      v3 cv = v3_add(v3_scale(fwd, sp * skid_r(&dh, -0.25f, 0.15f)),
+              v3_add(v3_scale(lat, skid_r(&dh, -1.5f, 1.5f)),
+                     (v3){{0.0f, skid_r(&dh, 1.4f, 3.2f), 0.0f}}));
+      v3 ax = v3_norm((v3){{skid_r(&dh, -1, 1), skid_r(&dh, -1, 1), skid_r(&dh, -1, 1) + 0.01f}});
+      *c = (chip_t){.pos = {{ank.x + skid_r(&dh, -0.10f, 0.10f), fy + 0.03f,
+                             ank.z + skid_r(&dh, -0.10f, 0.10f)}},
+                    .vel = cv, .axis = ax, .col = v3_scale(g_theme.ground, skid_r(&dh, 0.65f, 0.98f)),
+                    .a = skid_r(&dh, 0.0f, F_TAU), .spin = skid_r(&dh, 10.0f, 24.0f),
+                    .sz = skid_r(&dh, 0.007f, 0.016f), .life = 220};
+      c->prev = c->pos;
+    }
+  } else {
+    // Sustained low-hanging dust/sand wake behind the skidding boot & knee pad.
+    if (sp > 4.2f && ((g_tick + ent) % (sand ? 3 : 4)) == 0) {
+      int use_knee = ((g_tick >> 2) & 1);
+      v3 src = use_knee ? knee : ank;
+      v3 dv = v3_add(v3_scale(fwd, sp * skid_r(&dh, -0.14f, 0.08f)),
+              v3_add(v3_scale(lat, skid_r(&dh, -0.75f, 0.75f)),
+                     (v3){{0.0f, skid_r(&dh, 0.35f, 1.05f), 0.0f}}));
+      float b = (sand ? 1.25f : 0.95f) * (0.70f + 0.40f * hot);
+      dust_add((v3){{src.x, fy + 0.04f, src.z}}, dv, v3_scale(dc, skid_r(&dh, 1.05f, 1.50f)),
+               0.08f * b, skid_r(&dh, 0.34f, 0.56f) * b, (int)skid_r(&dh, 46.0f, 76.0f));
+    }
+    // Occasional kicked-up gravel chip along the skid.
+    if (hot > 0.30f && ((g_tick + ent * 3) % 7) == 0) {
+      chip_t *c = &g_chips[g_chip_at];
+      g_chip_at = (g_chip_at + 1) % MAX_CHIPS;
+      v3 cv = v3_add(v3_scale(fwd, sp * skid_r(&dh, -0.15f, 0.25f)),
+              v3_add(v3_scale(lat, skid_r(&dh, -1.1f, 1.1f)),
+                     (v3){{0.0f, skid_r(&dh, 1.0f, 2.4f), 0.0f}}));
+      v3 ax = v3_norm((v3){{skid_r(&dh, -1, 1), skid_r(&dh, -1, 1), skid_r(&dh, -1, 1) + 0.01f}});
+      *c = (chip_t){.pos = {{knee.x, fy + 0.03f, knee.z}}, .vel = cv, .axis = ax,
+                    .col = v3_scale(g_theme.ground, skid_r(&dh, 0.65f, 0.95f)),
+                    .a = skid_r(&dh, 0.0f, F_TAU), .spin = skid_r(&dh, 9.0f, 22.0f),
+                    .sz = skid_r(&dh, 0.006f, 0.013f), .life = 180};
+      c->prev = c->pos;
+    }
+  }
+
+  // --- knuckle / knee-pad: sparks ------------------------------------------
+  // Use the dragging brace glove when cruising low, or fall back to the
+  // skidding trail knee pad when shooting two-handed mid-slide!
+  v3 fist = A->pose.wri[0];
+  int glove_down = fist.y <= ank.y + (strike ? SKID_CONTACT_DY : SKID_CONTACT_DY + 0.05f);
+  v3 contact = glove_down ? fist : (v3){{knee.x, fy + 0.03f, knee.z}};
+  float rate = hot * (0.30f + 0.70f * hot) * (glove_down ? 1.0f : 0.65f);
+  if (sand) rate *= 0.22f;   // sand kicks up rich golden dust rather than hot steel sparks
   int attempts = SKID_ATTEMPTS;
-  if (strike) { rate = 1.0f; attempts = SKID_ATTEMPTS * 2; }   // the slap
-  float sy = fmaxf(fist.y - 0.03f, 0.015f);     // the struck plane
-  v3 fwd = {{A->vel_s.x / sp, 0.0f, A->vel_s.z / sp}};    // the fan's axis
-  v3 lat = {{-fwd.z, 0.0f, fwd.x}};                       // across it
+  if (strike && !sand) { rate = 1.0f; attempts = SKID_ATTEMPTS * 2; }
+  float sy = fmaxf(contact.y - 0.03f, 0.015f);
   for (int n = 0; n < attempts; n++) {
     uint32_t h = (uint32_t)g_tick * 2654435761u + (uint32_t)ent * 2246822519u +
                  (uint32_t)n * 3266489917u;
@@ -225,74 +268,37 @@ static void vfx_skid(const anim_t *A, int ent) {
     int slot = -1;
     for (int i = PARTS_SKID_LO; i < MAX_PARTICLES; i++)
       if (g_parts[i].life <= 0) { slot = i; break; }
-    if (slot < 0) break;   // pool pressure thins the spray; it never breaks it
-    // A HERO is bigger, brighter and three times as long-lived, so a handful
-    // of arcs carry across the frame while the cheap majority stays a tight
-    // bright spray at the contact. All-cheap reads as a fizz, all-hero as a
-    // firework, and neither is a knuckle on concrete. Read this fraction
-    // against the LIFETIMES and not off this line: at 0.20 spawned, with 38
-    // ticks of life against the crowd's 15.5, heroes were 38% of what is on
-    // screen at any instant. 0.14 puts them at 28%.
+    if (slot < 0) break;
     int hero = skid_h(&h) < 0.14f;
-    // ALONG THE TRAVEL: what the fragment KEPT of the skid. A knuckle tears
-    // grit off a floor it is running over, so a fragment is DRAGGED and then
-    // left behind as the hand outruns it — it is not fired backward out of a
-    // gun. The old model ejected at 16-42% of the skid BACKWARD IN WORLD,
-    // which put 25-31 m/s between fragment and contact and stretched the
-    // shower into a stripe: measured on a 1280x720 frame, 624 px wide and
-    // 110 px tall, i.e. half the screen at an 8:1 aspect, which reads as speed
-    // lines painted on the floor rather than as a spray. Keeping most of it
-    // forward halves the separation rate (measured 624 -> 368 px) and the
-    // SPREAD in what is kept is what gives the trail a dense mouth and a thin
-    // tail instead of a uniform stripe.
     float keep = hero ? skid_r(&h, -0.10f, 0.82f) : skid_r(&h, -0.06f, 0.50f);
     float side = skid_r(&h, -0.115f, 0.115f) * (strike ? 1.6f : 1.0f);
-    // LIFT is the primary spread, not an afterthought. Measured on the old
-    // emitter the MEDIAN spark sat 15 mm off the floor against a 1.5 m
-    // horizontal spread — a 1:100 fan, which is a line, and it is exactly what
-    // the renders showed. A grind fan is a plane standing ON the surface:
-    // shallow for most fragments and steep for a few, so u*u keeps the crowd
-    // grazing and puts the tail up where it reads against the body. Scaled by
-    // heat so a crawl barely lifts, then clamped — see SKID_VY_MAX.
     float u    = skid_h(&h);
     float rise = (0.85f + 4.60f * u * u) * (0.34f + 0.66f * hot) *
                  (strike ? 1.25f : 1.0f);
     int   lf  = hero ? 30 + (int)skid_r(&h, 0.0f, 16.0f)
                      : 10 + (int)skid_r(&h, 0.0f, 11.0f);
-    // sz is size AND heat AND streak length in one number, so folding `hot`
-    // into it is what makes a dying skid throw a few small dull embers instead
-    // of the same spark less often.
     float sz  = (hero ? skid_r(&h, 1.50f, 2.10f) : skid_r(&h, 0.70f, 1.05f)) *
                 (0.62f + 0.38f * hot) * (strike ? 1.22f : 1.0f);
     v3 v = v3_add(v3_scale(fwd, sp * keep), v3_scale(lat, sp * side));
     v.y = fminf(rise, SKID_VY_MAX);
-    // Scatter the ORIGIN a few centimetres too. Every fragment leaving one
-    // mathematical point makes the spray read as a fan of rays from a pin;
-    // a knuckle plate is 60 mm across and the spray has to have a mouth.
-    v3 o = v3_add(v3_add((v3){{fist.x, sy, fist.z}},
+    v3 o = v3_add(v3_add((v3){{contact.x, sy, contact.z}},
                          v3_scale(lat, skid_r(&h, -0.032f, 0.032f))),
                   v3_scale(fwd, skid_r(&h, -0.020f, 0.020f)));
     g_parts[slot] = (particle_t){.pos = o, .vel = v,
                                  .y0 = sy, .sz = sz,
                                  .life = lf, .life0 = lf, .kind = 2};
   }
-  // The flare anchors the spray to a POINT. Without it the sparks read as
-  // spawning in mid-air a hand's width off the body — a fragment is gone from
-  // the contact within two ticks and nothing marks where it came from. EVERY
-  // contact tick and not every period-th one, so the hot spot is steady rather
-  // than strobing through the whole tail of a slide; the strike tick gets a
-  // wider, brighter one, and that is the only frame in this effect allowed to
-  // be big.
-  for (int i = PARTS_SKID_LO; i < MAX_PARTICLES; i++)
-    if (g_parts[i].life <= 0) {
-      float k = strike ? 1.55f : 1.0f;
-      g_parts[i] = (particle_t){
-          .pos = {{fist.x, sy + 0.022f, fist.z}},
-          .vel = {{0.0f, 0.0f, 0.0f}},                   // unused for kind 3
-          .y0 = sy, .sz = (0.032f + 0.030f * hot) * k,   // arm half-length
-          .life = 4, .life0 = 4, .kind = 3};
-      break;
-    }
+  if (!sand)
+    for (int i = PARTS_SKID_LO; i < MAX_PARTICLES; i++)
+      if (g_parts[i].life <= 0) {
+        float k = (strike ? 1.55f : 1.0f) * (glove_down ? 1.0f : 0.72f);
+        g_parts[i] = (particle_t){
+            .pos = {{contact.x, sy + 0.022f, contact.z}},
+            .vel = {{0.0f, 0.0f, 0.0f}},
+            .y0 = sy, .sz = (0.032f + 0.030f * hot) * k,
+            .life = 4, .life0 = 4, .kind = 3};
+        break;
+      }
 }
 
 // The particle census. Sampled TWICE per tick — see vfx_tick's own comment for

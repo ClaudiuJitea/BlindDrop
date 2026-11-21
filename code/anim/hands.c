@@ -313,7 +313,12 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
             : c < 0.72f ? 1.0f - smooth01((c - 0.45f) / 0.27f) : 0.0f;
   }
   g.drop_t = -1.0f;
-  if (w->reload_t <= 0) return g;
+  if (w->reload_t <= 0) {
+    // Tube-fed shotguns store one loose reload shell in group 1 — hide it at rest
+    // so it does not dangle beneath the receiver outside shell-by-shell reloads.
+    if (gv && gv->shell_t > 0) g.old_vis = 0;
+    return g;
+  }
   // A TUBE, ONE SHELL AT A TIME: the support hand takes a shell from the pouch
   // and thumbs it into the loading port (mesh group 1 is that shell), the gun
   // tipped a little toward it; the cycle repeats per shell until full or fired.
@@ -435,58 +440,127 @@ static gunanim_t gun_anim(const weapon_t *w, float alpha) {
   g.fresh_vis = 0;
   if (cur == WPN_AR || cur == WPN_SR) {
     if (!retain) {
-      // A SPEED RELOAD. The support hand does not wait for the magazine: it
-      // leaves the fore-end and is already on its way to the pouch when the
-      // thumb hits the release (21.5%) and the empty falls clear. It reaches
-      // the rig at 30%, closes on the fresh magazine, and brings it back up in
-      // an arc, nose tilted forward to index it against the well (35-45%);
-      // the last 11% is the insert, ending on the seat.
+      // A SPEED RELOAD. The support hand leaves the fore-end for the pouch as the
+      // spent magazine drops cleanly free (21.5%), brings the fresh magazine up
+      // completely clear below the magwell (35-44%), aligns straight under the well,
+      // and drives it home cleanly onto the seat beat (56%).
       g.pouch = prog < 0.12f ? 0.0f
-              : prog < 0.30f ? smooth01((prog - 0.12f) / 0.18f)
-              : prog < 0.35f ? 1.0f
-              : prog < 0.45f ? 1.0f - smooth01((prog - 0.35f) / 0.10f) : 0.0f;
+              : prog < 0.29f ? smooth01((prog - 0.12f) / 0.17f)
+              : prog < 0.34f ? 1.0f
+              : prog < 0.44f ? 1.0f - smooth01((prog - 0.34f) / 0.10f) : 0.0f;
+      float ui = f_clamp((prog - 0.44f) / fmaxf(seat - 0.44f, 0.01f), 0.0f, 1.0f);
       g.mag = prog < 0.215f ? 0.0f
-            : prog < 0.45f ? 1.0f
-            : prog < seat ? 1.0f - powf(f_clamp((prog - 0.45f) / (seat - 0.45f), 0.0f, 1.0f), 3.0f)
+            : prog < 0.44f ? 1.0f
+            : prog < seat ? 1.0f - (0.25f * ui + 0.75f * ui * ui * ui)
             : 0.0f;
       g.maghide = 0;
       if (prog >= 0.215f) g.drop_t = (prog - 0.215f) * ticks * TICK_DT;
       g.old_vis = prog < 0.215f;
-      g.fresh_vis = prog >= 0.30f;          // it comes out of the pouch in the hand
+      g.fresh_vis = prog >= 0.29f;          // comes out of the pouch inside the left fist
       g.pair = 0.0f;
       g.old_pouch = 0.0f;
       g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
-      g.index = prog >= 0.30f && prog < seat ? g.pouch : 0.0f;
-      g.pouch3 = prog >= 0.30f ? g.pouch : 0.0f;
-      g.maghide = prog >= 0.215f && prog < 0.30f;   // third person: hand empty
+      g.index = prog >= 0.29f && prog < 0.48f ? g.pouch : 0.0f;
+      g.pouch3 = prog >= 0.29f ? g.pouch : 0.0f;
+      g.maghide = prog >= 0.215f && prog < 0.29f;   // third person: hand empty
     } else {
-      // THE TACTICAL RELOAD, at a hand's natural pace: to the pouch (8-20%),
-      // close on the fresh magazine (20-23%), back to the well with it held
-      // nose-forward (23-31%), strip the old one beside it (31-37%), shift
-      // across (37-43%), insert (43% to the seat), stow the old one after.
-      float st0 = seat + 0.008f;
-      float st1 = st0 + (tac_ar ? 0.050f : 0.060f);
-      float rt0 = st1 + 0.010f, rt1 = rt0 + (tac_ar ? 0.040f : 0.060f);
-      g.pouch = prog < 0.08f ? 0.0f
-              : prog < 0.20f ? smooth01((prog - 0.08f) / 0.12f)
-              : prog < 0.23f ? 1.0f
-              : prog < 0.31f ? 1.0f - smooth01((prog - 0.23f) / 0.08f)
-              : prog < st0 ? 0.0f
-              : prog < st1 ? smooth01((prog - st0) / (st1 - st0))
-              : prog < rt0 ? 1.0f
-              : prog < rt1 ? 1.0f - smooth01((prog - rt0) / (rt1 - rt0)) : 0.0f;
-      g.mag = prog < 0.31f ? 0.0f
-            : prog < 0.37f ? smooth01((prog - 0.31f) / 0.06f)
-            : prog < 0.43f ? 1.0f
-            : prog < seat ? 1.0f - powf(f_clamp((prog - 0.43f) / (seat - 0.43f), 0.0f, 1.0f), 3.0f)
+      // THE TACTICAL RELOAD: continuous fluid motion synchronized to the audio
+      // seat beat (0.880 on AR, 0.560 on SR) with no frozen midair hover.
+      if (tac_ar) {
+        // AR tactical (seat = 0.880): pouch (06-22), up (25-38), strip clear (38-52),
+        // lateral shift (52-64), confident seat drive (64-88), stow old (88.4-94.5),
+        // return to fore-end (94.5-99.5).
+        g.pouch = prog < 0.06f ? 0.0f
+                : prog < 0.22f ? smooth01((prog - 0.06f) / 0.16f)
+                : prog < 0.25f ? 1.0f
+                : prog < 0.38f ? 1.0f - smooth01((prog - 0.25f) / 0.13f)
+                : prog < 0.884f ? 0.0f
+                : prog < 0.945f ? smooth01((prog - 0.884f) / 0.061f)
+                : prog < 0.955f ? 1.0f
+                : prog < 0.995f ? 1.0f - smooth01((prog - 0.955f) / 0.040f) : 0.0f;
+        float ui = f_clamp((prog - 0.64f) / fmaxf(seat - 0.64f, 0.01f), 0.0f, 1.0f);
+        g.mag = prog < 0.38f ? 0.0f
+              : prog < 0.52f ? smooth01((prog - 0.38f) / 0.14f)
+              : prog < 0.64f ? 1.0f
+              : prog < seat ? 1.0f - (0.25f * ui + 0.75f * ui * ui * ui)
+              : 0.0f;
+        g.pair = smooth01(f_clamp((prog - 0.52f) / 0.12f, 0.0f, 1.0f));
+        g.old_vis = prog < 0.945f;
+        g.fresh_vis = prog >= 0.22f;
+        g.old_pouch = prog >= 0.38f ? 1.0f : 0.0f;
+        g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
+        g.index = prog >= 0.22f && prog < 0.38f ? g.pouch : 0.0f;
+        g.pouch3 = 0.0f;
+      } else {
+        // SR tactical (seat = 0.560): compact timeline leaving 0.62-0.99 for bolt work.
+        float st0 = seat + 0.008f;
+        float st1 = st0 + 0.060f;
+        float rt0 = st1 + 0.010f, rt1 = rt0 + 0.060f;
+        g.pouch = prog < 0.08f ? 0.0f
+                : prog < 0.20f ? smooth01((prog - 0.08f) / 0.12f)
+                : prog < 0.23f ? 1.0f
+                : prog < 0.31f ? 1.0f - smooth01((prog - 0.23f) / 0.08f)
+                : prog < st0 ? 0.0f
+                : prog < st1 ? smooth01((prog - st0) / (st1 - st0))
+                : prog < rt0 ? 1.0f
+                : prog < rt1 ? 1.0f - smooth01((prog - rt0) / (rt1 - rt0)) : 0.0f;
+        float ui = f_clamp((prog - 0.43f) / fmaxf(seat - 0.43f, 0.01f), 0.0f, 1.0f);
+        g.mag = prog < 0.31f ? 0.0f
+              : prog < 0.37f ? smooth01((prog - 0.31f) / 0.06f)
+              : prog < 0.43f ? 1.0f
+              : prog < seat ? 1.0f - (0.25f * ui + 0.75f * ui * ui * ui)
+              : 0.0f;
+        g.pair = smooth01(f_clamp((prog - 0.37f) / 0.06f, 0.0f, 1.0f));
+        g.old_vis = prog < st1;
+        g.fresh_vis = prog >= 0.20f;
+        g.old_pouch = prog >= 0.31f ? 1.0f : 0.0f;
+        g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
+        g.index = prog >= 0.20f && prog < 0.31f ? g.pouch : 0.0f;
+        g.pouch3 = 0.0f;
+      }
+    }
+  } else if (cur == WPN_PT && !(gv && gv->dual)) {
+    // Non-dual pistols (including long-stick TEC-9): real belt-pouch magazine exchange.
+    if (!retain) {
+      g.pouch = prog < 0.12f ? 0.0f
+              : prog < 0.30f ? smooth01((prog - 0.12f) / 0.18f)
+              : prog < 0.34f ? 1.0f
+              : prog < 0.44f ? 1.0f - smooth01((prog - 0.34f) / 0.10f) : 0.0f;
+      float ui = f_clamp((prog - 0.44f) / fmaxf(seat - 0.44f, 0.01f), 0.0f, 1.0f);
+      g.mag = prog < 0.215f ? 0.0f
+            : prog < 0.44f ? 1.0f
+            : prog < seat ? 1.0f - (0.25f * ui + 0.75f * ui * ui * ui)
             : 0.0f;
-      g.pair = smooth01(f_clamp((prog - 0.37f) / 0.06f, 0.0f, 1.0f));
-      g.old_vis = prog < st1;
-      g.fresh_vis = prog >= 0.20f;
-      g.old_pouch = prog >= 0.31f ? 1.0f : 0.0f;
+      if (prog >= 0.215f) g.drop_t = (prog - 0.215f) * ticks * TICK_DT;
+      g.old_vis = prog < 0.215f;
+      g.fresh_vis = prog >= 0.30f;
+      g.pair = 0.0f;
+      g.old_pouch = 0.0f;
       g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
-      g.index = prog >= 0.20f && prog < 0.31f ? g.pouch : 0.0f;
-      g.pouch3 = 0.0f;
+      g.index = 0.0f;
+      g.pouch3 = prog >= 0.30f ? g.pouch : 0.0f;
+      g.maghide = prog >= 0.215f && prog < 0.30f;
+    } else {
+      // Tactical pistol reload (seat = 0.880): strip clear (16-32), swap at belt
+      // pouch (32-52-70), drive fresh magazine home cleanly onto seat (70-88).
+      g.pouch = prog < 0.32f ? 0.0f
+              : prog < 0.50f ? smooth01((prog - 0.32f) / 0.18f)
+              : prog < 0.56f ? 1.0f
+              : prog < 0.72f ? 1.0f - smooth01((prog - 0.56f) / 0.16f) : 0.0f;
+      float ui = f_clamp((prog - 0.72f) / fmaxf(seat - 0.72f, 0.01f), 0.0f, 1.0f);
+      g.mag = prog < 0.16f ? 0.0f
+            : prog < 0.32f ? smooth01((prog - 0.16f) / 0.16f)
+            : prog < 0.72f ? 1.0f
+            : prog < seat ? 1.0f - (0.25f * ui + 0.75f * ui * ui * ui)
+            : 0.0f;
+      g.retain = 0;   // single-mag belt swap on pistols (clean, no pair overlap)
+      g.pair = 0.0f;
+      g.old_vis = prog < 0.52f;
+      g.fresh_vis = prog >= 0.52f;
+      g.old_pouch = prog >= 0.32f ? 1.0f : 0.0f;
+      g.fresh_pouch = prog < seat ? 1.0f : 0.0f;
+      g.index = 0.0f;
+      g.pouch3 = g.pouch;
     }
   }
   // The support hand leaves the fore-end at 10%, is on the magazine by 22% —

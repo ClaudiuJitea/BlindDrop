@@ -218,6 +218,13 @@ static void render_frame(const player_t *p, float alpha, int fps,
   float roll = (third || cam_free) ? 0.0f
              : leanv * LEAN_ANGLE * LEAN_VIEW_K + proll * DEG2RAD
                + p->vm.prev_cam_roll + (p->vm.cam_roll - p->vm.prev_cam_roll) * alpha;
+  {
+    float sls = p->vm.prev_sl_s + (p->vm.sl_s - p->vm.prev_sl_s) * alpha;
+    float slv = p->vm.prev_sl_spd + (p->vm.sl_spd - p->vm.prev_sl_spd) * alpha;
+    g_slide_fx = (!third && !cam_free && !g_home && p->alive)
+               ? sls * f_clamp((slv - 0.42f) / 0.72f, 0.0f, 1.0f) * (1.0f - 0.65f * ads)
+               : 0.0f;
+  }
   // The shock front through the camera: a hard jolt that rings out fast.
   if (g_shake > 0.002f && !cam_free) {
     float st = (float)g_tick * TICK_DT;

@@ -3438,29 +3438,236 @@ static void refinery_extras(void) {
 // east a rocky ridge (low dunes you step up, boulders) with an MG nest and an
 // old fuel dump; south the wadi runs on past the insertion point.
 static void sand_ring(float cx, float cz, float r) {
-  v3 sb = rgb(0.60f, 0.54f, 0.40f);
-  bx(cx - r, 0.0f, cz - r, cx + r, 0.9f, cz - r + 0.5f, sb);
-  bx(cx - r, 0.0f, cz + r - 0.5f, cx + r, 0.9f, cz + r, sb);
-  bx(cx - r, 0.0f, cz - r + 0.5f, cx - r + 0.5f, 0.9f, cz - 0.8f, sb);   // the west side opens
-  bx(cx - r, 0.0f, cz + 0.8f, cx - r + 0.5f, 0.9f, cz + r - 0.5f, sb);
-  bx(cx + r - 0.5f, 0.0f, cz - r + 0.5f, cx + r, 0.9f, cz + r - 0.5f, sb);
+  // Real coursed sandbag emplacement (west side opens for crew entry).
+  float ks = g_ks; g_ks = 1.0f;
+  k_sandbags(0, cz - r + 0.25f, cx - r, cx + r, 0.0f, 6, 0.52f);
+  k_sandbags(0, cz + r - 0.25f, cx - r, cx + r, 0.0f, 6, 0.52f);
+  k_sandbags(1, cx - r + 0.25f, cz - r + 0.52f, cz - 0.85f, 0.0f, 6, 0.52f);
+  k_sandbags(1, cx - r + 0.25f, cz + 0.85f, cz + r - 0.52f, 0.0f, 6, 0.52f);
+  k_sandbags(1, cx + r - 0.25f, cz - r + 0.52f, cz + r - 0.52f, 0.0f, 6, 0.52f);
+  g_ks = ks;
+}
+// Layered desert sandstone outcrop (replaces bare grey cube boulders).
+static void compound_rock(float cx, float cz, float r, float h, v3 base) {
+  KMAT(SMAT_STONE, {
+    octa(cx, cz, r, 0.0f, h * 0.42f, kt_(base, cx, cz, 1, 0.90f, 1.04f));
+    octa(cx + r * 0.14f, cz - r * 0.10f, r * 0.76f, h * 0.42f, h * 0.78f, kt_(base, cx, cz, 2, 0.84f, 0.96f));
+    octa(cx - r * 0.08f, cz + r * 0.12f, r * 0.48f, h * 0.78f, h, kt_(base, cx, cz, 3, 0.94f, 1.08f));
+  });
+}
+// Dresses a perimeter wall run (thickness 2 m, height H = 3.2 m) with stone
+// coping, buttress piers every 6 m on both faces, and security wire posts.
+static void compound_wall_dress(int ax, float p, float a0, float a1, float H, int wire) {
+  v3 cap = rgb(0.54f, 0.49f, 0.41f), pier = rgb(0.50f, 0.45f, 0.38f);
+  v3 stl = rgb(0.22f, 0.23f, 0.24f), wr = rgb(0.48f, 0.50f, 0.52f);
+  KMAT(SMAT_STONE, {
+    if (ax == 0) bx(a0 + 0.04f, H, p - 1.10f, a1 - 0.04f, H + 0.14f, p + 1.10f, cap);
+    else         bx(p - 1.10f, H, a0 + 0.04f, p + 1.10f, H + 0.14f, a1 - 0.04f, cap);
+    for (float u = a0 + 3.0f; u <= a1 - 2.4f; u += 6.0f) {
+      v3 pc = kt_(pier, u, p, 4, 0.90f, 1.05f);
+      if (ax == 0) {
+        bx(u - 0.32f, 0.0f, p - 1.32f, u + 0.32f, H - 0.04f, p - 1.0f, pc);
+        bx(u - 0.32f, 0.0f, p + 1.0f,  u + 0.32f, H - 0.04f, p + 1.32f, pc);
+        bx(u - 0.36f, H - 0.04f, p - 1.36f, u + 0.36f, H + 0.10f, p - 1.10f, cap);
+        bx(u - 0.36f, H - 0.04f, p + 1.10f, u + 0.36f, H + 0.10f, p + 1.36f, cap);
+      } else {
+        bx(p - 1.32f, 0.0f, u - 0.32f, p - 1.0f,  H - 0.04f, u + 0.32f, pc);
+        bx(p + 1.0f,  0.0f, u - 0.32f, p + 1.32f, H - 0.04f, u + 0.32f, pc);
+        bx(p - 1.36f, H - 0.04f, u - 0.36f, p - 1.10f, H + 0.10f, u + 0.36f, cap);
+        bx(p + 1.10f, H - 0.04f, u - 0.36f, p + 1.36f, H + 0.10f, u + 0.36f, cap);
+      }
+    }
+  });
+  if (wire && a1 - a0 > 2.0f) {
+    KMAT(SMAT_STEEL, {
+      for (float u = a0 + 1.5f; u <= a1 - 1.2f; u += 4.0f) {
+        if (ax == 0) bx(u - 0.04f, H + 0.14f, p - 0.04f, u + 0.04f, H + 0.82f, p + 0.04f, stl);
+        else         bx(p - 0.04f, H + 0.14f, u - 0.04f, p + 0.04f, H + 0.82f, u + 0.04f, stl);
+      }
+      for (int k = 0; k < 2; k++) {
+        float y = H + 0.44f + (float)k * 0.28f;
+        if (ax == 0) bx(a0 + 1.5f, y, p - 0.018f, a1 - 1.2f, y + 0.036f, p + 0.018f, wr);
+        else         bx(p - 0.018f, y, a0 + 1.5f, p + 0.018f, y + 0.036f, a1 - 1.2f, wr);
+      }
+    });
+  }
+}
+// Reinforced gatehouse lintel, heavy flanking piers, overhead lamp & beacons.
+static void compound_gatehouse(int ax, float p, float a0, float a1, float H) {
+  v3 conc = rgb(0.58f, 0.54f, 0.47f), trim = rgb(0.46f, 0.42f, 0.36f);
+  v3 stl = rgb(0.20f, 0.21f, 0.22f), red = rgb(1.15f, 0.07f, 0.04f), warm = rgb(0.88f, 0.72f, 0.42f);
+  float mid = 0.5f * (a0 + a1);
+  KMAT(SMAT_CONCRETE, {
+    // Heavy flanking piers standing atop the wall coping
+    for (int s = 0; s < 2; s++) {
+      float u = s ? a1 : a0;
+      float u0 = s ? u + 0.02f : u - 0.64f, u1 = s ? u + 0.64f : u - 0.02f;
+      if (ax == 0) {
+        bx(u0, H + 0.14f, p - 1.18f, u1, H + 1.55f, p + 1.18f, conc);
+        bx(u0 - 0.06f, H + 1.55f, p - 1.24f, u1 + 0.06f, H + 1.70f, p + 1.24f, trim);
+      } else {
+        bx(p - 1.18f, H + 0.14f, u0, p + 1.18f, H + 1.55f, u1, conc);
+        bx(p - 1.24f, H + 1.55f, u0 - 0.06f, p + 1.24f, H + 1.70f, u1 + 0.06f, trim);
+      }
+    }
+    // Overhead reinforced lintel beam (3.65 m clearance — trucks & players clear)
+    if (ax == 0) {
+      bx(a0 - 0.02f, H + 0.45f, p - 1.06f, a1 + 0.02f, H + 1.48f, p + 1.06f, conc);
+      bx(a0 - 0.02f, H + 1.48f, p - 1.14f, a1 + 0.02f, H + 1.62f, p + 1.14f, trim);
+    } else {
+      bx(p - 1.06f, H + 0.45f, a0 - 0.02f, p + 1.06f, H + 1.48f, a1 + 0.02f, conc);
+      bx(p - 1.14f, H + 1.48f, a0 - 0.02f, p + 1.14f, H + 1.62f, a1 + 0.02f, trim);
+    }
+  });
+  // Crenellations along the gatehouse parapet
+  KMAT(SMAT_STONE, {
+    for (float u = a0 + 0.35f; u + 0.60f <= a1 - 0.35f; u += 1.20f) {
+      if (ax == 0) bx(u, H + 1.62f, p - 1.04f, u + 0.60f, H + 2.02f, p - 0.72f, trim);
+      else         bx(p - 1.04f, H + 1.62f, u, p - 0.72f, H + 2.02f, u + 0.60f, trim);
+      if (ax == 0) bx(u, H + 1.62f, p + 0.72f, u + 0.60f, H + 2.02f, p + 1.04f, trim);
+      else         bx(p + 0.72f, H + 1.62f, u, p + 1.04f, H + 2.02f, u + 0.60f, trim);
+    }
+  });
+  // Dark steel fascia plaque & overhead gateway downlight strip
+  KMAT(SMAT_STEEL, {
+    if (ax == 0) {
+      bx(mid - 1.6f, H + 0.68f, p + 1.06f, mid + 1.6f, H + 1.28f, p + 1.12f, stl);
+      bx(mid - 1.6f, H + 0.68f, p - 1.12f, mid + 1.6f, H + 1.28f, p - 1.06f, stl);
+    } else {
+      bx(p + 1.06f, H + 0.68f, mid - 1.6f, p + 1.12f, H + 1.28f, mid + 1.6f, stl);
+      bx(p - 1.12f, H + 0.68f, mid - 1.6f, p - 1.06f, H + 1.28f, mid + 1.6f, stl);
+    }
+  });
+  KMAT(SMAT_LAMP, {
+    if (ax == 0) bx(mid - 1.1f, H + 0.38f, p - 0.22f, mid + 1.1f, H + 0.45f, p + 0.22f, warm);
+    else         bx(p - 0.22f, H + 0.38f, mid - 1.1f, p + 0.22f, H + 0.45f, mid + 1.1f, warm);
+  });
+  // Red warning beacons on top of each flanking pier
+  KMAT(SMAT_LED, {
+    for (int s = 0; s < 2; s++) {
+      float u = s ? a1 + 0.33f : a0 - 0.33f;
+      if (ax == 0) bx(u - 0.08f, H + 1.70f, p - 0.08f, u + 0.08f, H + 1.88f, p + 0.08f, red);
+      else         bx(p - 0.08f, H + 1.70f, u - 0.08f, p + 0.08f, H + 1.88f, u + 0.08f, red);
+    }
+  });
+}
+// Roads, concrete aprons, fuel depot bund & helipad markings.
+// Bottom face buried at y = -0.02 so props/solids standing at y = 0 never z-fight.
+static void compound_roads(void) {
+  float ks = g_ks; g_ks = 1.0f;
+  v3 road = rgb(0.47f, 0.45f, 0.41f), plaza = rgb(0.55f, 0.51f, 0.45f);
+  v3 curb = rgb(0.66f, 0.62f, 0.55f), slab = rgb(0.52f, 0.50f, 0.46f);
+  v3 yel = rgb(0.88f, 0.66f, 0.14f), dash = rgb(0.76f, 0.72f, 0.64f);
+  v3 stl = rgb(0.28f, 0.30f, 0.32f), led_y = rgb(1.25f, 0.82f, 0.14f);
+  KMAT(SMAT_CONCRETE, {
+    // South approach road through South Gate into courtyard (z = +12..+68)
+    bx(-3.6f, -0.02f, 12.0f, 3.6f, 0.02f, 68.0f, road);
+    // Road side curbs on the south approach (z = 34..66)
+    bx(-3.82f, -0.02f, 34.0f, -3.6f, 0.06f, 66.0f, curb);
+    bx( 3.6f,  -0.02f, 34.0f,  3.82f, 0.06f, 66.0f, curb);
+    // Central courtyard paved plaza (z = -13..+12, x = -15..+15)
+    bx(-15.0f, -0.02f, -13.0f, 15.0f, 0.02f, 12.0f, plaza);
+    // Courtyard plaza perimeter curbs (step-able 5 cm lip)
+    bx(-15.22f, -0.02f, -13.0f, -15.0f, 0.05f, 12.0f, curb);
+    bx( 15.0f,  -0.02f, -13.0f,  15.22f, 0.05f, 12.0f, curb);
+    // North-gate spur road from courtyard east of HQ out to Helipad (z = -40..-13)
+    bx(12.2f, -0.02f, -40.0f, 17.8f, 0.02f, -13.0f, road);
+    // Motor pool concrete floor slab (x = +19.6..+36.0, z = -12.0..+4.2)
+    bx(19.6f, -0.02f, -12.0f, 36.0f, 0.025f, 4.2f, slab);
+    // East gatehouse road apron (x = +34.5..+52.0, z = +14.2..+17.8)
+    bx(34.5f, -0.02f, 14.2f, 52.0f, 0.02f, 17.8f, road);
+  });
+  // Faded painted road centre dashes on the south approach & courtyard lane
+  for (float z = 16.0f; z <= 62.0f; z += 5.5f)
+    bx(-0.10f, 0.02f, z, 0.10f, 0.028f, z + 2.4f, dash);
+  // Motor pool bay stripes (sitting on the 0.025 m slab)
+  KMAT(SMAT_HAZARD, {
+    bx(20.2f, 0.025f, -11.4f, 35.4f, 0.032f, -11.28f, yel);
+    bx(20.2f, 0.025f,  3.52f, 35.4f, 0.032f,   3.64f, yel);
+    bx(20.2f, 0.025f, -5.26f, 31.0f, 0.032f,  -5.14f, yel);
+  });
+  // Fuel depot concrete containment bund around the two large tanks (step-able 0.30 m)
+  KMAT(SMAT_CONCRETE, {
+    bx(17.4f, 0.0f,  5.5f, 34.6f, 0.28f,  5.85f, curb);          // north bund
+    bx(17.4f, 0.0f, 14.25f, 24.5f, 0.28f, 14.6f, curb);          // south-west bund
+    bx(27.5f, 0.0f, 14.25f, 34.6f, 0.28f, 14.6f, curb);          // south-east bund
+    bx(17.4f, 0.0f,  5.85f, 17.75f, 0.28f, 14.25f, curb);        // west bund
+    bx(34.25f, 0.0f, 5.85f, 34.6f, 0.28f, 14.25f, curb);         // east bund
+  });
+  KMAT(SMAT_HAZARD, {
+    bx(17.42f, 0.28f,  5.52f, 34.58f, 0.33f,  5.83f, yel);
+    bx(17.42f, 0.28f, 14.27f, 24.48f, 0.33f, 14.58f, yel);
+    bx(27.52f, 0.28f, 14.27f, 34.58f, 0.33f, 14.58f, yel);
+  });
+  // Overhead steel pipe bridge connecting the two fuel tanks (x = 24.5..29.5, z = 10.5)
+  KMAT(SMAT_STEEL, {
+    bx(24.5f, 5.2f, 10.35f, 29.5f, 5.42f, 10.57f, stl);
+    bx(24.5f, 5.65f, 10.35f, 29.5f, 5.87f, 10.57f, rgb(0.68f, 0.22f, 0.14f));
+    bx(26.85f, 0.0f, 10.35f, 27.15f, 5.95f, 10.65f, stl);        // central pipe stanchion
+  });
+  // Helipad perimeter stripes, glowing amber edge beacons & windsock mast
+  KMAT(SMAT_HAZARD, {
+    bx(14.3f, 0.02f, -49.7f, 29.7f, 0.03f, -49.5f, yel);
+    bx(14.3f, 0.02f, -40.5f, 29.7f, 0.03f, -40.3f, yel);
+    bx(14.3f, 0.02f, -49.5f, 14.5f, 0.03f, -40.5f, yel);
+    bx(29.5f, 0.02f, -49.5f, 29.7f, 0.03f, -40.5f, yel);
+  });
+  static const float HL[6][2] = {{14.2f, -49.8f}, {22.0f, -49.8f}, {29.8f, -49.8f},
+                                 {14.2f, -40.2f}, {22.0f, -40.2f}, {29.8f, -40.2f}};
+  for (int i = 0; i < 6; i++) {
+    KMAT(SMAT_STEEL, bx(HL[i][0] - 0.16f, 0.02f, HL[i][1] - 0.16f, HL[i][0] + 0.16f, 0.18f, HL[i][1] + 0.16f, stl));
+    KMAT(SMAT_LED,   bx(HL[i][0] - 0.11f, 0.18f, HL[i][1] - 0.11f, HL[i][0] + 0.11f, 0.26f, HL[i][1] + 0.11f, led_y));
+  }
+  // Windsock mast beside the LZ
+  KMAT(SMAT_STEEL, bx(31.2f, 0.0f, -49.4f, 31.32f, 5.2f, -49.28f, stl));
+  bx(31.32f, 4.75f, -49.42f, 31.78f, 5.10f, -49.14f, rgb(0.86f, 0.22f, 0.12f));
+  bx(31.78f, 4.78f, -49.39f, 32.18f, 5.07f, -49.17f, rgb(0.92f, 0.92f, 0.90f));
+  bx(32.18f, 4.81f, -49.36f, 32.52f, 5.04f, -49.20f, rgb(0.86f, 0.22f, 0.12f));
+  // West village stone plaza around the well (-55, -24)
+  KMAT(SMAT_STONE, octa(-55.0f, -24.0f, 3.4f, -0.02f, 0.02f, rgb(0.54f, 0.49f, 0.42f)));
+  // South checkpoint guard kiosk (west of road at z = 37.6..39.6, clear of patrol z = 35 and lamp at -6.5, 38.5)
+  KMAT(SMAT_CONCRETE, {
+    bx(-9.4f, 0.0f, 37.6f, -7.2f, 1.15f, 39.6f, rgb(0.56f, 0.52f, 0.46f));
+    bx(-9.6f, 2.35f, 37.4f, -7.0f, 2.58f, 39.8f, rgb(0.42f, 0.40f, 0.36f));
+  });
+  KMAT(SMAT_STEEL, {
+    bx(-9.4f, 1.15f, 37.6f, -9.26f, 2.35f, 37.74f, stl);
+    bx(-7.34f, 1.15f, 37.6f, -7.2f, 2.35f, 37.74f, stl);
+    bx(-9.4f, 1.15f, 39.46f, -9.26f, 2.35f, 39.6f, stl);
+    bx(-7.34f, 1.15f, 39.46f, -7.2f, 2.35f, 39.6f, stl);
+    // Mid-window horizontal & vertical steel mullions
+    bx(-9.36f, 1.72f, 37.64f, -7.24f, 1.78f, 39.56f, stl);
+    bx(-8.33f, 1.15f, 37.64f, -8.27f, 2.35f, 39.56f, stl);
+  });
+  KMAT(SMAT_LAMP, bx(-9.22f, 1.20f, 37.78f, -7.38f, 2.30f, 39.42f, rgb(0.42f, 0.30f, 0.14f)));
+  // Raised red/white striped barrier arm post beside the south road
+  KMAT(SMAT_STEEL, bx(-4.15f, 0.0f, 38.4f, -3.85f, 1.10f, 38.7f, rgb(0.76f, 0.18f, 0.12f)));
+  bx(-4.04f, 1.10f, 38.51f, -3.96f, 2.55f, 38.59f, rgb(0.90f, 0.90f, 0.88f));
+  bx(-4.04f, 2.55f, 38.51f, -3.96f, 3.65f, 38.59f, rgb(0.84f, 0.18f, 0.12f));
+  g_ks = ks;
 }
 static void compound_outer(void) {
   const char *const *rows = g_mg_rows;
   g_mg_rows = NULL;
+  float ks = g_ks; g_ks = 1.0f;
   const town_style_t *s = &g_town;
-  v3 mud = rgb(0.62f, 0.50f, 0.36f), rock = rgb(0.50f, 0.43f, 0.35f), dune = rgb(0.72f, 0.62f, 0.46f);
-  v3 red = rgb(0.62f, 0.18f, 0.12f), blu = rgb(0.20f, 0.30f, 0.50f);
-  // NORTH: the AA battery
+  v3 mud = rgb(0.62f, 0.50f, 0.36f), rock = rgb(0.54f, 0.46f, 0.37f), dune = rgb(0.68f, 0.58f, 0.44f);
+  v3 red = rgb(0.62f, 0.18f, 0.12f), blu = rgb(0.20f, 0.30f, 0.50f), stl = rgb(0.24f, 0.25f, 0.26f);
+  // NORTH: the AA battery, crew tent, camo shelters, LZ perimeter barriers & floodlights
   sand_ring(-20.0f, -62.0f, 3.2f); zu23_prop(-20.0f, -62.0f, 0);
   sand_ring(40.0f, -61.0f, 3.2f);  zu23_prop(40.0f, -61.0f, 0);
   ammo_stack(-14.5f, -61.0f, 1); ammo_stack(45.5f, -60.0f, 1); ammo_stack(-25.0f, -66.5f, 0);
   sand_ring(8.0f, -64.0f, 2.2f);   dshk_prop(8.0f, -64.0f, 3);
-  // (no more vehicles out here: one costs ~55k prop verts, and the compound
-  // already parks five)
   ammo_stack(-46.0f, -60.0f, 0); ammo_stack(24.0f, -66.0f, 2);
+  // Crew barracks tent & supply crates on the NW AA apron
+  k_tent(-42.0f, -66.0f, -36.4f, -57.0f, rgb(0.52f, 0.48f, 0.38f));
+  k_pallets(-34.0f, -63.0f, 0, 3); k_crate(-34.0f, -60.5f, 0.6f, 0.5f, 0.85f, rgb(0.42f, 0.38f, 0.26f));
+  k_hesco(32.0f, -56.0f, 0, 4, 1.55f);
+  k_jersey(0, -54.0f, -10.0f, 2.0f); k_jersey(0, -54.0f, 12.0f, 28.0f);
+  // Tall floodlight masts illuminating the LZ and AA battery
+  tz_mast(10.5f, -51.5f); tz_mast(33.5f, -51.5f);
   for (float x = -60.0f; x <= 60.0f; x += 30.0f) lamp(x, -55.0f, 0, 1);
-  // WEST: the ruined village
+  // WEST: the ruined village — houses, mud-brick courtyard walls, shade pergolas, well, palms
   int bal = g_town.balconies;
   g_town.balconies = 0;
   house(-68.0f, -40.0f, -58.0f, -30.0f, 1, SIDE_E | SIDE_N, SIDE_E, 0, 0.0f, 0.0f, 0);
@@ -3468,61 +3675,184 @@ static void compound_outer(void) {
   house(-68.0f, 6.0f, -59.0f, 16.0f, 1, SIDE_E | SIDE_N | SIDE_S, SIDE_E, 0, 0.0f, 0.0f, 0);
   house(-68.0f, 28.0f, -60.0f, 38.0f, 1, SIDE_E | SIDE_N, SIDE_E, 0, 0.0f, 0.0f, 0);
   g_town.balconies = bal;
-  // the broken walls of the houses that fell
-  bx(-66.0f, 0.0f, -2.0f, -65.4f, 2.2f, 3.0f, mud); bx(-65.4f, 0.0f, -2.0f, -61.0f, 1.4f, -1.4f, mud);
-  bx(-66.0f, 0.0f, 20.0f, -61.0f, 1.8f, 20.6f, mud); bx(-61.6f, 0.0f, 20.6f, -61.0f, 1.1f, 24.0f, mud);
-  // the goat pen and the well, palms, carts, jars
+  // Broken mud-brick walls & ruined courtyards
+  KMAT(SMAT_STUCCO, {
+    bx(-66.0f, 0.0f, -2.0f, -65.4f, 2.2f, 3.0f, mud); bx(-65.4f, 0.0f, -2.0f, -61.0f, 1.4f, -1.4f, mud);
+    bx(-66.0f, 0.0f, 20.0f, -61.0f, 1.8f, 20.6f, mud); bx(-61.6f, 0.0f, 20.6f, -61.0f, 1.1f, 24.0f, mud);
+    bx(-59.5f, 0.0f, -29.8f, -54.0f, 1.25f, -29.35f, mud);       // courtyard wall north of well
+    bx(-59.5f, 0.0f, -19.2f, -53.5f, 1.15f, -18.75f, mud);       // courtyard wall south of well
+  });
+  // Wooden shade pergola over the village market lane
+  KMAT(SMAT_WOOD, {
+    for (int k = 0; k < 2; k++) {
+      float z = -17.5f + (float)k * 5.0f;
+      bx(-59.2f, 0.0f, z, -59.02f, 2.85f, z + 0.18f, rgb(0.38f, 0.27f, 0.17f));
+      bx(-54.2f, 0.0f, z, -54.02f, 2.85f, z + 0.18f, rgb(0.38f, 0.27f, 0.17f));
+    }
+    for (float z = -17.5f; z <= -12.4f; z += 0.85f)
+      bx(-59.3f, 2.85f, z, -53.9f, 2.97f, z + 0.14f, rgb(0.46f, 0.34f, 0.22f));
+  });
+  bx(-59.1f, 2.97f, -17.2f, -54.1f, 3.02f, -12.7f, rgb(0.68f, 0.56f, 0.38f));   // shade cloth
+  // Goat pen, well, palms, carts, jars, village crates & lantern
   for (float z = -50.0f; z <= -44.0f; z += 6.0f) bx(-64.0f, 0.0f, z, -58.0f, 1.0f, z + 0.12f, rgb(0.42f, 0.30f, 0.18f));
   bx(-64.0f, 0.0f, -49.88f, -63.88f, 1.0f, -44.0f, rgb(0.42f, 0.30f, 0.18f));
   octa(-55.0f, -24.0f, 1.0f, 0.0f, 0.9f, s->stone);
   street_prop(PM_WELL, -55.0f, -24.0f, 0, s->stone, s->stone, NULL, 0);
   palm(-56.0f, -4.0f, 5.4f); palm(-62.0f, 46.0f, 5.0f); palm(-54.0f, 24.0f, 5.8f); palm(-66.0f, -56.0f, 5.2f);
   hand_cart(-56.0f, 4.0f, 1); clay_jars(-57.5f, -34.0f, 0); clay_jars(-57.2f, 12.0f, 3);
-  // EAST: the ridge — dunes a step high, boulders, the MG nest, the fuel dump
-  bx(56.0f, 0.0f, -40.0f, 68.0f, 0.4f, -20.0f, dune);
-  bx(58.0f, 0.4f, -36.0f, 66.0f, 0.8f, -24.0f, dune);
-  bx(60.0f, 0.8f, -33.0f, 64.0f, 1.2f, -27.0f, dune);
-  bx(56.0f, 0.0f, 10.0f, 66.0f, 0.4f, 34.0f, dune);
-  bx(58.0f, 0.4f, 14.0f, 64.0f, 0.8f, 28.0f, dune);
-  static const float BO[8][4] = {{55.0f, -52.0f, 1.4f, 2.2f}, {62.0f, -48.0f, 1.8f, 2.8f}, {57.0f, -12.0f, 1.2f, 1.6f},
-                                 {65.0f, -4.0f, 2.0f, 3.2f}, {55.5f, 4.0f, 1.0f, 1.4f}, {66.0f, 44.0f, 2.2f, 3.0f},
-                                 {57.0f, 50.0f, 1.4f, 2.0f}, {63.0f, 60.0f, 1.6f, 2.4f}};
-  for (int b = 0; b < 8; b++) {
-    float x = BO[b][0], z = BO[b][1], r = BO[b][2], h = BO[b][3];
-    bx(x - r, 0.0f, z - r * 0.8f, x + r, h, z + r * 0.8f, tint(rock, 0.92f, 1.05f));
-    bx(x - r * 0.7f, h, z - r * 0.5f, x + r * 0.6f, h + 0.5f, z + r * 0.6f, tint(rock, 0.86f, 0.92f));
-  }
+  k_crate(-57.5f, -14.8f, 0.55f, 0.45f, 0.72f, rgb(0.52f, 0.38f, 0.24f));
+  lamp(-51.0f, -22.0f, 0, -1);
+  // EAST: layered sandstone mesas & outcrops (replaces boxy dunes/cubes), MG nest & fuel dump
+  compound_rock(62.0f, -30.0f, 6.2f, 1.45f, dune);
+  compound_rock(60.5f, -24.0f, 4.6f, 1.05f, dune);
+  compound_rock(61.5f,  21.0f, 5.8f, 1.30f, dune);
+  compound_rock(60.0f,  28.0f, 4.2f, 0.95f, dune);
+  static const float BO[8][4] = {{55.0f, -52.0f, 1.6f, 2.2f}, {62.0f, -48.0f, 2.1f, 2.8f}, {57.0f, -12.0f, 1.5f, 1.7f},
+                                 {65.0f, -4.0f, 2.4f, 3.2f}, {55.5f, 4.0f, 1.3f, 1.5f}, {66.0f, 44.0f, 2.4f, 3.0f},
+                                 {57.0f, 50.0f, 1.6f, 2.1f}, {63.0f, 60.0f, 1.9f, 2.5f}};
+  for (int b = 0; b < 8; b++)
+    compound_rock(BO[b][0], BO[b][1], BO[b][2], BO[b][3], rock);
   sand_ring(53.6f, -30.0f, 1.8f); dshk_prop(53.6f, -30.0f, 0);   // the MG nest at the ridge's foot
-  for (int k = 0; k < 7; k++) {                         // the fuel dump
+  for (int k = 0; k < 7; k++) {                                   // the fuel dump + corrugated sunshade
     float x = 58.0f + (float)(k % 4) * 0.8f, z = 40.0f + (float)(k / 4) * 0.8f;
     barrel(x, z, k % 3 ? red : blu);
   }
+  KMAT(SMAT_STEEL, {
+    bx(57.2f, 0.0f, 39.2f, 57.34f, 2.55f, 39.34f, stl); bx(61.0f, 0.0f, 39.2f, 61.14f, 2.55f, 39.34f, stl);
+    bx(57.2f, 0.0f, 41.8f, 57.34f, 2.40f, 41.94f, stl); bx(61.0f, 0.0f, 41.8f, 61.14f, 2.40f, 41.94f, stl);
+  });
+  KMAT(SMAT_CLAD, bx(57.0f, 2.55f, 39.0f, 61.35f, 2.66f, 42.1f, rgb(0.46f, 0.44f, 0.36f)));
   fuel_bladder(61.0f, 52.0f, 1, rgb(0.62f, 0.60f, 0.52f));
-  // SOUTH: the wadi — rocks, the palm grove, an abandoned truck
-  static const float SR[6][4] = {{-20.0f, 60.0f, 2.0f, 2.4f}, {-6.0f, 66.0f, 1.4f, 1.8f}, {18.0f, 58.0f, 2.4f, 3.0f},
-                                 {34.0f, 64.0f, 1.6f, 2.0f}, {46.0f, 58.0f, 1.2f, 1.4f}, {-64.0f, 64.0f, 2.0f, 2.6f}};
-  for (int b = 0; b < 6; b++) {
-    float x = SR[b][0], z = SR[b][1], r = SR[b][2], h = SR[b][3];
-    bx(x - r, 0.0f, z - r * 0.8f, x + r, h, z + r * 0.8f, tint(rock, 0.92f, 1.05f));
-  }
+  // SOUTH: the wadi — sandstone outcrops, palm grove, checkpoint barriers, abandoned truck
+  static const float SR[6][4] = {{-20.0f, 60.0f, 2.3f, 2.5f}, {-6.0f, 66.0f, 1.7f, 1.9f}, {18.0f, 58.0f, 2.7f, 3.1f},
+                                 {34.0f, 64.0f, 1.9f, 2.1f}, {46.0f, 58.0f, 1.5f, 1.5f}, {-64.0f, 64.0f, 2.3f, 2.6f}};
+  for (int b = 0; b < 6; b++)
+    compound_rock(SR[b][0], SR[b][1], SR[b][2], SR[b][3], rock);
+  // Checkpoint HESCO & Jersey barrier wings flanking the south road
+  k_jersey(1, -4.4f, 42.0f, 50.0f); k_jersey(1, 4.4f, 42.0f, 50.0f);
+  k_hesco(-11.0f, 42.0f, 0, 3, 1.45f); k_hesco(9.0f, 42.0f, 0, 3, 1.45f);
   palm(0.0f, 58.0f, 5.6f); palm(6.0f, 62.0f, 5.0f); palm(-2.0f, 66.0f, 6.0f); palm(28.0f, 56.0f, 5.2f);
   truck(-28.0f, 64.0f, 0, rgb(0.46f, 0.40f, 0.28f));
   dumpster(40.0f, 66.0f, 0, rgb(0.30f, 0.34f, 0.22f));
+  g_ks = ks;
   g_mg_rows = rows;
 }
 static void compound_extras(void) {
+  float ks = g_ks; g_ks = 1.0f;
   const town_style_t *s = &g_town;
+  v3 stl = rgb(0.28f, 0.30f, 0.32f), conc = rgb(0.58f, 0.54f, 0.47f), trim = rgb(0.46f, 0.42f, 0.36f);
+  v3 warm = rgb(0.62f, 0.42f, 0.18f), led_r = rgb(1.15f, 0.06f, 0.04f);
+  // Ground roads, concrete slabs, fuel bund, helipad lights & village plaza
+  compound_roads();
+  // Perimeter walls: coping, buttresses, security wire & reinforced gatehouses
+  // North wall (z = -35, x = -40..+12 and +18..+40), North Gate (+12..+18)
+  compound_wall_dress(0, -35.0f, -40.0f, 12.0f, 3.2f, 1);
+  compound_wall_dress(0, -35.0f,  18.0f, 40.0f, 3.2f, 1);
+  compound_gatehouse(0, -35.0f, 12.0f, 18.0f, 3.2f);
+  // South wall (z = +31, x = -40..-4 and +4..+40), South Gate (-4..+4)
+  compound_wall_dress(0, 31.0f, -40.0f, -4.0f, 3.2f, 1);
+  compound_wall_dress(0, 31.0f,   4.0f, 40.0f, 3.2f, 1);
+  compound_gatehouse(0, 31.0f, -4.0f, 4.0f, 3.2f);
+  // West wall (x = -39, z = -34..-6 and -2..+30), West breach (-6..-2)
+  compound_wall_dress(1, -39.0f, -34.0f, -6.0f, 3.2f, 1);
+  compound_wall_dress(1, -39.0f,  -2.0f, 30.0f, 3.2f, 1);
+  // Rubble & broken masonry flanking the West wall breach (central 2.8 m clear)
+  KMAT(SMAT_CONCRETE, {
+    bx(-40.4f, 0.0f, -6.35f, -38.4f, 0.55f, -5.65f, conc);
+    bx(-39.6f, 0.0f, -2.35f, -37.8f, 0.45f, -1.65f, conc);
+    bx(-41.1f, 0.0f, -5.95f, -40.45f, 0.30f, -5.45f, trim);
+  });
+  // East wall (x = +39, z = -34..+14 and +18..+30)
+  compound_wall_dress(1, 39.0f, -34.0f, 14.0f, 3.2f, 1);
+  compound_wall_dress(1, 39.0f,  18.0f, 30.0f, 3.2f, 1);
   // HQ: two storeys, the stair up its south wall to the roof (hostage three).
   int bal = g_town.balconies;
   g_town.balconies = 0;
   house_climb(-10.0f, -26.0f, 8.0f, -14.0f, 2, SIDE_N | SIDE_E | SIDE_S | SIDE_W,
               SIDE_N | SIDE_E, SIDE_S, +1, -9.4f);
   g_town.balconies = bal;
-  v3 stl = rgb(0.28f, 0.30f, 0.32f);
-  bx(-4.2f, 6.4f, -25.4f, -4.02f, 13.6f, -25.22f, stl);            // radio mast
-  bx(-4.8f, 11.8f, -25.36f, -3.42f, 11.9f, -25.26f, stl);
-  bx(-4.8f, 12.8f, -25.36f, -3.42f, 12.9f, -25.26f, stl);
-  bx(0.0f, 6.4f, -25.5f, 2.4f, 6.9f, -24.9f, rgb(0.36f, 0.34f, 0.28f));     // roof bags
+  // HQ architectural dressing: corner pilasters, south-east armored entrance,
+  // warm lit upper command windows with steel mullions, rooftop comms shelter,
+  // braced radio mast & sandbags.
+  KMAT(SMAT_CONCRETE, {
+    // Corner pilasters & south-east bay pier (buried 1 cm so y0 never shares HQ's y=0)
+    bx(-10.24f, -0.01f, -26.24f, -9.76f, 6.32f, -25.76f, trim);
+    bx(  7.76f, -0.01f, -26.24f,  8.24f, 6.32f, -25.76f, trim);
+    bx(-10.24f, -0.01f, -14.24f, -9.76f, 6.32f, -13.76f, trim);
+    bx(  7.76f, -0.01f, -14.24f,  8.24f, 6.32f, -13.76f, trim);
+    bx(  1.60f,  0.00f, -14.00f,  2.10f, 6.32f, -13.78f, trim);
+  });
+  // HQ south-east armored doorway, steel canopy & warm bulkhead lamp
+  KMAT(SMAT_STEEL, {
+    bx(3.8f, 0.0f, -14.0f, 5.8f, 2.45f, -13.86f, rgb(0.20f, 0.22f, 0.24f));
+    bx(3.4f, 2.55f, -14.0f, 6.2f, 2.70f, -12.95f, stl);
+  });
+  KMAT(SMAT_LAMP, {
+    bx(4.4f, 2.46f, -13.65f, 5.2f, 2.54f, -13.40f, rgb(0.85f, 0.68f, 0.36f)); // canopy downlight
+    // Warm-lit upper command room windows on the south-east face
+    bx(2.8f, 4.05f, -14.0f, 4.3f, 5.25f, -13.94f, warm);
+    bx(5.3f, 4.05f, -14.0f, 6.8f, 5.25f, -13.94f, warm);
+  });
+  KMAT(SMAT_STEEL, {
+    // Window frames, sills & central mullions so the lit panes read as real windows
+    bx(2.74f, 3.98f, -14.0f, 4.36f, 4.05f, -13.84f, stl);
+    bx(2.74f, 5.25f, -14.0f, 4.36f, 5.33f, -13.84f, stl);
+    bx(3.52f, 4.05f, -13.94f, 3.58f, 5.25f, -13.88f, stl);
+    bx(2.80f, 4.62f, -13.94f, 4.30f, 4.68f, -13.88f, stl);
+    bx(5.24f, 3.98f, -14.0f, 6.86f, 4.05f, -13.84f, stl);
+    bx(5.24f, 5.25f, -14.0f, 6.86f, 5.33f, -13.84f, stl);
+    bx(6.02f, 4.05f, -13.94f, 6.08f, 5.25f, -13.88f, stl);
+    bx(5.30f, 4.62f, -13.94f, 6.80f, 4.68f, -13.88f, stl);
+  });
+  // HQ rooftop comms shelter (NW corner, clear of warden at -2,-17 and hostage at 3,-21.5)
+  KMAT(SMAT_CONCRETE, {
+    bx(-9.4f, 6.40f, -25.4f, -6.2f, 8.35f, -22.6f, conc);
+    bx(-9.5f, 8.35f, -25.5f, -6.1f, 8.50f, -22.5f, trim);
+  });
+  KMAT(SMAT_STEEL, {
+    bx(-6.2f, 6.80f, -24.7f, -6.08f, 8.05f, -23.3f, rgb(0.22f, 0.24f, 0.26f)); // louvered vent
+    bx(-8.6f, 8.50f, -24.6f, -7.2f, 9.15f, -23.4f, stl);                       // rooftop HVAC unit
+  });
+  // Braced radio mast + crossarms + glowing red aviation warning beacon
+  KMAT(SMAT_STEEL, {
+    bx(-4.38f, 6.40f, -25.58f, -3.86f, 7.15f, -25.06f, stl);     // mast pedestal
+    bx(-4.20f, 7.15f, -25.40f, -4.02f, 13.70f, -25.22f, stl);    // mast shaft
+    bx(-5.05f, 11.80f, -25.36f, -3.18f, 11.92f, -25.26f, stl);   // lower crossarm
+    bx(-4.85f, 12.80f, -25.36f, -3.38f, 12.92f, -25.26f, stl);   // upper crossarm
+  });
+  KMAT(SMAT_LED, bx(-4.24f, 13.70f, -25.44f, -3.98f, 13.98f, -25.18f, led_r));
+  // Rooftop sandbag firing positions along the north parapet
+  k_sandbags(0, -25.20f, -2.5f, 2.8f, 6.40f, 5, 0.48f);
+  k_sandbags(0, -25.20f,  4.4f, 7.2f, 6.40f, 5, 0.48f);
+  // Motor pool architectural dressing: steel roof columns, fascia & under-canopy work lights
+  KMAT(SMAT_STEEL, {
+    bx(20.05f, 0.025f, -11.9f, 20.35f, 3.40f, -11.6f, stl);
+    bx(20.05f, 0.025f,  -4.2f, 20.35f, 3.40f,  -3.9f, stl);
+    bx(20.05f, 0.025f,   3.6f, 20.35f, 3.40f,   3.9f, stl);
+    bx(19.92f, 3.38f, -12.05f, 20.05f, 3.94f,  4.05f, rgb(0.24f, 0.25f, 0.26f)); // fascia beam
+  });
+  KMAT(SMAT_LED, {
+    bx(24.0f, 3.32f, -9.2f, 28.0f, 3.40f, -8.8f, warm);
+    bx(24.0f, 3.32f, -1.7f, 28.0f, 3.40f, -1.3f, warm);
+  });
+  // Motor pool north-wall workshop clutter (clear of jeeps at y=0, z=-9/-1.5 & hostage at 33,-6)
+  k_pallets(31.8f, -11.2f, 0, 3);
+  k_crate(34.2f, -11.2f, 0.65f, 0.45f, 0.85f, rgb(0.46f, 0.36f, 0.24f));
+  tyre_stack(21.4f, -11.0f, 0);
+  gas_cage(34.8f, 2.8f, 2);
+  // The Pen (NW): security fence rails atop its walls & entrance awning
+  KMAT(SMAT_STEEL, {
+    for (float x = -31.5f; x <= -22.5f; x += 3.0f) {
+      bx(x - 0.03f, 3.20f, -29.03f, x + 0.03f, 3.78f, -28.97f, stl);
+      bx(x - 0.03f, 3.20f, -21.03f, x + 0.03f, 3.78f, -20.97f, stl);
+    }
+    bx(-31.5f, 3.65f, -29.02f, -22.5f, 3.69f, -28.98f, rgb(0.46f, 0.48f, 0.50f));
+    bx(-31.5f, 3.65f, -21.02f, -22.5f, 3.69f, -20.98f, rgb(0.46f, 0.48f, 0.50f));
+  });
+  // Courtyard tactical details: HESCO corners & supply pallets (clear of guard routes)
+  k_hesco(-15.5f, 11.2f, 0, 3, 1.45f);
+  k_pallets(-15.5f, 8.8f, 1, 2);
+  k_crate(-15.5f, 6.8f, 0.55f, 0.50f, 0.80f, rgb(0.48f, 0.38f, 0.26f));
   // The corner watchtowers: a stair round a timber core, a lookout with a
   // roof on four posts. A sniper stands in each.
   v3 core = rgb(0.46f, 0.36f, 0.25f), step = s->stone;
@@ -3553,7 +3883,7 @@ static void compound_extras(void) {
   solids_hide(heli0);
   prop_add(PROP_HELI, hx, hz, 0, 0, rgb(0.43f, 0.47f, 0.34f), dk);   // faded olive: the blocks keep od
   // The pad: a concrete apron with an H painted on it.
-  bx(14.0f, 0.0f, -50.0f, 30.0f, 0.02f, -40.0f, rgb(0.36f, 0.35f, 0.33f));
+  bx(14.0f, -0.02f, -50.0f, 30.0f, 0.02f, -40.0f, rgb(0.46f, 0.45f, 0.42f));
   v3 wh = rgb(0.86f, 0.86f, 0.82f);
   bx(hx - 6.0f, 0.02f, hz + 2.4f, hx - 5.4f, 0.03f, hz + 4.4f, wh);
   bx(hx - 4.0f, 0.02f, hz + 2.4f, hx - 3.4f, 0.03f, hz + 4.4f, wh);
@@ -3564,6 +3894,7 @@ static void compound_extras(void) {
   lamp(-19.0f, -19.0f, 1, -1); lamp(18.0f, -6.0f, 1, +1);
   lamp(11.0f, -26.0f, 0, +1); lamp(42.0f, 12.0f, 1, +1);
   lamp(12.0f, -42.0f, 0, +1); lamp(-17.0f, 16.0f, 0, -1);
+  lamp(-6.5f, 38.5f, 0, +1); lamp(6.5f, 38.5f, 0, -1);            // south approach checkpoint lamps
   // Vehicles: two jeeps in the motor pool, a supply truck by each outer gate.
   car(26.0f, -9.0f, 0); car(26.0f, -1.5f, 0);
   truck(-22.0f, -41.0f, 0, rgb(0.34f, 0.36f, 0.26f));
@@ -3577,6 +3908,7 @@ static void compound_extras(void) {
   palm(-46.0f, -20.0f, 5.0f); palm(46.0f, 28.0f, 5.4f); palm(-44.0f, 16.0f, 5.6f);
   palm(30.0f, 49.0f, 5.0f); palm(-10.0f, 47.0f, 5.2f); palm(10.0f, 49.0f, 4.8f);
   palm(-48.0f, 30.0f, 5.0f); palm(47.0f, -30.0f, 5.2f);
+  g_ks = ks;
   compound_outer();
 }
 

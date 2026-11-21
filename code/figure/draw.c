@@ -300,16 +300,54 @@ static void fig_stowed(const pose_t *P, const kit_t *kt, v3 Rc, v3 spine, int ho
 //    goes up behind the shoulder instead of folding down through the chest.
 //  * 0.32 + 0.42 s was a long gun stowed and drawn in about the time of a
 //    blink; the long guns now take 0.50 + 0.66 s, the pistol 0.40 + 0.46 s.
-#define SWAP_A_LONG 0.50f   // seconds: stow a long gun
-#define SWAP_B_LONG 0.66f   // seconds: draw a long gun
-#define SWAP_A_PT   0.40f   // seconds: holster the pistol
-#define SWAP_B_PT   0.46f   // seconds: draw the pistol
-#define SWAP_RUSH   6.0f    // a shot mid-swap runs the rest this much faster
+// v3 — natural, unhurried weapon grabbing & switching:
+//  * Deliberate pacing (0.62/0.78 s long guns, 0.48/0.56 s pistol) with quintic
+//    smootherstep (`ease5`) so every motion starts and settles at zero jerk, plus
+//    a tactile grasp/seat beat at the slot before pulling out or letting go.
+//  * Continuous C1 upper-body, shoulder and head accompaniment (`swap_body_pose`)
+//    so the torso turns and the active shoulder eases into the reach instead of
+//    reaching off a frozen statue.
+//  * Anatomical elbow poles (`swap_pole`) that NEVER shoot above the helmet on a
+//    back reach or wing out horizontally into a T-pose; reach clamped to <= 90%
+//    of arm length mid-swap so neither elbow ever locks straight.
+//  * Wrist-aligned stock/grip handles (`swap_handle`) with consistent thumb axis
+//    (zero sign-flip mid-swing) and continuous hand-cylinder blending from the
+//    relaxed forearm line onto the weapon (zero 0.5 binary hand-pose pop).
+#define SWAP_A_LONG 0.62f   // seconds: stow a long gun
+#define SWAP_B_LONG 0.78f   // seconds: draw a long gun
+#define SWAP_A_PT   0.48f   // seconds: holster the pistol
+#define SWAP_B_PT   0.56f   // seconds: draw the pistol
+#define SWAP_RUSH   5.5f    // a shot mid-swap runs the rest this much faster
 static int   g_sw_seen[MAX_ENTS];   // last weapon seen + 1, 0 = never
 static int   g_sw_from[MAX_ENTS];
 static float g_sw_t0[MAX_ENTS];
 static float g_sw_rush[MAX_ENTS];   // when a shot rushed this swap (< t0: not)
 static float ease3(float x) { x = f_clamp(x, 0.0f, 1.0f); return x * x * (3.0f - 2.0f * x); }
+static float ease5(float x) {
+  x = f_clamp(x, 0.0f, 1.0f);
+  return x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
+}
+static float swap_bell(float t, float t0, float pk, float t1) {
+  if (t <= t0 || t >= t1) return 0.0f;
+  return t < pk ? ease5((t - t0) / fmaxf(pk - t0, 1e-4f))
+                : 1.0f - ease5((t - pk) / fmaxf(t1 - pk, 1e-4f));
+}
+static void swap_slot_body(int w, float *tw, float *sh0_y, float *sh0_f,
+                           float *sh1_y, float *sh1_f, float *hpitch) {
+  *tw = *sh0_y = *sh0_f = *sh1_y = *sh1_f = *hpitch = 0.0f;
+  if (w == WPN_AR) {
+    // Over-the-right-shoulder rifle reach: turn torso cleanly right and
+    // elevate/protract the right shoulder into the overhead arch.
+    *tw = 0.26f; *sh1_y = 0.036f; *sh1_f = 0.016f; *hpitch = -0.04f;
+  } else if (w == WPN_SR) {
+    // Mirror over the left shoulder for the sniper/DMR.
+    *tw = -0.26f; *sh0_y = 0.036f; *sh0_f = 0.016f; *hpitch = -0.04f;
+  } else if (w == WPN_PT) {
+    // Reaching down for the drop-leg holster: ease the right shoulder down and
+    // glance slightly toward the hip.
+    *tw = 0.08f; *sh1_y = -0.022f; *sh1_f = 0.012f; *sh0_y = 0.006f; *hpitch = -0.07f;
+  }
+}
 static float swap_stow_s(int w) {
   return w == WPN_PT ? SWAP_A_PT : (w == WPN_AR || w == WPN_SR) ? SWAP_A_LONG : 0.0f;
 }
@@ -395,31 +433,47 @@ static gframe_t swap_frame(const pose_t *P, v3 Rc, v3 spine, int w,
   c[3] = gframe_centre(w, H);
   float lag;
   if (w == WPN_AR) {
-    // (no real lift: the stock already stands up behind the neck, and every
-    // centimetre it rose took the hand over the helmet)
-    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.03f), v3_scale(Rc, 0.10f)));
-    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, 0.34f),
-                  v3_add(v3_scale(spine, -0.14f), v3_scale(cfw, 0.04f))));
-    lag = 0.15f;
+    // Lift the carbine cleanly UP and OVER the right shoulder (diagonal
+    // over-the-shoulder draw arc), sweeping forward clear of the deltoid into
+    // the waiting support hand in front of the chest.
+    c[1] = v3_add(P->chest, v3_add(v3_scale(Rc, 0.22f),
+                  v3_add(v3_scale(spine, 0.16f), v3_scale(cfw, 0.08f))));
+    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, 0.22f),
+                  v3_add(v3_scale(spine, -0.02f), v3_scale(cfw, 0.44f))));
+    lag = 0.10f;
   } else if (w == WPN_SR) {
-    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.03f), v3_scale(Rc, -0.10f)));
-    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, -0.14f),
-                  v3_add(v3_scale(spine, -0.14f), v3_scale(cfw, 0.28f))));
-    lag = 0.15f;
+    // Mirror over the left shoulder: lift up and over the left shoulder,
+    // sweeping cleanly forward into ready.
+    c[1] = v3_add(P->chest, v3_add(v3_scale(Rc, -0.22f),
+                  v3_add(v3_scale(spine, 0.12f), v3_scale(cfw, 0.12f))));
+    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, -0.18f),
+                  v3_add(v3_scale(spine, -0.04f), v3_scale(cfw, 0.44f))));
+    lag = 0.10f;
   } else {
-    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.13f), v3_scale(Rc, 0.03f)));
-    c[2] = v3_add(P->hip[1], v3_add(v3_scale(spine, 0.26f),
-                  v3_add(v3_scale(cfw, 0.20f), v3_scale(Rc, 0.02f))));
-    lag = 0.25f;
+    // Clean vertical clear out of the drop-leg holster, then punch smoothly up
+    // and forward in front of the sternum into two-handed presentation.
+    c[1] = v3_add(c[0], v3_add(v3_scale(spine, 0.12f),
+                  v3_add(v3_scale(Rc, 0.02f), v3_scale(cfw, 0.05f))));
+    c[2] = v3_add(P->chest, v3_add(v3_scale(Rc, 0.13f),
+                  v3_add(v3_scale(spine, -0.22f), v3_scale(cfw, 0.26f))));
+    lag = 0.20f;
   }
-  float ro = ease3((p - lag) / (0.92f - lag));
+  float ro = ease5((p - lag) / (0.88f - lag));
   v3 rt, up, fw;
-  if (w == WPN_AR) {
+  if (w == WPN_PT) {
+    // The drop-leg holster carries the slide facing back and muzzle down, so
+    // holster -> ready is a clean ~90-degree pitch up: shortest-arc slerp keeps
+    // the slide upright with zero sideways roll or wrist twist.
     axes_slerp(S->rt, S->up, S->fw, H->rt, H->up, H->fw, ro, &rt, &up, &fw);
   } else {
-    // the middle attitude: muzzle down and forward, the top turned outward
-    v3 mfw = v3_norm(v3_add(v3_scale(spine, -0.70f), v3_scale(cfw, 0.70f)));
-    v3 mup = v3_norm(v3_sub(Rc, v3_scale(mfw, v3_dot(Rc, mfw))));
+    // Over-the-shoulder diagonal middle attitude: barrel swings diagonally
+    // across/forward over the shoulder while sights roll smoothly upright.
+    float side = w == WPN_SR ? -1.0f : 1.0f;
+    v3 mfw = v3_norm(v3_add(v3_scale(Rc, -side * 0.24f),
+                     v3_add(v3_scale(spine, -0.30f), v3_scale(cfw, 0.92f))));
+    v3 mup = v3_norm(v3_add(v3_scale(spine, 0.88f),
+                     v3_add(v3_scale(cfw, 0.35f), v3_scale(Rc, side * 0.32f))));
+    mup = v3_norm(v3_sub(mup, v3_scale(mfw, v3_dot(mup, mfw))));
     v3 mrt = v3_norm(v3_cross(mfw, mup));
     if (ro < 0.5f)
       axes_slerp(S->rt, S->up, S->fw, mrt, mup, mfw, ro * 2.0f, &rt, &up, &fw);
@@ -430,63 +484,99 @@ static gframe_t swap_frame(const pose_t *P, v3 Rc, v3 spine, int w,
   if (p >= 1.0f) return *H;
   return gframe_at(w, spline4(c, p), fw, up);
 }
-// Where a hand holds weapon `w` in frame F during the swap, p as in
-// swap_frame. A long gun on the back is taken by the STOCK (its grip is out of
-// reach behind him; the butt standing up behind the neck is not), and the hand
-// slides to its own hold — the grip (hand 1) or the fore-end (hand 0) — as the
-// gun comes round. Returns the WRIST; *hc/*ha/*hr is the cylinder the fingers
-// close round, so the hand visibly wraps the stock instead of making a fist
-// in the air next to it.
-//
-// The wrist stands off the stock on the side the SHOULDER is (and a little
-// outboard): the stock is 8 cm off the spine behind the neck, and a wrist put
-// ON it laid the forearm across the back of the head.
-static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho, v3 side,
-                      v3 back, v3 *hc, v3 *ha, float *hr) {
+// Anatomical elbow pole for weapon swaps:
+//  * Low / chest / holster: elbow stays compact and tucked down-out-back.
+//  * Over-the-shoulder reach (wrist rising above shoulder / behind head):
+//    elbow arcs cleanly OUTBOARD-AND-FORWARD at ear/crown height so the upper
+//    arm opens ~50 deg up-out and the forearm runs nearly horizontal across to
+//    the weapon behind the shoulder.
+static v3 swap_pole(v3 sho, v3 wr, v3 Rc, v3 spine, float side) {
+  v3 cfw = v3_norm(v3_cross(spine, Rc));
+  v3 d = v3_sub(wr, sho);
+  float dy = v3_dot(d, spine);
+  float df = v3_dot(d, cfw);
+  float rear = ease3((-df + 0.14f) / 0.30f);
+  float hi   = ease3((dy + 0.04f + 0.10f * rear) / 0.24f);
+  v3 base = v3_add(v3_scale(Rc, side * 0.40f),
+            v3_add(v3_scale(spine, -0.82f), v3_scale(cfw, -0.40f)));
+  // While the hand is lifting up in front of the shoulder, keep the elbow
+  // tucked down-and-forward (bicep-curl lift — never flaring sideways into a
+  // horizontal T-pose); open into the wide outboard-forward arch as the hand
+  // reaches back over the shoulder.
+  v3 mid_p = v3_add(v3_scale(Rc, side * 0.46f),
+             v3_add(v3_scale(spine, -0.72f), v3_scale(cfw, 0.32f)));
+  v3 ov_p = v3_add(v3_scale(Rc, side * 0.78f),
+            v3_add(v3_scale(spine, -0.06f), v3_scale(cfw, 0.62f)));
+  v3 p = v3_lerp(base, mid_p, hi);
+  p = v3_lerp(p, ov_p, hi * rear);
+  return v3_norm(p);
+}
+// Compute a forearm-aligned wrist on grip cylinder (hc, ha, hr) using a damped
+// 4-pass fixed-point IK solve so the wrist and palm ALWAYS run cleanly out of
+// the forearm (zero kink, zero axial twist, zero reach-clamp stretch) across
+// the entire draw/stow arc.
+static v3 swap_align_wrist(v3 sho, v3 hc, v3 ha, float hr, float side,
+                           v3 Rc, v3 spine) {
+  v3 out_h = v3_scale(Rc, side);
+  v3 init = v3_add(v3_sub(sho, hc), v3_scale(out_h, 0.25f));
+  v3 br = v3_sub(init, v3_scale(ha, v3_dot(init, ha)));
+  br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : out_h;
+  v3 wri = v3_add(hc, v3_add(v3_scale(ha, -0.020f), v3_scale(br, hr + 0.064f)));
+  float amax = (ANIM_UARM + ANIM_FARM) * 0.93f;
+  for (int it = 0; it < 4; it++) {
+    v3 pole = swap_pole(sho, wri, Rc, spine, side);
+    v3 elb = ik_solve(sho, wri, ANIM_UARM, ANIM_FARM, pole);
+    v3 to_e = v3_sub(elb, hc);
+    float tl = v3_len(to_e);
+    v3 ten = tl > 1e-6f ? v3_scale(to_e, 1.0f / tl) : out_h;
+    br = v3_sub(ten, v3_scale(ha, v3_dot(ten, ha)));
+    br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : out_h;
+    v3 e2 = v3_cross(ha, br);
+    br = v3_norm(v3_add(br, v3_scale(e2, side * 0.32f)));
+    float aw = f_clamp(v3_dot(ten, ha) * 0.072f, -0.062f, 0.062f);
+    v3 wn = v3_add(hc, v3_add(v3_scale(ha, aw), v3_scale(br, hr + 0.064f)));
+    wri = v3_lerp(wri, wn, 0.65f);
+    v3 awv = v3_sub(wri, sho);
+    float awl = v3_len(awv);
+    if (awl > amax) wri = v3_add(sho, v3_scale(awv, amax / awl));
+  }
+  return wri;
+}
+// Where a hand holds weapon `w` in frame F during the swap, p as in swap_frame.
+// Long guns are grasped OVER THE SHOULDER by the upper buttstock with the back
+// of the hand facing rear/up and fingers curling over the top/side of the stock
+// (thumb down along the gun toward the barrel — zero wrist kink or twist), then
+// slide smoothly onto the grip/fore-end as the weapon swings over the shoulder.
+static v3 swap_handle(int w, const gframe_t *F, float p, int hand, v3 sho,
+                      v3 Rc, v3 spine, v3 *hc, v3 *ha, float *hr) {
+  float side = hand ? 1.0f : -1.0f;
   v3 gc, ga; float gr;
   gun_hold(w, hand ? GH_GRIP : GH_FORE3, F->o, F->rt, F->up, F->fw, &gc, &ga, &gr);
   v3 gw = gframe_wrist(w, F, hand);
-  if (w == WPN_PT) { *hc = gc; *ha = ga; *hr = gr; return gw; }
+  if (w == WPN_PT) {
+    *hc = gc; *ha = ga; *hr = gr;
+    v3 aw = swap_align_wrist(sho, gc, ga, gr, side, Rc, spine);
+    return v3_lerp(aw, gw, ease5((p - 0.55f) / 0.40f));
+  }
   v3 mn, mx;
   gun_box(w, &mn, &mx);
-  v3 sc = v3_add(F->o, v3_add(v3_scale(F->fw, mn.z * 0.60f),
-                 v3_scale(F->up, 0.5f * (mn.y + mx.y))));
+  // Upper buttstock standing behind the shoulder/ear (right at head height for
+  // the clean horizontal-forearm over-the-shoulder grasp).
+  float zf = w == WPN_AR ? 0.92f : 0.94f;
+  v3 sc = v3_add(F->o, v3_add(v3_scale(F->fw, mn.z * zf),
+                 v3_scale(F->up, 0.012f)));
+  // sa = +F->fw (thumb down toward barrel): puts the back of the hand facing
+  // cleanly back/up toward the camera with fingers wrapping over the weapon,
+  // and stays sign-consistent with both AR GH_GRIP and SR GH_FORE3.
   v3 sa = F->fw;
-  v3 br = v3_add(v3_norm(v3_sub(sho, sc)), v3_scale(side, 0.6f));
-  // THE CARBINE BEHIND THE NECK IS TAKEN FROM BEHIND. With the wrist on the
-  // shoulder's side of the stock (in FRONT of it), fig_hand wrapped the fingers
-  // round onto the stock's rear face: from the shoulder camera, which is
-  // exactly where everyone sees this from, the player looked at a PALM and
-  // curled fingers, with the back of the hand turned to his own neck. A man
-  // reaching back over his shoulder for a rifle does the reverse — the hand
-  // goes behind the stock, palm forward against it, and what is seen from
-  // behind is the back of the glove. So the wrist stands off the stock's REAR
-  // face, still outboard (a wrist straight behind it laid the forearm across
-  // the back of the helmet) and a little high, coming down onto it.
-  if (w == WPN_AR)
-    br = v3_add(v3_scale(back, 1.0f), v3_add(v3_scale(side, 0.55f),
-                                             v3_scale(v3_norm(v3_sub(sc, sho)), 0.15f)));
-  br = v3_sub(br, v3_scale(sa, v3_dot(br, sa)));
-  br = v3_dot(br, br) > 1e-8f ? v3_norm(br) : side;
-  const float sr = 0.019f;                       // the stock's grip radius
-  v3 sw = v3_add(sc, v3_scale(br, sr + 0.068f));
-  float s = ease3((p - 0.30f) / 0.45f);
-  if (v3_dot(sa, ga) < 0.0f) sa = v3_scale(sa, -1.0f);
+  const float sr = 0.018f;
+  float s = ease5((p - 0.24f) / 0.48f);
   *hc = v3_lerp(sc, gc, s);
-  *ha = v3_norm(v3_lerp(sa, ga, s));
+  v3 ha_mix = v3_lerp(sa, ga, s);
+  *ha = v3_dot(ha_mix, ha_mix) > 1e-8f ? v3_norm(ha_mix) : ga;
   *hr = sr + (gr - sr) * s;
-  return v3_lerp(sw, gw, s);
-}
-// The elbow pole for an arm whose wrist is at `wr`: out and DOWN while the
-// hand is low, out and UP when it goes above the shoulder to reach behind it.
-// ...and FORWARD with it: reaching behind the neck the elbow rises in front of
-// the shoulder, not straight out to the side — pointed sideways at shoulder
-// height the upper arm stood out level like a wing for the whole draw.
-static v3 swap_pole(v3 sho, v3 wr, v3 Rc, v3 spine, float side) {
-  float h = f_clamp(v3_dot(v3_sub(wr, sho), spine) / 0.18f + 0.35f, 0.0f, 1.0f);
-  v3 cfw = v3_norm(v3_cross(spine, Rc));
-  return v3_add(v3_add(v3_scale(Rc, side * (0.7f - 0.10f * h)), v3_scale(spine, -0.8f + 1.25f * h)),
-                v3_scale(cfw, 0.55f * h));
+  v3 aw = swap_align_wrist(sho, *hc, *ha, *hr, side, Rc, spine);
+  return v3_lerp(aw, gw, ease5((p - 0.62f) / 0.34f));
 }
 
 // A point on the procedural skull's surface (the seven rings scene_draw_figure
@@ -771,16 +861,12 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   // also a CASTER, so it threw a second disc shadow of its own.
   g_fig_y = pos.y;
   kit_t kt = fig_kit(palette, flash01, flash_col);
-  v3 Rc = v3_norm(P.right);
-  v3 spine = v3_norm(v3_sub(P.chest, P.pelvis));
-  v3 prt = v3_norm(v3_sub(P.hip[1], P.hip[0]));      // pelvis right
-  // THE WEAPON SWAP (see SWAP_A): which weapon is in the hands this frame and
-  // how far through putting one away / drawing one he is.
+  // THE WEAPON SWAP (see SWAP_A_LONG): resolved BEFORE fig_torso so the upper
+  // body, shoulders, and head turn smoothly into the reach instead of reaching
+  // off a frozen statue. C1-continuous across the stow->draw seam.
   int living = !dth || dth->slack <= 0.0001f;
   int hold = wpn, sw_phase = 0, sw_from = wpn;
   float sw_k = 0.0f;
-  // Carried kit is drawn for the local player always and for anyone else only
-  // inside 12 m — it is a rifle and a half of vertices per figure.
   int carry = living && g_fig_ent >= 0 && g_fig_ent < MAX_ENTS &&
               (g_fig_ent == g_local_ent || g_fig_k >= 12);
   if (living && g_fig_ent >= 0 && g_fig_ent < MAX_ENTS) {
@@ -796,14 +882,64 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     sw_from = from;
     float da = swap_stow_s(from), db = swap_draw_s(wpn);
     float t = now - g_sw_t0[e];
-    // a shot mid-swap: the rest of it runs SWAP_RUSH times faster
     if (gs.trig > 0.05f && g_sw_rush[e] < g_sw_t0[e] && t >= 0.0f && t < da + db) g_sw_rush[e] = now;
     if (g_sw_rush[e] >= g_sw_t0[e]) t = (g_sw_rush[e] - g_sw_t0[e]) + (now - g_sw_rush[e]) * SWAP_RUSH;
     if (carry && from != wpn && t >= 0.0f && t < da + db) {
       if (t < da) { sw_phase = 1; sw_k = t / da; hold = from; }
       else        { sw_phase = 2; sw_k = (t - da) / db; }
+      // Natural torso counter-twist, shoulder drop/ease, and subtle head follow
+      // driven by smooth bell curves over the full [0, da + db] timeline.
+      float twA, s0yA, s0fA, s1yA, s1fA, hpA;
+      float twB, s0yB, s0fB, s1yB, s1fB, hpB;
+      swap_slot_body(from, &twA, &s0yA, &s0fA, &s1yA, &s1fA, &hpA);
+      swap_slot_body(wpn,  &twB, &s0yB, &s0fB, &s1yB, &s1fB, &hpB);
+      float wA = da > 0.001f ? swap_bell(t, 0.0f, 0.72f * da, da + 0.35f * db) : 0.0f;
+      float wB = db > 0.001f ? swap_bell(t, 0.65f * da, da + 0.28f * db, da + db) : 0.0f;
+      float stw = twA * wA + twB * wB;
+      float s0y = s0yA * wA + s0yB * wB, s0f = s0fA * wA + s0fB * wB;
+      float s1y = s1yA * wA + s1yB * wB, s1f = s1fA * wA + s1fB * wB;
+      float shp = hpA * wA + hpB * wB;
+      if (fabsf(stw) > 1e-4f || fabsf(s0y) + fabsf(s1y) + fabsf(shp) > 1e-4f) {
+        v3 F = {{P.head_f.x, 0, P.head_f.z}};
+        F = v3_dot(F, F) > 1e-6f ? v3_norm(F) : (v3){{sinf(yaw), 0, -cosf(yaw)}};
+        v3 U = {{0, 1, 0}};
+        v3 Rt = v3_cross(F, U);
+        v3 pv = P.pelvis;
+        #define SW_TURN(p_, k_) do {                                             \
+          float a_ = -stw * (k_), c_ = cosf(a_), s_ = sinf(a_);                  \
+          v3 d_ = v3_sub((p_), pv);                                              \
+          float r_ = v3_dot(d_, Rt), f_ = v3_dot(d_, F);                         \
+          d_ = v3_add(d_, v3_add(v3_scale(Rt, r_ * c_ - f_ * s_ - r_),           \
+                                 v3_scale(F,  f_ * c_ + r_ * s_ - f_)));         \
+          (p_) = v3_add(pv, d_);                                                 \
+        } while (0)
+        for (int i = 0; i < 2; i++) {
+          SW_TURN(P.sho[i], 1.0f);
+          SW_TURN(P.elb[i], 1.0f);
+          SW_TURN(P.wri[i], 1.0f);
+        }
+        SW_TURN(P.chest, 1.0f);
+        SW_TURN(P.neck, 1.0f);
+        SW_TURN(P.gun_o, 1.0f);
+        SW_TURN(P.head, 0.35f);
+        #undef SW_TURN
+        {
+          float c_ = cosf(stw), s_ = sinf(-stw);
+          float r_ = v3_dot(P.right, Rt), f_ = v3_dot(P.right, F);
+          P.right = v3_add(v3_scale(Rt, r_ * c_ - f_ * s_), v3_scale(F, f_ * c_ + r_ * s_));
+        }
+        P.sho[0] = v3_add(P.sho[0], v3_add(v3_scale(F, s0f), (v3){{0, s0y, 0}}));
+        P.sho[1] = v3_add(P.sho[1], v3_add(v3_scale(F, s1f), (v3){{0, s1y, 0}}));
+        if (fabsf(shp) > 1e-4f) {
+          v3 hf_ = v3_norm(P.head_f), hr_ = v3_cross(hf_, U);
+          if (v3_dot(hr_, hr_) > 1e-6f) P.head_f = v3_rot_axis(hf_, v3_norm(hr_), shp);
+        }
+      }
     }
   }
+  v3 Rc = v3_norm(P.right);
+  v3 spine = v3_norm(v3_sub(P.chest, P.pelvis));
+  v3 prt = v3_norm(v3_sub(P.hip[1], P.hip[0]));      // pelvis right
   int holster_pt = carry && hold != WPN_PT && mode_allowed(g_fig_ent, WPN_PT);
   // THE DUAL BERETTAS: a drop-leg holster on EACH thigh, a pistol in each when
   // they are not in his hands, and in his hands the pair (g_fig_dual).
@@ -2485,12 +2621,12 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, pole1);
   }
   if (sw_phase) {
-    // Fly the weapon in the hands between the ready and its carry slot, and
-    // the hands with it (see SWAP_A_LONG). p is the GUN (0 = seated, 1 = at
-    // the ready); att is the trigger hand ON it, sup the support hand. Off the
-    // gun, a hand closes on nothing (g_fig_free).
+    // Fly the weapon cleanly between its carry slot and ready hold with smooth
+    // quintic easing, tactile grasp/seat beats, natural bent elbows (<= 90% arm
+    // reach so neither arm ever locks straight), and continuous hand-to-grip
+    // orientation blending (no 0.5 binary wrist pop).
     int w = hold;
-    int other = sw_phase == 1 ? wpn : sw_from;   // the weapon of the other phase
+    int other = sw_phase == 1 ? wpn : sw_from;
     gframe_t S, H, So;
     int ok = swap_slot(&P, Rc, spine, w, &S);
     int ok_o = other != w && swap_slot(&P, Rc, spine, other, &So);
@@ -2499,89 +2635,128 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       v3 cfw = v3_norm(v3_cross(spine, Rc));
       float p, att, sup, land = 0.0f;
       if (sw_phase == 1) {
-        sup = 1.0f - ease3(sw_k / 0.28f);
-        p   = 1.0f - ease3(sw_k / 0.76f);
-        att = 1.0f - ease3((sw_k - 0.70f) / 0.30f);
+        // Stow: support hand relaxes off -> gun glides smoothly to slot -> brief
+        // tactile seat dwell (0.76..0.80) -> lead hand releases cleanly.
+        sup = 1.0f - ease5(sw_k / 0.30f);
+        p   = 1.0f - ease5((sw_k - 0.04f) / 0.72f);
+        att = 1.0f - ease5((sw_k - 0.78f) / 0.22f);
       } else {
-        att  = ease3(sw_k / 0.28f);
-        p    = ease3((sw_k - 0.20f) / 0.72f);
-        sup  = ease3((sw_k - 0.66f) / 0.34f);
-        land = ease3((sw_k - 0.84f) / 0.16f);
+        // Draw: lead hand reaches & closes on stock/grip (0..0.30) -> brief grasp
+        // beat -> weapon draws smoothly around flank (0.26..0.88) -> support hand
+        // rises to meet it (0.60..0.94) -> seamless settle onto ready pose.
+        att  = ease5(sw_k / 0.30f);
+        p    = ease5((sw_k - 0.26f) / 0.62f);
+        sup  = ease5((sw_k - 0.60f) / 0.34f);
+        land = ease5((sw_k - 0.84f) / 0.16f);
       }
       gframe_t F = swap_frame(&P, Rc, spine, w, &S, &H, p);
       g_org = F.o; g_rt = F.rt; g_up = F.up; g_fw = F.fw;
       v3 fin0 = P.wri[0], fin1 = P.wri[1];
-      // The support hand, off the gun, HANGS: down by the side with a slight
-      // bend, elbow back. Parked in front of the belly (where it used to go)
-      // the arm had to fold its 0.58 m into 0.3 m, and with the elbow pole
-      // pointing outward it folded out sideways — a chicken wing held through
-      // the whole swap.
-      v3 rest0 = v3_add(P.sho[0], v3_add(v3_scale(Rc, -0.03f),
-                  v3_add(v3_scale(spine, -0.50f), v3_scale(cfw, 0.12f))));
-      v3 rest1 = v3_add(P.sho[1], v3_add(v3_scale(Rc, 0.03f),
-                  v3_add(v3_scale(spine, -0.50f), v3_scale(cfw, 0.12f))));
-      // WHICH HAND TAKES IT FROM THE SLOT: the strong hand for the pistol and
-      // for the carbine over the right shoulder; the LEFT hand for the sniper
-      // on the left flank (the right one reaching for it went across behind
-      // the head), which then hands the grip to the right hand in front of the
-      // chest and slides to the fore-end.
+      // Ready chest-guard off-hand: tucked cleanly in front of lower chest/ribs
+      // (bent ~95 deg, ready to immediately catch the weapon as it swings over
+      // the shoulder — matching athletic tactical draw posture).
+      v3 rest0 = v3_add(P.chest, v3_add(v3_scale(Rc, -0.14f),
+                  v3_add(v3_scale(spine, -0.18f), v3_scale(cfw, 0.24f))));
+      v3 rest1 = v3_add(P.chest, v3_add(v3_scale(Rc,  0.14f),
+                  v3_add(v3_scale(spine, -0.18f), v3_scale(cfw, 0.24f))));
       int lead_l = w == WPN_SR, olead_l = ok_o && other == WPN_SR;
-      // Where the strong hand is while it is OFF a gun: on its way from the
-      // slot of the gun it just put away to the slot of the one it is going
-      // for — the SAME point from both phases, so the hand never stops in
-      // front of the belly between them. With nothing to go for (knife,
-      // grenade) it goes to the pose's own hold; with nothing put away (a
-      // knife out) it starts from there too. A hand the other phase does not
-      // use hangs at the side.
+      // Front-outboard transition waypoint when the strong hand moves between
+      // the over-shoulder rifle stock and the drop-leg holster, so the arm
+      // sweeps cleanly up/down in front of the right shoulder (never behind back).
       v3 free1 = fin1;
-      v3 c_[2], a_[2]; float r_[2];   // the cylinder each hand closes round
+      v3 c_[2], a_[2]; float r_[2];
       if (ok_o && !lead_l && !olead_l)
-        free1 = v3_lerp(swap_handle(w, &S, 0.0f, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]),
-                        swap_handle(other, &So, 0.0f, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]), 0.45f);
-      else if (ok_o) free1 = rest1;
-      float k_ = 1.0f - att;   // the lead hand: 0 on the gun, 1 away from it
-      float bow = sinf(F_PI * f_clamp(k_, 0.0f, 1.0f)) * (ok_o ? 1.0f : 0.6f);
+        free1 = v3_add(P.chest, v3_add(v3_scale(Rc, 0.22f),
+                       v3_add(v3_scale(spine, -0.08f), v3_scale(cfw, 0.20f))));
+      else if (ok_o)
+        free1 = rest1;
+      float k_ = 1.0f - att;
+      float bow = sinf(F_PI * f_clamp(k_, 0.0f, 1.0f)) * (ok_o ? 0.75f : 0.50f);
       v3 w1, w0;
-      float on1, on0;          // how far each hand is ON the gun
+      float on1, on0;
       if (!lead_l) {
-        w1 = v3_lerp(swap_handle(w, &F, p, 1, P.sho[1], Rc, v3_scale(cfw, -1.0f), &c_[1], &a_[1], &r_[1]), free1, ease3(k_));
-        // the reach bows OUT and up, so it goes round the body, not through it
-        w1 = v3_add(w1, v3_add(v3_scale(Rc, 0.06f * bow), v3_scale(spine, 0.04f * bow)));
+        v3 h1 = swap_handle(w, &F, p, 1, P.sho[1], Rc, spine, &c_[1], &a_[1], &r_[1]);
+        w1 = v3_lerp(h1, free1, ease5(k_));
+        // Arc cleanly UP IN FRONT OF THE SHOULDER (modest outboard, strong forward
+        // and slight lift on over-shoulder reach) — never sticking out sideways.
+        w1 = v3_add(w1, v3_add(v3_scale(Rc, 0.025f * bow),
+                        v3_add(v3_scale(cfw, (w == WPN_AR ? 0.095f : 0.035f) * bow),
+                               v3_scale(spine, (w == WPN_AR ? 0.055f : 0.0f) * bow))));
+        gun_hold(w, GH_FORE3, F.o, F.rt, F.up, F.fw, &c_[0], &a_[0], &r_[0]);
         w0 = v3_lerp(rest0, gframe_wrist(w, &F, 0), sup);
         on1 = att; on0 = sup;
       } else {
-        // the sniper: the left hand leads (stock near the slot, fore-end at
-        // the ready), the right hand joins on the grip as it comes round
-        v3 h0 = swap_handle(w, &F, p, 0, P.sho[0], v3_scale(Rc, -1.0f), v3_scale(cfw, -1.0f), &c_[0], &a_[0], &r_[0]);
-        w0 = v3_lerp(h0, rest0, ease3(k_));
-        w0 = v3_add(w0, v3_add(v3_scale(Rc, -0.06f * bow), v3_scale(spine, 0.04f * bow)));
-        float jr = ease3((p - 0.40f) / 0.35f);
+        v3 h0 = swap_handle(w, &F, p, 0, P.sho[0], Rc, spine, &c_[0], &a_[0], &r_[0]);
+        w0 = v3_lerp(h0, rest0, ease5(k_));
+        w0 = v3_add(w0, v3_add(v3_scale(Rc, -0.025f * bow),
+                        v3_add(v3_scale(cfw, 0.095f * bow), v3_scale(spine, 0.055f * bow))));
+        float jr = ease5((p - 0.36f) / 0.38f);
+        gun_hold(w, GH_GRIP, F.o, F.rt, F.up, F.fw, &c_[1], &a_[1], &r_[1]);
         w1 = v3_lerp(free1, gframe_wrist(w, &F, 1), jr);
         on0 = att; on1 = jr;
       }
-      // The last stretch of the draw lands on the pose's OWN hold, so there is
-      // no pop where the animation hands back to the ordinary carry.
       if (land > 0.0f) {
         w1 = v3_lerp(w1, fin1, land);
         w0 = v3_lerp(w0, fin0, land);
       }
-      P.wri[1] = w1;
-      P.wri[0] = w0;
-      // The lead hand closes round the stock-to-grip cylinder while it is on
-      // the gun; a hand off the gun closes on nothing.
-      int lead = lead_l ? 0 : 1;
-      g_fig_free = (on1 < 0.5f ? 2 : 0) | (on0 < 0.5f ? 1 : 0);
-      if (w != WPN_PT && (lead ? on1 : on0) >= 0.5f && land < 0.5f) {
-        g_fig_grab = 1 << lead;
-        g_fig_grab_c[lead] = c_[lead]; g_fig_grab_a[lead] = a_[lead]; g_fig_grab_r[lead] = r_[lead];
+      // Keep wrists comfortably inside arm reach (<= 93% mid-swap, 95% ready)
+      // so neither elbow locks dead-straight while preserving exact grip contact.
+      float amax = (ANIM_UARM + ANIM_FARM) * (0.93f + 0.02f * land);
+      v3 ws_[2] = {w0, w1};
+      for (int i = 0; i < 2; i++) {
+        v3 aw = v3_sub(ws_[i], P.sho[i]);
+        float awl = v3_len(aw);
+        if (awl > amax) ws_[i] = v3_add(P.sho[i], v3_scale(aw, amax / awl));
+        P.wri[i] = ws_[i];
       }
-      v3 pole0 = v3_lerp(v3_add(v3_scale(cfw, -0.8f), v3_scale(Rc, -0.3f)),
-                         swap_pole(P.sho[0], P.wri[0], Rc, spine, -1.0f), fmaxf(on0, land));
-      v3 pole1 = v3_lerp(v3_add(v3_scale(cfw, -0.8f), v3_scale(Rc, 0.3f)),
-                         swap_pole(P.sho[1], P.wri[1], Rc, spine, 1.0f),
-                         lead_l ? fmaxf(on1, land) : 1.0f);
+      float on_[2] = {on0, on1};
+      v3 rest_p0 = v3_norm(v3_add(v3_scale(cfw, -0.45f), v3_add(v3_scale(Rc, -0.45f), v3_scale(spine, -0.78f))));
+      v3 rest_p1 = v3_norm(v3_add(v3_scale(cfw, -0.45f), v3_add(v3_scale(Rc,  0.45f), v3_scale(spine, -0.78f))));
+      // Use swap_pole throughout the lead hand's reach so the elbow smoothly
+      // tracks the moving wrist with zero pole snap.
+      v3 pole0 = v3_lerp(rest_p0, swap_pole(P.sho[0], P.wri[0], Rc, spine, -1.0f),
+                         lead_l ? 1.0f : fmaxf(on0, land));
+      v3 pole1 = v3_lerp(rest_p1, swap_pole(P.sho[1], P.wri[1], Rc, spine,  1.0f),
+                         !lead_l ? 1.0f : fmaxf(on1, land));
       P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, pole0);
       P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, pole1);
+      // Bulletproof straight-wrist, anatomically-rotated hand placement: while a
+      // hand is traveling off the gun, orient its thumb along the elbow's natural
+      // bicep-fold neutral axis (plus 22 deg relaxed pronation — never flipping
+      // 180 deg) and keep the palm 72 mm straight ahead of the forearm. Only
+      // engage the weapon cylinder once the wrist is actually AT the gun.
+      g_fig_free = 0;
+      g_fig_grab = 0;
+      for (int i = 0; i < 2; i++) {
+        if (land >= 0.92f) continue;
+        v3 fd = v3_sub(P.wri[i], P.elb[i]);
+        fd = v3_dot(fd, fd) > 1e-8f ? v3_norm(fd) : cfw;
+        v3 ua = v3_sub(P.elb[i], P.sho[i]);
+        ua = v3_dot(ua, ua) > 1e-8f ? v3_norm(ua) : v3_scale(spine, -1.0f);
+        v3 bi = v3_sub(v3_scale(ua, -1.0f), v3_scale(fd, -v3_dot(ua, fd)));
+        bi = v3_dot(bi, bi) > 1e-4f ? v3_norm(bi) : spine;
+        v3 inw = v3_scale(v3_cross(bi, fd), i ? 1.0f : -1.0f);
+        v3 fa = v3_norm(v3_add(v3_scale(bi, 0.92f), v3_scale(inw, 0.38f)));
+        float dg = v3_len(v3_sub(c_[i], P.wri[i]));
+        float prox = 1.0f - ease3((dg - 0.095f) / 0.055f);
+        float hk = ease5((on_[i] - 0.45f) / 0.40f) * prox;
+        g_fig_grab |= (1 << i);
+        if (hk >= 0.99f) {
+          g_fig_grab_c[i] = c_[i];
+          g_fig_grab_a[i] = a_[i];
+          g_fig_grab_r[i] = r_[i];
+        } else {
+          v3 td = dg > 1e-6f ? v3_scale(v3_sub(c_[i], P.wri[i]), 1.0f / dg) : fd;
+          v3 md = v3_lerp(fd, td, hk);
+          md = v3_dot(md, md) > 1e-8f ? v3_norm(md) : fd;
+          float rr = 0.072f + (f_clamp(dg, 0.055f, 0.095f) - 0.072f) * hk;
+          g_fig_grab_c[i] = v3_add(P.wri[i], v3_scale(md, rr));
+          v3 am = v3_lerp(fa, a_[i], hk);
+          if (v3_dot(am, am) < 1e-4f) am = inw;
+          g_fig_grab_a[i] = v3_norm(am);
+          g_fig_grab_r[i] = 0.013f + (r_[i] - 0.013f) * hk;
+        }
+      }
     } else {
       sw_phase = 0;
       hold = wpn;
@@ -2628,8 +2803,11 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       if (lo < 0.0f) g_gun_low[wpn] = -lo / g_gun_girth;
     }
   }
+  // Only form the knuckle-drag brace fist when the off-hand is actually down
+  // skimming the ground (not when raised onto the fore-end to shoot mid-slide).
+  float brace_k = A->slide_s * (1.0f - f_clamp(fmaxf(A->ads_s, A->ready_s * 0.85f), 0.0f, 1.0f));
   fig_arms(&P, &kt, Rc, spine, g_org, g_rt, g_up, g_fw, hold,
-           A->slide_s, A->slide_dir);
+           brace_k, A->slide_dir);
   g_fig_free = 0;
   g_fig_grab = 0;
   // The long guns he is not holding, on his back. Living figures only (a
