@@ -471,8 +471,28 @@ static float ui_rule_rows(int mode, int *teams, int *wrule, ui_page_t from, floa
   if (gm_has_rules(mode)) {
     ui_toggle("TEAMS", teams, px, pw, y, click, cx, cy);
     y += 15;
-    if (*wrule < 0 || *wrule >= WR_COUNT) *wrule = WR_ALL;
-    ui_cycle("WEAPONS", WR_NAMES, WR_COUNT, wrule, px, pw, y, click, cx, cy);
+    // ALL, or any one gun + nades: every primary, sniper and pistol, the knife.
+    enum { NW = 1 + RV_N + SV_N + PV_N + 1 };
+    static int wcode[NW];
+    static const char *wname[NW];
+    if (!wname[0]) {
+      static const int WSLOT[4] = {WPN_AR, WPN_SR, WPN_PT, WPN_KN};
+      int k = 0;
+      wcode[k] = WR_ALL; wname[k++] = "ALL";
+      for (int si = 0; si < 4; si++)
+        for (int v = 0; v < wpn_var_n(WSLOT[si]) && k < NW; v++) {
+          static char nb[NW][32];
+          wcode[k] = WR_MAKE(WSLOT[si], v);
+          snprintf(nb[k], sizeof nb[k], "%s", wr_name(wcode[k]));
+          wname[k] = nb[k];
+          k++;
+        }
+      for (; k < NW; k++) { wcode[k] = WR_ALL; wname[k] = "ALL"; }
+    }
+    int wi = 0;
+    for (int k = 0; k < NW; k++) if (wcode[k] == *wrule) { wi = k; break; }
+    ui_cycle("WEAPONS", wname, NW, &wi, px, pw, y, click, cx, cy);
+    *wrule = wcode[wi];
     y += 15;
   } else if (mode == GM_GUN) {
     char tok[24];
@@ -1048,7 +1068,14 @@ static void ui_menu(void) {
       ui_text("MAP", px + 16, y + 3, 1, C_TEXT, 1);
       ui_text("COMPOUND", px + pw - 16 - ui_text_width("COMPOUND", 1), y + 4, 1, C_HAZE, 1);
     } else {
-      ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.sp_map, px, pw, y, click, cx, cy);
+      {   // the picker walks MAP_MENU_ORDER (ARENA, the towns, ROTATE)
+        static const char *mn[MAP_COUNT];
+        for (int i = 0; i < MAP_COUNT; i++) mn[i] = MAP_PICK_NAMES[MAP_MENU_ORDER[i]];
+        int mi = 0;
+        for (int i = 0; i < MAP_COUNT; i++) if (MAP_MENU_ORDER[i] == g_cfg.sp_map) mi = i;
+        ui_cycle("MAP", mn, MAP_COUNT, &mi, px, pw, y, click, cx, cy);
+        g_cfg.sp_map = MAP_MENU_ORDER[mi];
+      }
     }
     y += 15;
     // (BALLISTICS moved to HOST SETTINGS and DEV > ASSIST in 0.8.6: a match
@@ -1303,7 +1330,14 @@ static void ui_menu(void) {
       ui_text("MAP", px + 16, y + 3, 1, C_TEXT, 1);
       ui_text("COMPOUND", px + pw - 16 - ui_text_width("COMPOUND", 1), y + 4, 1, C_HAZE, 1);
     } else {
-      ui_cycle("MAP", MAP_PICK_NAMES, MAP_COUNT + 1, &g_cfg.host_map, px, pw, y, click, cx, cy);
+      {   // the picker walks MAP_MENU_ORDER (ARENA, the towns, ROTATE)
+        static const char *mn[MAP_COUNT];
+        for (int i = 0; i < MAP_COUNT; i++) mn[i] = MAP_PICK_NAMES[MAP_MENU_ORDER[i]];
+        int mi = 0;
+        for (int i = 0; i < MAP_COUNT; i++) if (MAP_MENU_ORDER[i] == g_cfg.host_map) mi = i;
+        ui_cycle("MAP", mn, MAP_COUNT, &mi, px, pw, y, click, cx, cy);
+        g_cfg.host_map = MAP_MENU_ORDER[mi];
+      }
     }
     y += 15;
     ui_toggle("BALLISTICS", &g_cfg.ballistics, px, pw, y, click, cx, cy);

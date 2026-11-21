@@ -51,8 +51,8 @@ static int g_town_kind = -1;   // which town the grid is being dressed as
 static const char *const *g_mg_rows;
 static int mg_point_open(float x, float z) {
   if (!g_mg_rows) return 1;
-  const float cs = 2.0f * ARENA_HALF / 52.0f;
-  int c = (int)floorf((x + ARENA_HALF) / cs), r = (int)floorf((z + ARENA_HALF) / cs);
+  const float cs = 2.0f * 52.0f / 52.0f;        // the grid's own 2 m cells (MG_HALF)
+  int c = (int)floorf((x + 52.0f) / cs), r = (int)floorf((z + 52.0f) / cs);
   if (c < 0 || r < 0 || c >= 52 || r >= 52) return 0;
   // Clear AIR in front of a facade: floor, paint, or under a roof or catwalk.
   // Stairs, crates, walls and water have their own geometry there.
@@ -235,10 +235,10 @@ static void house(float x0, float z0, float x1, float z1, int floors, int win, i
     float out = (sd == SIDE_N || sd == SIDE_W) ? -1.0f : 1.0f;
     // Walk the side cell by cell (cells are where other houses begin), so a
     // run ends exactly where the street does.
-    const float cs = 2.0f * ARENA_HALF / 52.0f;
+    const float cs = 2.0f * 52.0f / 52.0f;
     float run0 = -1.0f;
     for (float a = a0; a < a1 - 0.001f; ) {
-      float cell_end = -ARENA_HALF + (floorf((a + ARENA_HALF) / cs + 1e-4f) + 1.0f) * cs;
+      float cell_end = -52.0f + (floorf((a + 52.0f) / cs + 1e-4f) + 1.0f) * cs;
       float e = fminf(cell_end, a1), mid = (a + e) * 0.5f;
       int open = axz ? mg_point_open(mid, pl + out * 0.7f) : mg_point_open(pl + out * 0.7f, mid);
       // A run that starts or stops against another building stops 12 cm
@@ -634,6 +634,134 @@ static void forklift_prop(float x, float z, int qt, v3 paint, v3 paint2) {
                              {0.72f, 0.92f, -0.42f, 0.42f, 0.10f, 2.06f},
                              {0.88f, 1.74f, -0.29f, 0.29f, 0.0f, 0.10f}};
   street_prop(PM_FORKLIFT, x, z, qt, paint, paint2, B, 4);
+}
+// 0.8.9: THE INDUSTRY PROPS (tools/props_models.py). The Refinery's process
+// furniture and the Harbor's quay furniture; each a mesh over its hidden boxes.
+static void pump_skid(float x, float z, int qt, v3 paint, v3 paint2) {
+  static const pbox_t B[] = {{-1.07f, 1.07f, -0.38f, 0.38f, 0.0f, 0.80f},
+                             {0.40f, 0.66f, -0.30f, 0.30f, 0.80f, 1.06f}};
+  street_prop(PM_PUMP, x, z, qt, paint, paint2, B, 2);
+}
+static void valve_set(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-1.32f, 1.32f, -0.20f, 0.20f, 0.0f, 0.82f},
+                             {-0.76f, 0.76f, -0.17f, 0.17f, 0.82f, 1.72f}};
+  street_prop(PM_VALVES, x, z, qt, paint, paint, B, 2);
+}
+// The LPG sphere, 10 m across on eight legs: the legs and the shell's core
+// are solid, the space under it between the legs is open ground.
+static void lpg_sphere(float x, float z, v3 paint, v3 band) {
+  pbox_t B[10];
+  int n = 0;
+  B[n++] = (pbox_t){-4.2f, 4.2f, -4.2f, 4.2f, 3.6f, 10.8f};
+  B[n++] = (pbox_t){-3.0f, 3.0f, -3.0f, 3.0f, 2.3f, 12.1f};
+  for (int k = 0; k < 8; k++) {
+    float a = (float)k * 0.785398f + 0.392699f, lx = 5.02f * cosf(a), lz = 5.02f * sinf(a);
+    B[n++] = (pbox_t){lx - 0.32f, lx + 0.32f, lz - 0.32f, lz + 0.32f, 0.0f, 7.2f};
+  }
+  street_prop(PM_SPHERE, x, z, 0, paint, band, B, n);
+}
+static void tanker_truck(float x, float z, int ax, v3 paint) {
+  v3 cab = rgb(0.82f, 0.80f, 0.74f), blk = rgb(0.08f, 0.08f, 0.09f);
+  int first = g_num_solids;
+#define TT(a0, b0, a1, b1, y0, y1, cc) \
+  (ax ? bx(x + (b0), y0, z + (a0), x + (b1), y1, z + (a1), cc) \
+      : bx(x + (a0), y0, z + (b0), x + (a1), y1, z + (b1), cc))
+  TT(-3.6f, -1.1f, 3.4f, 1.1f, 0.55f, 1.2f, rgb(0.20f, 0.21f, 0.22f));   // chassis
+  TT(3.4f, -1.15f, 5.4f, 1.15f, 0.55f, 3.0f, cab);                       // cab
+  TT(-3.0f, -1.2f, -1.8f, -0.95f, 0.0f, 0.95f, blk);
+  TT(-3.0f, 0.95f, -1.8f, 1.2f, 0.0f, 0.95f, blk);
+  TT(3.8f, -1.2f, 5.0f, -0.95f, 0.0f, 0.95f, blk);
+  TT(3.8f, 0.95f, 5.0f, 1.2f, 0.0f, 0.95f, blk);
+  TT(-3.55f, -1.15f, 3.35f, 1.15f, 1.35f, 3.25f, paint);                 // the barrel
+#undef TT
+  solids_hide(first);
+  prop_add(PROP_TRUCK, x, z, ax, 0, cab, paint);
+  prop_add(PROP_MESH, x, z, ax ? 1 : 0, PM_TANKER, paint, rgb(0.30f, 0.31f, 0.33f));
+}
+static void bollard(float x, float z) {
+  static const pbox_t B[] = {{-0.27f, 0.27f, -0.27f, 0.27f, 0.0f, 0.64f}};
+  street_prop(PM_BOLLARD, x, z, 0, rgb(0.07f, 0.07f, 0.075f), rgb(0.07f, 0.07f, 0.075f), B, 1);
+}
+static void buoy_stand(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.15f, 0.15f, -0.15f, 0.15f, 0.0f, 1.60f}};
+  street_prop(PM_BUOY, x, z, qt, rgb(0.75f, 0.70f, 0.12f), rgb(0.75f, 0.70f, 0.12f), B, 1);
+}
+static void fishing_boat(float x, float z, int qt, v3 hull, v3 roof) {
+  static const pbox_t B[] = {{-4.6f, 4.4f, -1.6f, 1.6f, 0.0f, 1.45f},
+                             {-2.1f, -0.1f, -0.95f, 0.95f, 1.45f, 3.2f}};
+  street_prop(PM_BOAT, x, z, qt, hull, roof, B, 2);
+}
+// 0.8.9 (second wave): each grown map's own furniture.
+static void mortar_prop(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.30f, 0.30f, -0.30f, 0.30f, 0.0f, 0.50f},
+                             {-0.70f, -0.10f, -0.66f, -0.19f, 0.0f, 0.21f}};
+  street_prop(PM_MORTAR, x, z, qt, rgb(0.32f, 0.34f, 0.24f), rgb(0.32f, 0.34f, 0.24f), B, 2);
+}
+static void porta_cabin(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.60f, 0.62f, -0.60f, 0.60f, 0.0f, 2.32f}};
+  street_prop(PM_PORTA, x, z, qt, paint, rgb(0.86f, 0.86f, 0.82f), B, 1);
+}
+static void fuel_bladder(float x, float z, int qt, v3 paint) {
+  // (0.8.9: the fuel POINT — a tank on saddles, its dispenser, jerrycans —
+  // replaced a bladder that read as an upturned dish)
+  static const pbox_t B[] = {{-3.0f, 3.0f, -1.05f, 1.05f, 0.0f, 2.62f},     // the tank
+                             {0.86f, 1.54f, 1.75f, 2.35f, 0.0f, 1.62f},     // the dispenser
+                             {-2.0f, -0.4f, 1.80f, 2.20f, 0.0f, 0.62f}};    // the jerrycans
+  street_prop(PM_BLADDER, x, z, qt, paint, rgb(paint.x * 0.8f, paint.y * 0.8f, paint.z * 0.8f), B, 3);
+}
+// A SATCOM TERMINAL: a 2.4 m dish turned 50 degrees up at the sky on its
+// pedestal, the outriggers weighed with sandbags, its modem box. The dish
+// faces the prop's own +L.
+static void satcom_dish(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.15f, 0.15f, -0.30f, 0.00f, 0.0f, 0.75f},
+                             {-1.20f, 1.20f, -0.85f, 0.95f, 0.75f, 2.55f},
+                             {0.95f, 1.45f, -1.10f, -0.70f, 0.0f, 0.60f}};
+  street_prop(PM_SATCOM, x, z, qt, rgb(0.88f, 0.88f, 0.85f), rgb(0.36f, 0.38f, 0.28f), B, 3);
+}
+static void cannon_prop(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.70f, 1.50f, -0.40f, 0.40f, 0.0f, 0.82f}};
+  street_prop(PM_CANNON, x, z, qt, rgb(0.52f, 0.38f, 0.18f), rgb(0.36f, 0.24f, 0.14f), B, 1);
+}
+static void hand_cart(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.85f, 0.85f, -0.72f, 0.72f, 0.0f, 0.95f}};
+  street_prop(PM_CART, x, z, qt, rgb(0.46f, 0.32f, 0.18f), rgb(0.46f, 0.32f, 0.18f), B, 1);
+}
+static void clay_jars(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.28f, 0.81f, -0.52f, 0.82f, 0.0f, 0.86f}};
+  street_prop(PM_JARS, x, z, qt, rgb(0.62f, 0.38f, 0.22f), rgb(0.62f, 0.38f, 0.22f), B, 1);
+}
+static void steel_coil(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-0.78f, 0.78f, -0.40f, 0.40f, 0.0f, 1.64f}};
+  street_prop(PM_COIL, x, z, qt, paint, paint, B, 1);
+}
+static void ladle_prop(float x, float z, int qt, v3 paint) {
+  static const pbox_t B[] = {{-1.20f, 1.20f, -1.42f, 1.42f, 0.0f, 2.30f}};
+  street_prop(PM_LADLE, x, z, qt, paint, paint, B, 1);
+}
+static void gas_cage(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.63f, 0.63f, -0.43f, 0.43f, 0.0f, 1.72f}};
+  street_prop(PM_CYLS, x, z, qt, rgb(0.30f, 0.31f, 0.33f), rgb(0.30f, 0.31f, 0.33f), B, 1);
+}
+static void dshk_prop(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.20f, 0.20f, -0.20f, 0.20f, 0.0f, 0.62f},
+                             {-0.40f, 1.28f, -0.10f, 0.20f, 0.62f, 0.92f}};
+  street_prop(PM_DSHK, x, z, qt, rgb(0.14f, 0.14f, 0.15f), rgb(0.14f, 0.14f, 0.15f), B, 2);
+}
+static void zu23_prop(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.90f, 0.90f, -1.10f, 1.10f, 0.0f, 1.45f},
+                             {0.90f, 2.30f, -0.20f, 0.20f, 1.25f, 1.35f}};
+  street_prop(PM_ZU23, x, z, qt, rgb(0.32f, 0.34f, 0.24f), rgb(0.32f, 0.34f, 0.24f), B, 2);
+}
+static void ammo_stack(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.90f, 0.30f, -0.20f, 0.62f, 0.0f, 0.52f},
+                             {-0.30f, 0.30f, 0.0f, 0.40f, 0.52f, 0.78f}};
+  street_prop(PM_AMMO, x, z, qt, rgb(0.30f, 0.34f, 0.22f), rgb(0.30f, 0.34f, 0.22f), B, 2);
+}
+// A pop-up range target. Only the base is solid: a round goes through the
+// plate (it is a target, not cover).
+static void range_target(float x, float z, int qt) {
+  static const pbox_t B[] = {{-0.25f, 0.25f, -0.42f, 0.42f, 0.0f, 0.12f}};
+  street_prop(PM_TARGET, x, z, qt, rgb(0.36f, 0.38f, 0.26f), rgb(0.36f, 0.38f, 0.26f), B, 1);
 }
 static void dumpster(float x, float z, int qt, v3 paint) {
   static const pbox_t B[] = {{-0.72f, 0.72f, -0.56f, 0.56f, 0.0f, 1.16f}};

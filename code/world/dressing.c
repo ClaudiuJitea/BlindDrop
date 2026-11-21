@@ -388,7 +388,9 @@ static void foundry_backdrop_half(void) {
       KB(xa, y, fz - 1.45f, xb, y + 1.25f, fz - 1.05f, yel);
       KB(xa, y, fz + 1.05f, xb, y + 1.25f, fz + 1.45f, yel);
     });
-    KMAT(SMAT_CLAD, KB(fx + 12.6f, 0.0f, fz - 3.5f, HX, 4.5f, fz + 3.5f, rgb(0.46f, 0.36f, 0.28f)));
+    // (the stock house ends where the old 52 m shell stood, so it does not
+    // wall off the ring the works grew in 0.8.9)
+    KMAT(SMAT_CLAD, KB(fx + 12.6f, 0.0f, fz - 3.5f, fminf(HX, 51.9f), 4.5f, fz + 3.5f, rgb(0.46f, 0.36f, 0.28f)));
   }
   // ---- THREE HOT-BLAST STOVES in a row south of the furnace: tall domed
   // cylinders, and the hot-blast main across their shoulders to the bustle.
@@ -556,7 +558,7 @@ static void foundry_half(void) {
   // (clear of the other half's container stack, which ends at z -16.28)
   barrel(g_ks * 16.0f, g_ks * -15.45f, rgb(0.62f, 0.18f, 0.12f));
   barrel(g_ks * 16.75f, g_ks * -15.55f, rgb(0.20f, 0.30f, 0.50f));
-  barrel(g_ks * 16.35f, g_ks * -14.85f, rgb(0.74f, 0.56f, 0.16f));
+  barrel(g_ks * 16.35f, g_ks * -14.75f, rgb(0.74f, 0.56f, 0.16f));
   barrel(g_ks * 22.8f, g_ks * 12.6f, rgb(0.62f, 0.18f, 0.12f));
   barrel(g_ks * 22.8f, g_ks * 11.9f, rgb(0.62f, 0.18f, 0.12f));
   // THE CONVEYOR: legs, a frame, the belt and its end drums. You can shoot
@@ -654,13 +656,284 @@ static void foundry_half(void) {
   foundry_yard_wall_half();
   foundry_backdrop_half();
 }
+
+// 0.8.9: THE WORKS GROW TO HALF 70. Past the old shell, per half through
+// g_ks: east the RAIL YARD (the yard's spur runs on, a second siding, a
+// flatcar carrying coils, an ore hopper, buffer stops, the scrap heaps, the
+// ladles waiting on their stands, gas cages); south the COIL WAREHOUSE (open
+// portal frames under a roof, rows of coils, the overhead crane) and the SLAG
+// YARD. The mirror builds the north and west.
+static void coil_at(float x, float y, float z, int qt) {
+  static const pbox_t B[] = {{-0.78f, 0.78f, -0.40f, 0.40f, 0.0f, 1.64f}};
+  street_prop_y(PM_COIL, x, y, z, qt, rgb(0.42f, 0.42f, 0.44f), rgb(0.42f, 0.42f, 0.44f), B, 1);
+}
+static void foundry_outer_half(void) {
+  v3 steel = rgb(0.30f, 0.32f, 0.35f), dark = rgb(0.17f, 0.18f, 0.19f), rust = rgb(0.44f, 0.28f, 0.20f);
+  v3 rail = rgb(0.46f, 0.44f, 0.42f), sl = rgb(0.30f, 0.25f, 0.20f), yel = rgb(0.86f, 0.66f, 0.12f);
+  int q1 = g_ks > 0.0f ? 1 : 3, q0 = g_ks > 0.0f ? 0 : 2;
+  // THE RAIL YARD: a second siding beside the spur, sleepers under both
+  KMAT(SMAT_WOOD, for (float x = 52.4f; x < 69.0f; x += 0.70f) {
+    KB(x, 0.0f, 21.62f, x + 0.24f, 0.006f, 23.67f, sl);
+    KB(x, 0.0f, 14.62f, x + 0.24f, 0.006f, 16.67f, sl);
+  });
+  KMAT(SMAT_STEEL, {
+    KB(52.0f, 0.0f, 14.90f, 69.9f, 0.016f, 14.98f, rail);
+    KB(52.0f, 0.0f, 16.33f, 69.9f, 0.016f, 16.41f, rail);
+  });
+  KMAT(SMAT_HAZARD, {                                              // buffer stops
+    KB(68.6f, 0.0f, 21.70f, 69.2f, 0.9f, 23.59f, yel);
+    KB(68.6f, 0.0f, 14.70f, 69.2f, 0.9f, 16.59f, yel);
+  });
+  // the flatcar on the spur with two coils, the ore hopper on the siding
+  KMAT(SMAT_STEEL, {
+    KB(54.0f, 0.55f, 21.2f, 62.0f, 1.0f, 24.1f, dark);
+    for (float x = 55.0f; x < 62.0f; x += 5.6f)
+      KB(x, 0.0f, 21.5f, x + 1.4f, 0.55f, 23.8f, steel);
+    KB(62.0f, 0.55f, 16.0f - 1.45f, 68.0f, 3.6f, 16.0f + 1.25f, rust);
+    KB(62.5f, 3.6f, 14.8f, 67.5f, 3.9f, 17.0f, rgb(0.24f, 0.20f, 0.18f));
+    KB(62.6f, 0.0f, 14.95f, 63.8f, 0.55f, 16.35f, steel);
+    KB(66.2f, 0.0f, 14.95f, 67.4f, 0.55f, 16.35f, steel);
+  });
+  coil_at(g_ks * 56.4f, 1.0f, g_ks * 22.65f, q1);
+  coil_at(g_ks * 59.6f, 1.0f, g_ks * 22.65f, q1);
+  // the scrap heaps: stepped mounds of rusted plate
+  static const float SH[3][3] = {{58.0f, -30.0f, 3.0f}, {65.0f, -40.0f, 3.6f}, {64.0f, -18.0f, 2.4f}};
+  for (int k = 0; k < 3; k++) {
+    float x = SH[k][0], z = SH[k][1], h = SH[k][2];
+    KMAT(SMAT_STEEL, {
+      KB(x - 3.0f, 0.0f, z - 2.4f, x + 3.0f, h * 0.4f, z + 2.4f, kt_(rust, x, z, 90, 0.85f, 1.05f));
+      KB(x - 2.0f, h * 0.4f, z - 1.6f, x + 2.2f, h * 0.75f, z + 1.4f, kt_(rust, x, z, 91, 0.80f, 1.0f));
+      KB(x - 1.0f, h * 0.75f, z - 0.8f, x + 1.2f, h, z + 0.9f, kt_(rust, x, z, 92, 0.75f, 0.95f));
+    });
+  }
+  ladle_prop(g_ks * 57.0f, g_ks * 2.0f, q0, rgb(0.24f, 0.24f, 0.26f));
+  ladle_prop(g_ks * 57.0f, g_ks * -6.0f, q0, rgb(0.30f, 0.26f, 0.22f));
+  gas_cage(g_ks * 66.6f, g_ks * 4.0f, q1);
+  gas_cage(g_ks * 66.6f, g_ks * 6.0f, q1);
+  lamp(g_ks * 53.2f, g_ks * -20.0f, 1, g_ks > 0.0f ? 1 : -1);
+  lamp(g_ks * 53.2f, g_ks * 40.0f, 1, g_ks > 0.0f ? 1 : -1);
+  // THE COIL WAREHOUSE (south, x -40..20): portal frames every 8 m, the roof,
+  // the overhead crane, two rows of coils
+  KMAT(SMAT_STEEL, {
+    for (float x = -40.0f; x <= 20.01f; x += 8.0f) {
+      KB(x - 0.25f, 0.0f, 53.6f, x + 0.25f, 9.0f, 54.1f, steel);
+      KB(x - 0.25f, 0.0f, 68.4f, x + 0.25f, 9.0f, 68.9f, steel);
+      KB(x - 0.2f, 9.0f, 53.6f, x + 0.2f, 9.6f, 68.9f, steel);
+    }
+    KB(-38.0f, 7.4f, 54.4f, -36.6f, 8.2f, 68.1f, yel);            // the crane bridge
+    KB(-38.2f, 6.6f, 60.4f, -36.4f, 7.4f, 62.0f, dark);           // its trolley
+  });
+  KMAT(SMAT_CLAD, KB(-40.6f, 9.6f, 53.2f, 20.6f, 10.0f, 69.3f, rgb(0.46f, 0.48f, 0.50f)));
+  for (float x = -36.0f; x <= 16.0f; x += 4.0f) {
+    if (fabsf(x + 37.3f) < 1.6f) continue;
+    steel_coil(g_ks * x, g_ks * 57.6f, q0, kt_(rgb(0.42f, 0.42f, 0.44f), x, 57.6f, 93, 0.9f, 1.08f));
+    if (((int)x / 4) % 2) steel_coil(g_ks * x, g_ks * 64.4f, q0, kt_(rgb(0.42f, 0.42f, 0.44f), x, 64.4f, 94, 0.9f, 1.08f));
+  }
+  // THE SLAG YARD (south-east): dark mounds, a ladle tipped out
+  for (int k = 0; k < 4; k++) {
+    float x = 32.0f + (float)k * 9.0f, z = 58.0f + (float)(k & 1) * 6.0f;
+    KB(x - 3.4f, 0.0f, z - 2.6f, x + 3.4f, 1.0f, z + 2.6f, kt_(rgb(0.20f, 0.19f, 0.18f), x, z, 95, 0.85f, 1.1f));
+    KB(x - 2.0f, 1.0f, z - 1.6f, x + 2.2f, 1.9f, z + 1.4f, kt_(rgb(0.24f, 0.22f, 0.20f), x, z, 96, 0.85f, 1.1f));
+  }
+  ladle_prop(g_ks * 28.0f, g_ks * 64.0f, q1, rgb(0.26f, 0.24f, 0.22f));
+  gas_cage(g_ks * 24.0f, g_ks * 56.0f, q0);
+}
 static void map_foundry(void) {
   small_map_style();
   const theme_t *t = &g_theme;
   mk1(-5.0f, -2.0f, 5.0f, 2.0f, 1.90f, 2.20f, t->crate_b);   // the gantry deck
   k_shell_piers(t->wall);
-  g_ks = 1.0f;  foundry_half();
-  g_ks = -1.0f; foundry_half();
+  g_ks = 1.0f;  foundry_half();  foundry_outer_half();
+  g_ks = -1.0f; foundry_half();  foundry_outer_half();
+  g_ks = 1.0f;
+}
+
+
+// ---------------------------------------------------------------------------
+// THE ARENA (0.8.9): A MILITARY TRAINING ZONE, 88 m, 180-degree symmetric like
+// every small map (each half through g_ks; the half below builds z < 0 and
+// the mirror the rest). The procedural arena it replaced is map 0, hidden.
+//
+//   the middle   THE SHOOT HOUSE: a roofless CQB maze of breeze-block rooms,
+//                an overwatch catwalk across it, stairs up at both ends
+//   north-west   THE FIRING RANGE: the covered firing points with sandbag
+//                benches, lane walls, pop-up targets at two distances, the
+//                earth berm, the red range flag
+//   north-east   THE OBSTACLE COURSE: the climbing wall (a ladder down its
+//                back), vault walls, monkey bars, balance beams, a tyre run
+//   north        THE RANGE CONTROL TOWER, between the two
+//   the flanks   a CONTAINER VILLAGE (east) and a two-storey TRAINING HOUSE
+//                with its roof stair (west); the HQ cabin, latrines, the
+//                satellite dish, a truck, hesco and jersey cover in between
+//   everywhere   floodlight masts, zone signs in their colours, painted lanes
+// ---------------------------------------------------------------------------
+static void out_stair(int ax, float a, int dir, float b0, float b1, float y0, float rise, v3 c, v3 rail);
+static void k_bastion(float x0, float z0, float x1, float z1, float h);   // both further down
+static void tz_sign(float x, float z, int ax, v3 c, float w) {
+  v3 post = rgb(0.18f, 0.19f, 0.20f);
+  KMAT(SMAT_STEEL, {
+    KB(x - (ax ? 0.05f : w * 0.5f - 0.05f), 0.0f, z - (ax ? w * 0.5f - 0.05f : 0.05f), x - (ax ? -0.05f : w * 0.5f - 0.15f), 2.2f,
+       z - (ax ? w * 0.5f - 0.15f : -0.05f), post);
+    KB(x + (ax ? -0.05f : w * 0.5f - 0.15f), 0.0f, z + (ax ? w * 0.5f - 0.15f : -0.05f), x + (ax ? 0.05f : w * 0.5f - 0.05f), 2.2f,
+       z + (ax ? w * 0.5f - 0.05f : 0.05f), post);
+  });
+  KMAT(SMAT_PAINT, KB(x - (ax ? 0.04f : w * 0.5f), 1.4f, z - (ax ? w * 0.5f : 0.04f), x + (ax ? 0.04f : w * 0.5f), 2.1f,
+                      z + (ax ? w * 0.5f : 0.04f), c));
+  KMAT(SMAT_PAINT, KB(x - (ax ? 0.045f : w * 0.5f - 0.1f), 1.62f, z - (ax ? w * 0.5f - 0.1f : 0.045f), x + (ax ? 0.045f : w * 0.5f - 0.1f), 1.70f,
+                      z + (ax ? w * 0.5f - 0.1f : 0.045f), rgb(0.94f, 0.94f, 0.92f)));
+}
+static void tz_mast(float x, float z) {                     // a floodlight mast
+  v3 m = rgb(0.18f, 0.19f, 0.20f), lit = rgb(1.0f, 0.96f, 0.86f);
+  KMAT(SMAT_STEEL, {
+    KB(x - 0.12f, 0.0f, z - 0.12f, x + 0.12f, 10.0f, z + 0.12f, m);
+    KB(x - 1.0f, 10.0f, z - 0.15f, x + 1.0f, 10.2f, z + 0.15f, m);
+  });
+  for (int k = -1; k <= 1; k += 2)
+    KB(x + (float)k * 0.6f - 0.28f, 10.2f, z - 0.2f, x + (float)k * 0.6f + 0.28f, 10.7f, z + 0.2f, lit);
+}
+static void training_half(void) {
+  const theme_t *t = &g_theme;
+  v3 block = rgb(0.70f, 0.70f, 0.68f), block_d = rgb(0.58f, 0.58f, 0.57f), yel = rgb(0.92f, 0.70f, 0.10f);
+  v3 dark = rgb(0.17f, 0.18f, 0.19f), earth = rgb(0.52f, 0.44f, 0.34f), olive = rgb(0.34f, 0.36f, 0.24f);
+  v3 red = rgb(0.78f, 0.14f, 0.10f), blu = rgb(0.16f, 0.36f, 0.62f), wht = rgb(0.92f, 0.92f, 0.90f);
+  int q0 = g_ks > 0.0f ? 0 : 2, q1 = g_ks > 0.0f ? 1 : 3;
+  // ---- THE SHOOT HOUSE (x -8..8, z -6..6; this half builds z <= 0) -------
+  const float WH = 2.7f, WT = 0.25f;
+  KMAT(SMAT_CONCRETE, {
+    // the north wall, two doorways
+    KB(-8.0f, 0.0f, -6.0f, -5.2f, WH, -6.0f + WT, block);
+    KB(-3.8f, 0.0f, -6.0f, 1.6f, WH, -6.0f + WT, block);
+    KB(3.0f, 0.0f, -6.0f, 8.0f, WH, -6.0f + WT, block);
+    KB(-5.2f, 2.2f, -6.0f, -3.8f, WH, -6.0f + WT, block_d);           // lintels
+    KB(1.6f, 2.2f, -6.0f, 3.0f, WH, -6.0f + WT, block_d);
+    // the east and west walls' north halves (the mirror closes them)
+    KB(8.0f - WT, 0.0f, -6.0f + WT, 8.0f, WH, -3.4f, block);
+    KB(8.0f - WT, 0.0f, -2.0f, 8.0f, WH, 0.0f, block);                // a side door at z -3.4..-2
+    KB(-8.0f, 0.0f, -6.0f + WT, -8.0f + WT, WH, 0.0f, block);
+    // inside: a corridor wall and two rooms
+    KB(-8.0f + WT, 0.0f, -2.6f, -4.6f, WH, -2.6f + WT, block_d);
+    KB(-3.2f, 0.0f, -2.6f, 1.0f, WH, -2.6f + WT, block_d);
+    KB(1.0f, 0.0f, -6.0f + WT, 1.0f + WT, WH, -4.2f, block_d);
+    KB(1.0f, 0.0f, -3.0f, 1.0f + WT, WH, -2.6f, block_d);
+    KB(4.6f, 0.0f, -2.6f, 4.6f + WT, WH, 0.0f, block_d);
+  });
+  // hazard stripes on the door jambs and the room numbers' panels
+  KMAT(SMAT_HAZARD, {
+    KB(-5.3f, 0.0f, -6.03f, -5.2f, 2.2f, -6.0f, yel);
+    KB(-3.8f, 0.0f, -6.03f, -3.7f, 2.2f, -6.0f, yel);
+    KB(1.5f, 0.0f, -6.03f, 1.6f, 2.2f, -6.0f, yel);
+    KB(3.0f, 0.0f, -6.03f, 3.1f, 2.2f, -6.0f, yel);
+  });
+  k_crate(-6.6f, -4.6f, 0.5f, 0.5f, 1.0f, olive);                     // cover in the rooms
+  k_crate(6.4f, -1.2f, 0.5f, 0.6f, 1.0f, t->crate_a);
+  // the overwatch catwalk over the house at 3.4 m, its rails, its stair
+  KMAT(SMAT_STEEL, {
+    KB(-12.6f, 3.2f, -0.7f, 0.0f, 3.4f, 0.0f, rgb(0.36f, 0.38f, 0.40f));
+    KB(-12.6f, 4.35f, -0.70f, 0.0f, 4.45f, -0.62f, yel);              // its handrail, posts, mid rail
+    KB(-12.6f, 3.85f, -0.68f, 0.0f, 3.90f, -0.64f, yel);
+    for (float x = -12.4f; x < 0.0f; x += 1.5f) KB(x, 3.4f, -0.69f, x + 0.06f, 4.35f, -0.63f, yel);
+    for (float x = -12.0f; x < 0.0f; x += 3.0f)
+      KB(x - 0.08f, 0.0f, -0.62f, x + 0.08f, 3.2f, -0.46f, dark);
+  });
+  // its stair (world coordinates: the half's sign goes in by hand), rising to the west end
+  out_stair(0, g_ks * -17.1f, g_ks > 0.0f ? 1 : -1, -0.62f, 0.62f, 0.0f, 3.4f, rgb(0.40f, 0.42f, 0.44f), dark);
+  // ---- THE FIRING RANGE (north-west) ---------------------------------------
+  KMAT(SMAT_CONCRETE, {
+    KB(-40.0f, 0.0f, -43.6f, -6.0f, 4.0f, -40.0f, earth);             // the berm
+    KB(-40.0f, 4.0f, -43.6f, -6.0f, 4.6f, -41.2f, tint(earth, 0.9f, 0.94f));
+  });
+  KMAT(SMAT_STEEL, {                                                   // the firing shed
+    for (float x = -38.0f; x <= -6.4f; x += 7.9f) {
+      KB(x - 0.12f, 0.0f, -19.9f, x + 0.12f, 3.0f, -19.66f, dark);
+      KB(x - 0.12f, 0.0f, -16.6f, x + 0.12f, 3.0f, -16.36f, dark);
+    }
+  });
+  KMAT(SMAT_CLAD, KB(-39.0f, 3.0f, -20.2f, -5.8f, 3.2f, -16.0f, rgb(0.86f, 0.86f, 0.84f)));
+  KMAT(SMAT_HAZARD, KB(-39.02f, 2.8f, -20.22f, -5.78f, 3.0f, -20.16f, red));
+  for (int l = 0; l < 6; l++) {
+    float x0 = -38.0f + (float)l * 5.4f;
+    k_sandbags(0, -20.6f, x0 + 0.5f, x0 + 3.9f, 0.0f, 2, 0.45f);       // the bench at each point
+    if (l > 0) KMAT(SMAT_CONCRETE, KB(x0 - 0.15f, 0.0f, -39.6f, x0 + 0.15f, 1.1f, -21.6f, block_d));   // lane walls
+    range_target(g_ks * (x0 + 2.2f), g_ks * -29.0f, q1);
+    range_target(g_ks * (x0 + 2.2f), g_ks * -37.0f, q1);
+    k_line(x0 + 0.6f, -24.0f, x0 + 3.8f, -23.88f, wht);
+  }
+  KMAT(SMAT_STEEL, KB(-40.9f, 0.0f, -18.1f, -40.75f, 6.0f, -17.95f, dark));     // the range flag
+  KB(-40.75f, 4.8f, -18.06f, -39.5f, 5.8f, -18.0f, red);
+  // ---- THE OBSTACLE COURSE (north-east) ------------------------------------
+  KMAT(SMAT_WOOD, {
+    KB(9.0f, 0.0f, -19.0f, 15.0f, 2.4f, -18.6f, rgb(0.52f, 0.38f, 0.24f));   // the climbing wall
+    for (float y = 0.5f; y < 2.3f; y += 0.6f) KB(9.2f, y, -19.08f, 14.8f, y + 0.08f, -19.0f, rgb(0.36f, 0.26f, 0.16f));
+    for (int k = 0; k < 3; k++) {                                       // vault walls
+      float x0 = 20.0f + (float)(k & 1) * 2.0f, z = -22.0f - 4.0f * (float)k;
+      KB(x0, 0.0f, z - 0.2f, x0 + 7.0f, 1.0f, z + 0.2f, rgb(0.52f, 0.38f, 0.24f));
+    }
+    for (int k = 0; k < 2; k++)                                         // balance beams
+      KB(33.0f + 2.0f * (float)k, 0.0f, -34.0f, 33.25f + 2.0f * (float)k, 0.4f, -24.0f, rgb(0.46f, 0.34f, 0.20f));
+  });
+  ladder_add(g_ks * 12.0f, g_ks * -18.6f, g_ks > 0.0f ? SIDE_S : SIDE_N);
+  KMAT(SMAT_STEEL, {                                                   // monkey bars
+    for (float x = 18.0f; x <= 26.01f; x += 8.0f) {
+      KB(x - 0.08f, 0.0f, -38.1f, x + 0.08f, 2.6f, -37.94f, dark);
+      KB(x - 0.08f, 0.0f, -36.06f, x + 0.08f, 2.6f, -35.9f, dark);
+    }
+    KB(17.92f, 2.6f, -38.1f, 26.08f, 2.7f, -37.94f, yel);
+    KB(17.92f, 2.6f, -36.06f, 26.08f, 2.7f, -35.9f, yel);
+    for (float x = 18.6f; x < 25.6f; x += 0.7f) KB(x - 0.03f, 2.55f, -37.94f, x + 0.03f, 2.6f, -36.06f, dark);
+  });
+  for (int k = 0; k < 6; k++)                                           // the tyre run
+    tyre_stack(g_ks * (8.5f + (float)(k % 3) * 2.2f), g_ks * (-36.0f + (float)(k / 3) * 3.0f), q0);
+  k_line(6.0f, -16.0f, 40.0f, -15.88f, yel);                            // the course's lane
+  // ---- THE RANGE CONTROL TOWER --------------------------------------------
+  tower(0.0f, g_ks * -28.0f, 1.4f, 7.6f, rgb(0.86f, 0.86f, 0.84f), rgb(0.40f, 0.42f, 0.44f), 1, -1);
+  // ---- THE FLANKS (z -12..0) -----------------------------------------------
+  static const v3 CC[4] = {{{0.16f, 0.36f, 0.58f}}, {{0.62f, 0.20f, 0.14f}}, {{0.30f, 0.46f, 0.30f}}, {{0.80f, 0.78f, 0.70f}}};
+  for (int k = 0; k < 3; k++) {                                         // the container village
+    container(g_ks * (17.5f + 7.0f * (float)k), g_ks * -9.0f, 0, 0.0f, CC[k & 3]);
+    if (k != 1) container(g_ks * (17.5f + 7.0f * (float)k), g_ks * -9.0f, 0, 2.6f, CC[(k + 2) & 3]);
+  }
+  container(g_ks * 21.0f, g_ks * -3.6f, 0, 0.0f, CC[3]);
+  container(g_ks * 31.0f, g_ks * -3.6f, 0, 0.0f, CC[1]);
+  container(g_ks * 38.5f, g_ks * -6.0f, 1, 0.0f, CC[2]);
+  int bal = g_town.balconies;                                           // the training house
+  g_town.balconies = 0;
+  if (g_ks > 0.0f)
+    house_climb(-34.0f, -12.0f, -24.0f, -4.0f, 2, SIDE_N | SIDE_E | SIDE_W, SIDE_E, SIDE_N, +1, -33.6f);
+  else
+    house_climb(24.0f, 4.0f, 34.0f, 12.0f, 2, SIDE_S | SIDE_E | SIDE_W, SIDE_W, SIDE_S, -1, 33.6f);
+  g_town.balconies = bal;
+  // ---- THE OPEN MIDDLE BAND: HQ, latrines, the dish, cover -----------------
+  KMAT(SMAT_CLAD, KB(8.0f, 0.0f, -14.4f, 14.0f, 2.8f, -11.0f, wht));   // the HQ cabin
+  KMAT(SMAT_PAINT, KB(8.0f, 2.8f, -14.6f, 14.0f, 3.0f, -10.8f, dark));
+  KMAT(SMAT_PAINT, KB(10.4f, 0.0f, -11.0f, 11.6f, 2.1f, -10.96f, dark));
+  KMAT(SMAT_PAINT, KB(8.6f, 1.2f, -11.0f, 9.8f, 2.0f, -10.97f, rgb(0.10f, 0.12f, 0.15f)));
+  KMAT(SMAT_PAINT, KB(12.2f, 1.2f, -11.0f, 13.4f, 2.0f, -10.97f, rgb(0.10f, 0.12f, 0.15f)));
+  satcom_dish(g_ks * 16.6f, g_ks * -13.0f, q0);
+  for (float x = -14.0f; x <= -10.7f; x += 1.6f) porta_cabin(g_ks * x, g_ks * -14.2f, q1, rgb(0.18f, 0.32f, 0.20f));
+  k_jersey(0, -9.0f, -14.0f, -10.0f);
+  k_jersey(1, -11.0f, -3.0f, 0.0f);
+  k_twall(1, 13.0f, -4.0f, 0.0f, 2.0f);
+  k_sandbags(0, -14.0f, -4.0f, 0.0f, 0.0f, 3, 0.45f);
+  k_bastion(-21.0f, -2.0f, -19.0f, 0.0f, 1.6f);
+  truck(g_ks * -40.0f, g_ks * -8.0f, 1, olive);
+  ammo_stack(g_ks * 6.8f, g_ks * -12.0f, q1);
+  genset(g_ks * 15.0f, g_ks * -16.2f, q0, olive, dark);
+  // ---- THE FURNITURE OF A RANGE: masts, signs, painted lanes ---------------
+  tz_mast(-42.5f, -42.5f); tz_mast(42.5f, -42.5f); tz_mast(-42.5f, -1.0f);
+  tz_sign(-23.0f, -15.0f, 0, red, 3.2f);                                // FIRING RANGE
+  tz_sign(23.0f, -13.6f, 0, yel, 3.2f);                                 // OBSTACLE COURSE
+  tz_sign(-8.0f, -7.2f, 0, blu, 2.4f);                                  // CQB
+  k_line(-44.0f, -15.2f, -4.0f, -15.08f, red);
+  k_line(-9.0f, -6.9f, 9.0f, -6.78f, blu);
+  k_line(-0.06f, -24.0f, 0.06f, -7.0f, wht);
+}
+static void map_training(void) {
+  small_map_style();
+  const theme_t *t = &g_theme;
+  g_town.stone = rgb(0.62f, 0.62f, 0.60f);
+  k_shell_piers(t->wall);
+  g_ks = 1.0f;  training_half();
+  g_ks = -1.0f; training_half();
   g_ks = 1.0f;
 }
 
@@ -1303,26 +1576,39 @@ static void k_bastion(float x0, float z0, float x1, float z1, float h) {
     }
   });
 }
-// A BARRACKS TENT: a canvas body on a timber floor, a ridged roof in four
-// stepped courses with a little eave, a door on each end. Long axis along z.
+// A BARRACKS TENT you walk into (0.8.9: it was a solid block with its doors
+// painted on): a timber floor, canvas walls with a doorway in each end, the
+// ridged roof in four stepped courses with a little eave over 2.3 m of head
+// room, the window flaps outside and two cots inside. Long axis along z.
 static void k_tent(float x0, float z0, float x1, float z1, v3 canvas) {
-  v3 dk = rgb(0.17f, 0.18f, 0.16f), fl = rgb(0.42f, 0.34f, 0.24f);
-  float w = x1 - x0, cx = (x0 + x1) * 0.5f;
-  KMAT(SMAT_WOOD, KB(x0 - 0.10f, 0.0f, z0 - 0.10f, x1 + 0.10f, 0.12f, z1 + 0.10f, fl));
+  v3 fl = rgb(0.42f, 0.34f, 0.24f), cot = rgb(0.30f, 0.32f, 0.22f);
+  float w = x1 - x0, cx = (x0 + x1) * 0.5f, T = 0.08f, WH = 2.30f, DW = 0.70f, DH = 2.05f;
+  // (the floor is a 2 cm film: the Outpost has no step-up, and a 12 cm
+  // timber floor was a wall at the doorways)
+  KMAT(SMAT_WOOD, KB(x0 - 0.10f, 0.0f, z0 - 0.10f, x1 + 0.10f, 0.02f, z1 + 0.10f, fl));
   KMAT(SMAT_STUCCO, {
-    KB(x0, 0.12f, z0, x1, 1.72f, z1, canvas);
-    KB(x0 - 0.06f, 1.72f, z0 - 0.06f, x1 + 0.06f, 1.97f, z1 + 0.06f, kt_(canvas, x0, z0, 1, 0.90f, 0.94f));
-    KB(cx - w * 0.36f, 1.97f, z0 - 0.03f, cx + w * 0.36f, 2.24f, z1 + 0.03f, kt_(canvas, x0, z0, 2, 0.94f, 0.98f));
-    KB(cx - w * 0.22f, 2.24f, z0, cx + w * 0.22f, 2.47f, z1, kt_(canvas, x0, z0, 3, 0.97f, 1.0f));
-    KB(cx - w * 0.09f, 2.47f, z0 + 0.02f, cx + w * 0.09f, 2.62f, z1 - 0.02f, kt_(canvas, x0, z0, 4, 0.86f, 0.9f));
+    for (int e = 0; e < 2; e++) {                                   // the ends, each a doorway
+      float za = e ? z1 - T : z0, zb = e ? z1 : z0 + T;
+      KB(x0, 0.02f, za, cx - DW, WH, zb, canvas);
+      KB(cx + DW, 0.02f, za, x1, WH, zb, canvas);
+      KB(cx - DW, DH, za, cx + DW, WH, zb, canvas);
+    }
+    KB(x0, 0.02f, z0 + T, x0 + T, WH, z1 - T, canvas);              // the long sides
+    KB(x1 - T, 0.02f, z0 + T, x1, WH, z1 - T, canvas);
+    KB(x0 - 0.06f, WH, z0 - 0.06f, x1 + 0.06f, WH + 0.25f, z1 + 0.06f, kt_(canvas, x0, z0, 1, 0.90f, 0.94f));
+    KB(cx - w * 0.36f, WH + 0.25f, z0 - 0.03f, cx + w * 0.36f, WH + 0.52f, z1 + 0.03f, kt_(canvas, x0, z0, 2, 0.94f, 0.98f));
+    KB(cx - w * 0.22f, WH + 0.52f, z0, cx + w * 0.22f, WH + 0.75f, z1, kt_(canvas, x0, z0, 3, 0.97f, 1.0f));
+    KB(cx - w * 0.09f, WH + 0.75f, z0 + 0.02f, cx + w * 0.09f, WH + 0.90f, z1 - 0.02f, kt_(canvas, x0, z0, 4, 0.86f, 0.9f));
   });
-  KB(cx - 0.55f, 0.12f, z0 - 0.006f, cx + 0.55f, 1.62f, z0, dk);       // doors
-  KB(cx - 0.55f, 0.12f, z1, cx + 0.55f, 1.62f, z1 + 0.006f, dk);
   for (float z = z0 + 1.2f; z < z1 - 0.6f; z += 1.6f)                   // window flaps
     for (int sd = 0; sd < 2; sd++) {
       float xa = sd ? x1 : x0 - 0.006f;
-      KB(xa, 1.02f, z, xa + 0.006f, 1.42f, z + 0.70f, kt_(canvas, z, xa, 6, 0.55f, 0.6f));
+      KB(xa, 1.32f, z, xa + 0.006f, 1.72f, z + 0.70f, kt_(canvas, z, xa, 6, 0.55f, 0.6f));
     }
+  KMAT(SMAT_STEEL, {                                                  // two cots
+    KB(x0 + 0.20f, 0.02f, z0 + 0.9f, x0 + 0.95f, 0.55f, z1 - 0.9f, cot);
+    KB(x1 - 0.95f, 0.02f, z0 + 0.9f, x1 - 0.20f, 0.55f, z1 - 0.9f, cot);
+  });
 }
 
 static void outpost_half(void) {
@@ -1330,8 +1616,12 @@ static void outpost_half(void) {
   v3 ply = rgb(0.56f, 0.48f, 0.36f), pole = rgb(0.40f, 0.36f, 0.30f);
   v3 olive = rgb(0.34f, 0.36f, 0.24f), dark = rgb(0.17f, 0.18f, 0.19f);
   // HESCO along this half's north and east shell walls.
-  k_hesco(-23.45f, -23.45f, 0, 45, 2.2f);
-  k_hesco(23.45f, -22.37f, 1, 43, 2.2f);
+  // (0.8.9) opened by two gates onto the ring outside the wire: the north
+  // gate on the boom's line (x -2.8..2.5) and a side gate east (z 5.7..11).
+  k_hesco(-23.45f, -23.45f, 0, 20, 2.2f);
+  k_hesco(-23.45f + 25.0f * 1.06f, -23.45f, 0, 20, 2.2f);
+  k_hesco(23.45f, -22.37f, 1, 27, 2.2f);
+  k_hesco(23.45f, -22.37f + 32.0f * 1.06f, 1, 11, 2.2f);
   // T-WALLS for the lane walls.
   k_twall(1, -8.0f, -12.0f, -4.0f, 2.8f);
   k_twall(1, -8.0f, 1.5f, 12.0f, 2.8f);
@@ -1356,11 +1646,15 @@ static void outpost_half(void) {
   KMAT(SMAT_WOOD, {
     KB(-6.5f, 0.0f, 16.2f, -6.4f, 3.75f, 16.3f, pole);
     KB(6.4f, 0.0f, 16.2f, 6.5f, 3.75f, 16.3f, pole);
-    KB(-6.5f, 1.6f, 21.4f, -6.4f, 3.75f, 21.5f, pole);
-    KB(6.4f, 1.6f, 21.4f, 6.5f, 3.75f, 21.5f, pole);
+    // (0.8.9: these stood on nothing, 0.4 m behind the bunkers and beside
+    // them — first hanging at head height, then, run to the ground, standing
+    // in the passage behind the bunker. They sit on the bunkers' back corners
+    // now, and the net ends over the bunkers.)
+    KB(-5.95f, 1.6f, 20.85f, -5.85f, 3.75f, 20.95f, pole);
+    KB(5.85f, 1.6f, 20.85f, 5.95f, 3.75f, 20.95f, pole);
   });
   for (int i = 0; i < 7; i++) {
-    float z0 = 16.1f + 0.78f * (float)i;
+    float z0 = 16.1f + 0.70f * (float)i;
     KB(-6.7f, 3.75f + 0.01f * (float)(i & 1), z0, 6.7f, 3.78f + 0.01f * (float)(i & 1), z0 + 0.62f,
        kt_(i & 1 ? rgb(0.44f, 0.42f, 0.30f) : rgb(0.36f, 0.38f, 0.26f), (float)i, 1, 12, 0.9f, 1.1f));
   }
@@ -1415,9 +1709,131 @@ static void outpost_half(void) {
   // ends are doors you can see through only by the gaps beside it.
   k_tent(15.7f, 0.6f, 19.5f, 5.6f, rgb(0.44f, 0.43f, 0.30f));
   k_crate(14.9f, 6.3f, 0.45f, 0.45f, 0.9f, olive);
-  sack_pallet(g_ks * 17.6f, g_ks * -0.45f, g_ks > 0.0f ? 0 : 2, rgb(0.62f, 0.55f, 0.40f));
+  sack_pallet(g_ks * 16.0f, g_ks * -1.4f, g_ks > 0.0f ? 0 : 2, rgb(0.62f, 0.55f, 0.40f));   // clear of the door
   ibc_tote(g_ks * -20.9f, g_ks * 10.6f, g_ks > 0.0f ? 0 : 2, rgb(0.86f, 0.86f, 0.82f), rgb(0.15f, 0.30f, 0.55f));
   (void)ply;
+}
+
+// ---------------------------------------------------------------------------
+// 0.8.9: OUTSIDE THE WIRE. The Outpost was the 48 m HESCO square; the base is
+// now the middle of an 80 m FOB (half 40) and the ring round it is the camp's
+// working ground, built per half through g_ks like the rest: the vehicle
+// checkpoint at each gate (a jersey chicane, the guard shack), the helipad, the motor pool with its fuel bladder,
+// a guard tower in each corner, container housing and the latrines, a mortar
+// pit and the comms mast. The base's HESCO opens by a gate on each side.
+// ---------------------------------------------------------------------------
+// A PARKED HELICOPTER: the collision block-out of the airframe (hidden) and
+// the PROP_HELI mesh over it, nose +x. Shared with the Compound's LZ.
+static void heli_parked(float hx, float hz, v3 paint) {
+  v3 od = rgb(0.30f, 0.33f, 0.25f), dk = rgb(0.12f, 0.13f, 0.12f), stl = rgb(0.28f, 0.30f, 0.32f);
+  int heli0 = g_num_solids;
+  bx(hx - 3.2f, 0.62f, hz - 1.2f, hx + 3.0f, 2.62f, hz + 1.2f, od);
+  bx(hx + 3.0f, 0.86f, hz - 0.95f, hx + 4.3f, 2.30f, hz + 0.95f, od);
+  bx(hx - 2.6f, 2.62f, hz - 0.8f, hx + 1.6f, 3.0f, hz + 0.8f, od);
+  bx(hx - 10.4f, 1.85f, hz - 0.28f, hx - 3.2f, 2.40f, hz + 0.28f, od);
+  bx(hx - 10.9f, 2.40f, hz - 0.10f, hx - 9.7f, 4.40f, hz + 0.10f, od);
+  bx(hx - 0.22f, 3.0f, hz - 0.22f, hx + 0.22f, 3.45f, hz + 0.22f, stl);
+  bx(hx - 3.4f, 0.0f, hz - 1.62f, hx + 3.6f, 0.10f, hz - 1.42f, stl);
+  bx(hx - 3.4f, 0.0f, hz + 1.42f, hx + 3.6f, 0.10f, hz + 1.62f, stl);
+  solids_hide(heli0);
+  prop_add(PROP_HELI, hx, hz, 0, 0, paint, dk);
+}
+// A GUARD TOWER: a HESCO block, its sandbag parapet, four posts and a roof,
+// a ladder up the face `side` (in the half's own frame).
+static void k_guard_tower(float cx, float cz, int side) {
+  v3 pole = rgb(0.40f, 0.36f, 0.30f);
+  k_bastion(cx - 1.59f, cz - 1.59f, cx + 1.59f, cz + 1.59f, 2.6f);
+  k_sandbags(0, cz - 1.36f, cx - 1.59f, cx + 1.59f, 2.6f, 3, 0.40f);
+  k_sandbags(0, cz + 1.36f, cx - 1.59f, cx + 1.59f, 2.6f, 3, 0.40f);
+  // THE ROOF STAYS INSIDE THE BLOCK. A roof overhanging the ladder's face is
+  // what the ladder measures its climb by (the highest solid just inside the
+  // face) and what its clear column runs into: the first towers had one, and
+  // their ladders were either missing or ended under it — no way up.
+  KMAT(SMAT_WOOD, {
+    KB(cx - 1.16f, 2.45f, cz - 1.16f, cx - 1.04f, 4.9f, cz - 1.04f, pole);
+    KB(cx + 1.04f, 2.45f, cz - 1.16f, cx + 1.16f, 4.9f, cz - 1.04f, pole);
+    KB(cx - 1.16f, 2.45f, cz + 1.04f, cx - 1.04f, 4.9f, cz + 1.16f, pole);
+    KB(cx + 1.04f, 2.45f, cz + 1.04f, cx + 1.16f, 4.9f, cz + 1.16f, pole);
+    KB(cx - 1.38f, 4.9f, cz - 1.38f, cx + 1.38f, 5.02f, cz + 1.38f, rgb(0.50f, 0.44f, 0.32f));
+  });
+  float lx = side == SIDE_W ? cx - 1.59f : side == SIDE_E ? cx + 1.59f : cx;
+  float lz = side == SIDE_N ? cz - 1.59f : side == SIDE_S ? cz + 1.59f : cz;
+  int ms = g_ks > 0.0f ? side : side == SIDE_N ? SIDE_S : side == SIDE_S ? SIDE_N : side == SIDE_E ? SIDE_W : SIDE_E;
+  ladder_add(g_ks * lx, g_ks * lz, ms);
+}
+static void outpost_outer_half(void) {
+  v3 olive = rgb(0.34f, 0.36f, 0.24f), sand = rgb(0.62f, 0.56f, 0.44f), dark = rgb(0.17f, 0.18f, 0.19f);
+  v3 conc = rgb(0.56f, 0.55f, 0.52f);
+  int q0 = g_ks > 0.0f ? 0 : 2;                 // a prop's quarter turn in this half
+  // THE NORTH CHECKPOINT: a chicane of jersey barriers on the road out of the
+  // gate and the guard shack beside it.
+  k_jersey(0, -27.0f, -6.0f, -1.0f);
+  k_jersey(0, -31.0f, 1.0f, 6.0f);
+  k_jersey(0, -35.0f, -6.0f, -1.0f);
+  k_bastion(4.0f, -27.6f, 6.2f, -25.4f, 1.4f);
+  k_sandbags(1, 6.0f, -27.55f, -25.45f, 1.4f, 2, 0.40f);
+  // THE HELIPAD (west of the road): an apron, its H; the bird on the north one
+  KB(-31.0f, 0.0f, -38.0f, -17.0f, 0.02f, -26.0f, conc);
+  v3 wh = rgb(0.86f, 0.86f, 0.82f);
+  KB(-26.0f, 0.02f, -34.0f, -25.4f, 0.03f, -30.0f, wh);
+  KB(-22.6f, 0.02f, -34.0f, -22.0f, 0.03f, -30.0f, wh);
+  KB(-25.4f, 0.02f, -32.3f, -22.6f, 0.03f, -31.7f, wh);
+  if (g_ks > 0.0f) heli_parked(-24.0f, -32.0f, rgb(0.43f, 0.47f, 0.34f));
+  else {
+    ammo_stack(g_ks * -20.0f, g_ks * -28.5f, q0);
+    k_crate(-28.0f, -28.0f, 0.6f, 0.6f, 1.1f, olive);
+  }
+  for (float x = -30.0f; x <= -18.0f; x += 4.0f) {                 // pad lights
+    KB(x, 0.0f, -38.2f, x + 0.2f, 0.25f, -38.0f, rgb(0.95f, 0.80f, 0.30f));
+    KB(x, 0.0f, -26.0f, x + 0.2f, 0.25f, -25.8f, rgb(0.95f, 0.80f, 0.30f));
+  }
+  // THE MOTOR POOL (east of the road): T-walls round the fuel bladder, the
+  // trucks and pickups, a generator
+  k_twall(0, -36.4f, 12.0f, 21.9f, 1.6f);
+  k_twall(1, 22.4f, -36.0f, -30.0f, 1.6f);
+  fuel_bladder(g_ks * 16.6f, g_ks * -33.0f, q0, rgb(0.34f, 0.38f, 0.24f));   // the fuel point
+  if (g_ks > 0.0f) {
+    truck(13.0f, -27.4f, 0, olive);
+    truck(31.0f, -30.0f, 1, rgb(0.46f, 0.40f, 0.28f));
+  } else {
+    truck(-13.0f, 27.4f, 0, rgb(0.46f, 0.40f, 0.28f));
+    truck(-31.0f, 30.0f, 1, olive);
+  }
+  genset(g_ks * 26.0f, g_ks * -37.6f, q0, olive, dark);
+  // THE CORNER TOWERS, a ladder on the face that looks into the ring
+  k_guard_tower(35.5f, -35.5f, SIDE_W);
+  k_guard_tower(-35.5f, -35.5f, SIDE_E);
+  // THE EAST GROUND: container housing (CHUs) in two rows, the latrines,
+  // the mortar pit, the comms mast; a sandbag fighting position at the gate
+  for (float z = -20.0f; z <= -4.0f; z += 6.4f) {
+    container(g_ks * 31.0f, g_ks * z, 1, 0.0f, kt_(rgb(0.80f, 0.78f, 0.70f), 31.0f, z, 3, 0.92f, 1.04f));
+    container(g_ks * 36.5f, g_ks * z, 1, 0.0f, kt_(rgb(0.48f, 0.42f, 0.28f), 36.5f, z, 4, 0.92f, 1.04f));
+  }
+  for (float z = 14.0f; z <= 20.5f; z += 1.6f)
+    porta_cabin(g_ks * 38.6f, g_ks * z, g_ks > 0.0f ? 2 : 0, rgb(0.18f, 0.32f, 0.20f));
+  k_sandbags(0, 12.0f, 28.0f, 33.0f, 0.0f, 3, 0.45f);              // the mortar pit
+  k_sandbags(0, 17.4f, 28.0f, 33.0f, 0.0f, 3, 0.45f);
+  k_sandbags(1, 33.0f, 12.45f, 16.95f, 0.0f, 3, 0.45f);
+  mortar_prop(g_ks * 30.4f, g_ks * 14.6f, q0);
+  ammo_stack(g_ks * 31.8f, g_ks * 16.2f, g_ks > 0.0f ? 1 : 3);
+  KMAT(SMAT_STEEL, {                                                 // the comms mast
+    for (int k = 0; k < 4; k++) {
+      float ox = (k & 1) ? 0.45f : -0.45f, oz = (k & 2) ? 0.45f : -0.45f;
+      KB(36.0f + ox - 0.05f, 0.0f, 3.0f + oz - 0.05f, 36.0f + ox + 0.05f, 16.0f, 3.0f + oz + 0.05f, dark);
+    }
+    for (float y = 1.5f; y < 16.0f; y += 1.5f)
+      KB(35.56f, y, 2.56f, 36.44f, y + 0.06f, 3.44f, dark);
+    KB(35.9f, 16.0f, 2.9f, 36.1f, 20.0f, 3.1f, dark);
+  });
+  // (a sandbag line in front of the side gate blocked it: the Outpost has no
+  // step-up, so it was a wall; two short wings beside the opening instead)
+  k_sandbags(0, 4.4f, 24.6f, 27.4f, 0.0f, 3, 0.45f);
+  k_sandbags(0, 12.4f, 24.6f, 27.4f, 0.0f, 3, 0.45f);
+  k_crate(27.5f, 2.6f, 0.6f, 0.6f, 1.1f, olive);
+  satcom_dish(g_ks * 33.5f, g_ks * 8.5f, q0);          // the satellite link, by the masts
+  lamp(g_ks * 26.0f, g_ks * -10.0f, 1, g_ks > 0.0f ? 1 : -1);
+  lamp(g_ks * -10.0f, g_ks * -26.0f, 0, g_ks > 0.0f ? 1 : -1);
+  (void)sand;
 }
 static void map_outpost(void) {
   small_map_style();
@@ -1447,25 +1863,29 @@ static void map_outpost(void) {
   k_sandbags(0, -1.36f, -1.59f, 1.59f, 2.6f, 4, 0.40f);
   g_ks = 1.0f;
   k_sandbags(1, -1.36f, -1.16f, 1.16f, 2.6f, 4, 0.40f);
-  g_ks = -1.0f;
-  k_sandbags(1, -1.36f, -1.16f, 1.16f, 2.6f, 4, 0.40f);
+  g_ks = -1.0f;                        // the east side: a gap for the ladder
+  k_sandbags(1, -1.36f, -1.16f, -0.50f, 2.6f, 4, 0.40f);
+  k_sandbags(1, -1.36f, 0.50f, 1.16f, 2.6f, 4, 0.40f);
   g_ks = 1.0f;
   v3 pole = rgb(0.40f, 0.36f, 0.30f), dark = rgb(0.17f, 0.18f, 0.19f);
   KMAT(SMAT_WOOD, {
-    bx(-1.5f, 2.45f, -1.5f, -1.38f, 4.9f, -1.38f, pole);   // seated in the fill
-    bx(1.38f, 2.45f, -1.5f, 1.5f, 4.9f, -1.38f, pole);
-    bx(-1.5f, 2.45f, 1.38f, -1.38f, 4.9f, 1.5f, pole);
-    bx(1.38f, 2.45f, 1.38f, 1.5f, 4.9f, 1.5f, pole);
-    bx(-1.75f, 4.9f, -1.75f, 1.75f, 5.02f, 1.75f, rgb(0.50f, 0.44f, 0.32f));
+    // (the roof stays inside the block, as on the corner towers: an
+    // overhang is what a ladder measures its climb by and runs into)
+    bx(-1.30f, 2.45f, -1.30f, -1.18f, 4.9f, -1.18f, pole);   // seated in the fill
+    bx(1.18f, 2.45f, -1.30f, 1.30f, 4.9f, -1.18f, pole);
+    bx(-1.30f, 2.45f, 1.18f, -1.18f, 4.9f, 1.30f, pole);
+    bx(1.18f, 2.45f, 1.18f, 1.30f, 4.9f, 1.30f, pole);
+    bx(-1.38f, 4.9f, -1.38f, 1.38f, 5.02f, 1.38f, rgb(0.50f, 0.44f, 0.32f));
   });
-  bx(-1.8f, 5.02f, -1.8f, 1.8f, 5.06f, 1.8f, t->mid);
+  bx(-1.42f, 5.02f, -1.42f, 1.42f, 5.06f, 1.42f, t->mid);
+  ladder_add(1.59f, 0.0f, SIDE_E);     // 0.8.9: the watchtower could not be climbed
   KMAT(SMAT_STEEL, {
     bx(0.9f, 5.06f, 0.9f, 1.0f, 9.4f, 1.0f, dark);
     bx(0.6f, 7.6f, 0.93f, 1.3f, 7.65f, 0.97f, dark);
     bx(0.7f, 8.6f, 0.93f, 1.2f, 8.65f, 0.97f, dark);
   });
-  g_ks = 1.0f;  outpost_half();
-  g_ks = -1.0f; outpost_half();
+  g_ks = 1.0f;  outpost_half();  outpost_outer_half();
+  g_ks = -1.0f; outpost_half();  outpost_outer_half();
   g_ks = 1.0f;
 }
 
@@ -1556,17 +1976,42 @@ static void ladder_add(float x, float z, int side) {
     }
     if (t2 >= 1.0f) top = t2;
   }
+  // THE CLIMB COLUMN IS CLEAR OF WIRE AND TRIM (0.8.9): a HESCO post stands
+  // 1.5 cm proud of the face every 1.06 m, and one behind a ladder was what
+  // a climber caught on near the crown and was dropped to the ground by.
+  // Anything that thin on the face, inside the ladder's span, goes.
+  for (int i = 0; i < g_num_solids; i++) {
+    solid_t *b = &g_solids[i];
+    float lo = nx != 0.0f ? b->min.x : b->min.z, hi = nx != 0.0f ? b->max.x : b->max.z;
+    float face = nx != 0.0f ? x : z, sgn = nx != 0.0f ? nx : nz;
+    float out0 = (sgn > 0 ? lo - face : face - hi), out1 = (sgn > 0 ? hi - face : face - lo);
+    if (out1 - out0 > 0.04f || out1 <= 0.0f || out0 < -0.05f) continue;   // thin, and on the face
+    float a0 = nx != 0.0f ? b->min.z : b->min.x, a1 = nx != 0.0f ? b->max.z : b->max.x;
+    float ac = nx != 0.0f ? z : x;
+    if (a1 < ac - LADDER_HALF - 0.17f || a0 > ac + LADDER_HALF + 0.17f) continue;
+    if (b->min.y > top + 0.5f) continue;
+    b->max = b->min;                   // degenerate: collides with nothing, draws nothing
+  }
   g_ladders[g_nladders++] = (ladder_t){x, z, nx, nz, top};
   v3 m = rgb(0.86f, 0.64f, 0.14f);   // safety yellow: findable from the street
+  // THE RAILS STAND OUTSIDE THE BODY (0.8.9). At +-LADDER_HALF (0.30) they
+  // were inside a climber's 0.35 m radius: the body rode against them all
+  // the way up, a few millimetres of overlap could shove it sideways off the
+  // rungs, and the 0.45 m of rail above the crown stopped it stepping over
+  // onto the top — it climbed, met the rails and fell back. At +-0.42 the
+  // body passes between them; only the rungs (below the crown) touch it.
+  const float RH = LADDER_HALF + 0.12f;
   for (int r = -1; r <= 1; r += 2) {   // rails stand clear of 0.12f trim
-    float ax = x + tx * LADDER_HALF * (float)r, az = z + tz * LADDER_HALF * (float)r;
+    float ax = x + tx * RH * (float)r, az = z + tz * RH * (float)r;
     bx(ax - 0.03f * fabsf(tx) + nx * 0.135f, 0.02f, az - 0.03f * fabsf(tz) + nz * 0.135f,
        ax + 0.03f * fabsf(tx) + nx * LADDER_OFF, top + 0.45f,
        az + 0.03f * fabsf(tz) + nz * LADDER_OFF, m);
   }
-  for (float y = 0.30f; y < top - 0.1f; y += 0.30f)   // rungs
-    bx(x - tx * (LADDER_HALF - 0.03f) + nx * 0.145f, y, z - tz * (LADDER_HALF - 0.03f) + nz * 0.145f,
-       x + tx * (LADDER_HALF - 0.03f) + nx * 0.180f, y + 0.04f, z + tz * (LADDER_HALF - 0.03f) + nz * 0.180f, m);
+  // (no rung in the last 0.45 m: the climb leans in to step over the crown
+  // from top - 0.35, and a rung there was the body's floor-snapping contact)
+  for (float y = 0.30f; y < top - 0.45f; y += 0.30f)   // rungs
+    bx(x - tx * (RH - 0.03f) + nx * 0.145f, y, z - tz * (RH - 0.03f) + nz * 0.145f,
+       x + tx * (RH - 0.03f) + nx * 0.180f, y + 0.04f, z + tz * (RH - 0.03f) + nz * 0.180f, m);
 }
 
 static void flare_stack(float x, float z, float h) {
@@ -1628,9 +2073,9 @@ static int mg_open(const char *const rows[MAPGRID_N], int c, int r) {
 // Does the world-space side of a rect face open ground anywhere along it?
 static int mg_side_open(const char *const rows[MAPGRID_N], float x0, float z0, float x1,
                         float z1, int side) {
-  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
-  int c0 = (int)floorf((x0 + ARENA_HALF) / cs + 0.01f), c1 = (int)ceilf((x1 + ARENA_HALF) / cs - 0.01f) - 1;
-  int r0 = (int)floorf((z0 + ARENA_HALF) / cs + 0.01f), r1 = (int)ceilf((z1 + ARENA_HALF) / cs - 0.01f) - 1;
+  const float cs = 2.0f * MG_HALF / MAPGRID_N;
+  int c0 = (int)floorf((x0 + MG_HALF) / cs + 0.01f), c1 = (int)ceilf((x1 + MG_HALF) / cs - 0.01f) - 1;
+  int r0 = (int)floorf((z0 + MG_HALF) / cs + 0.01f), r1 = (int)ceilf((z1 + MG_HALF) / cs - 0.01f) - 1;
   if (side == SIDE_N || side == SIDE_S) {
     int r = side == SIDE_N ? r0 - 1 : r1 + 1;
     for (int c = c0; c <= c1; c++) if (mg_open(rows, c, r)) return 1;
@@ -1691,7 +2136,7 @@ static void town_climb(const char *const rows[MAPGRID_N], float x0, float z0, fl
     if (mg_side_open(rows, x0, z0, x1, z1, sd)) win |= sd;
   int best = 0;
   float best_len = 0.0f, best_a = 0.0f;
-  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  const float cs = 2.0f * MG_HALF / MAPGRID_N;
   for (int sd = 1; sd <= 8; sd <<= 1) {
     if (!(win & sd)) continue;
     int axz = sd == SIDE_N || sd == SIDE_S;
@@ -1700,7 +2145,7 @@ static void town_climb(const char *const rows[MAPGRID_N], float x0, float z0, fl
     float out = (sd == SIDE_N || sd == SIDE_W) ? -1.0f : 1.0f;
     float run0 = -1.0f;
     for (float a = a0; a < a1 - 0.001f; ) {
-      float ce = -ARENA_HALF + (floorf((a + ARENA_HALF) / cs + 1e-4f) + 1.0f) * cs;
+      float ce = -MG_HALF + (floorf((a + MG_HALF) / cs + 1e-4f) + 1.0f) * cs;
       float e = fminf(ce, a1), m = (a + e) * 0.5f;
       int open = (axz ? (mg_point_open(m, pl + out * 1.0f) && mg_point_open(m, pl + out * 2.2f))
                       : (mg_point_open(pl + out * 1.0f, m) && mg_point_open(pl + out * 2.2f, m)));
@@ -1733,7 +2178,7 @@ static void town_climb(const char *const rows[MAPGRID_N], float x0, float z0, fl
 static void map_grid(const char *const rows[MAPGRID_N]) {
   const theme_t *t = &g_theme;
   g_mg_rows = rows;
-  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  const float cs = 2.0f * MG_HALF / MAPGRID_N;
   static uint8_t used[MAPGRID_N][MAPGRID_N];
   memset(used, 0, sizeof used);
   for (int r = 0; r < MAPGRID_N; r++)
@@ -1755,8 +2200,8 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
       for (int y = r; y < r + h; y++)
         for (int x = c; x < c + w; x++) used[y][x] = 1;
       if (special) {
-        float sx0 = -ARENA_HALF + (float)c * cs, sz0 = -ARENA_HALF + (float)r * cs;
-        float sx1 = -ARENA_HALF + (float)(c + w) * cs, sz1 = -ARENA_HALF + (float)(r + h) * cs;
+        float sx0 = -MG_HALF + (float)c * cs, sz0 = -MG_HALF + (float)r * cs;
+        float sx1 = -MG_HALF + (float)(c + w) * cs, sz1 = -MG_HALF + (float)(r + h) * cs;
         switch (ch) {
           case '#': town_block(rows, sx0, sz0, sx1, sz1, 1); break;
           case '%': town_block(rows, sx0, sz0, sx1, sz1, 0); break;
@@ -1807,10 +2252,10 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
         continue;
       }
       float y1 = tl->y1;
-      float x0 = -ARENA_HALF + (float)c * cs + tl->inset;
-      float z0 = -ARENA_HALF + (float)r * cs + tl->inset;
-      float x1 = -ARENA_HALF + (float)(c + w) * cs - tl->inset;
-      float z1 = -ARENA_HALF + (float)(r + h) * cs - tl->inset;
+      float x0 = -MG_HALF + (float)c * cs + tl->inset;
+      float z0 = -MG_HALF + (float)r * cs + tl->inset;
+      float x1 = -MG_HALF + (float)(c + w) * cs - tl->inset;
+      float z1 = -MG_HALF + (float)(r + h) * cs - tl->inset;
       v3 col;
       switch (tl->col) {
         case MGC_WALL:    col = col_tint(t->wall, 0.86f, 1.0f); break;
@@ -1846,8 +2291,8 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
               int op = k < w && strchr(".AB", mg_cell_ch(rows, c + k, adj_r)) != NULL;
               if (op && run0 < 0) run0 = k;
               if (!op && run0 >= 0) {
-                float u0 = -ARENA_HALF + (float)(c + run0) * cs;
-                float u1 = -ARENA_HALF + (float)(c + k) * cs;
+                float u0 = -MG_HALF + (float)(c + run0) * cs;
+                float u1 = -MG_HALF + (float)(c + k) * cs;
                 edge_rail(0, e0, u0 + 0.02f, u1 - 0.02f, y1, curb, iron);
                 run0 = -1;
               }
@@ -1863,8 +2308,8 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
               int op = k < h && strchr(".AB", mg_cell_ch(rows, adj_c, r + k)) != NULL;
               if (op && run0 < 0) run0 = k;
               if (!op && run0 >= 0) {
-                float u0 = -ARENA_HALF + (float)(r + run0) * cs;
-                float u1 = -ARENA_HALF + (float)(r + k) * cs;
+                float u0 = -MG_HALF + (float)(r + run0) * cs;
+                float u1 = -MG_HALF + (float)(r + k) * cs;
                 edge_rail(1, e0, u0 + 0.02f, u1 - 0.02f, y1, curb, iron);
                 run0 = -1;
               }
@@ -1933,7 +2378,7 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
           }
         if (x1 - x0 > 9.0f) {
           for (float mx = x0 + 8.0f; mx <= x1 - 4.0f; mx += 8.0f) {
-            int mc = (int)floorf((mx + ARENA_HALF) / cs);
+            int mc = (int)floorf((mx + MG_HALF) / cs);
             if (strchr(".AB", mg_cell_ch(rows, mc, r - 1)) != NULL)
               bx(mx - 0.13f, 0.0f, z0 + 0.14f, mx + 0.13f, tl->y0, z0 + 0.40f, cc);
             if (strchr(".AB", mg_cell_ch(rows, mc, r + h)) != NULL)
@@ -1958,7 +2403,7 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
           }
         if (x1 - x0 > 9.0f) {
           for (float mx = x0 + 8.0f; mx <= x1 - 4.0f; mx += 8.0f) {
-            int mc = (int)floorf((mx + ARENA_HALF) / cs);
+            int mc = (int)floorf((mx + MG_HALF) / cs);
             if (strchr(".AB", mg_cell_ch(rows, mc, r - 1)) != NULL)
               bx(mx - 0.14f, 0.0f, z0 + 0.18f, mx + 0.14f, tl->y0, z0 + 0.46f, pc);
             if (strchr(".AB", mg_cell_ch(rows, mc, r + h)) != NULL)
@@ -1967,7 +2412,7 @@ static void map_grid(const char *const rows[MAPGRID_N]) {
         }
         if (z1 - z0 > 9.0f) {
           for (float mz = z0 + 8.0f; mz <= z1 - 4.0f; mz += 8.0f) {
-            int mr = (int)floorf((mz + ARENA_HALF) / cs);
+            int mr = (int)floorf((mz + MG_HALF) / cs);
             if (strchr(".AB", mg_cell_ch(rows, c - 1, mr)) != NULL)
               bx(x0 + 0.18f, 0.0f, mz - 0.14f, x0 + 0.46f, tl->y0, mz + 0.14f, pc);
             if (strchr(".AB", mg_cell_ch(rows, c + w, mr)) != NULL)
@@ -2014,7 +2459,7 @@ static int span_clear(v3 mn, v3 mx) {
 }
 static int span_wall_tall(float x, float z, float y) { return wg_inside((v3){{x, y, z}}, NULL); }
 static void street_spans(const char *const rows[MAPGRID_N]) {
-  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  const float cs = 2.0f * MG_HALF / MAPGRID_N;
   int room = g_town_kind == 0 || g_town_kind == 3;
   static int last[2][MAPGRID_N];
   for (int i = 0; i < MAPGRID_N; i++) last[0][i] = last[1][i] = -100;
@@ -2035,8 +2480,8 @@ static void street_spans(const char *const rows[MAPGRID_N]) {
           for (int u = u0; u <= u1 && ok; u++) if (!strchr(".AB", CH(u, v + dv))) ok = 0;
         }
         if (!ok || r - last[pass][u0] < 7) continue;
-        float ua = -ARENA_HALF + (float)u0 * cs, ub = -ARENA_HALF + (float)(u1 + 1) * cs;
-        float vc = -ARENA_HALF + ((float)v + 0.5f) * cs;
+        float ua = -MG_HALF + (float)u0 * cs, ub = -MG_HALF + (float)(u1 + 1) * cs;
+        float vc = -MG_HALF + ((float)v + 0.5f) * cs;
         float hsh = pass == 0 ? wg_hash(ua, vc, 41u) : wg_hash(vc, ua, 43u);
         if (hsh > (room ? 0.55f : 0.45f)) continue;
         for (int l = 0; l < g_nladders; l++) {
@@ -2131,7 +2576,7 @@ static void street_spans(const char *const rows[MAPGRID_N]) {
 // of a door or a window, never near a ladder, the whole footprint and a margin
 // round it free, and 7 m from the last one. Hash-picked, no g_rng.
 static void env_scatter(const char *const rows[MAPGRID_N], int max_n) {
-  const float cs = 2.0f * ARENA_HALF / MAPGRID_N;
+  const float cs = 2.0f * MG_HALF / MAPGRID_N;
   static const int DC[4] = {-1, 0, 1, 0}, DR[4] = {0, -1, 0, 1};
   float px[64], pz[64];
   int n = 0, old = g_town_kind == 0 || g_town_kind == 3;
@@ -2145,7 +2590,7 @@ static void env_scatter(const char *const rows[MAPGRID_N], int max_n) {
         float h = wg_hash((float)(c * 4 + d), (float)r, 61u);
         if (h > 0.22f) continue;
         // the wall plane and the outward normal (away from the wall)
-        float cx = -ARENA_HALF + ((float)c + 0.5f) * cs, cz = -ARENA_HALF + ((float)r + 0.5f) * cs;
+        float cx = -MG_HALF + ((float)c + 0.5f) * cs, cz = -MG_HALF + ((float)r + 0.5f) * cs;
         float nx = (float)-DC[d], nz = (float)-DR[d];
         float wx = cx - nx * cs * 0.5f, wz = cz - nz * cs * 0.5f;    // on the wall plane
         float tx = -nz, tz = nx;
@@ -2192,6 +2637,7 @@ static void env_scatter(const char *const rows[MAPGRID_N], int max_n) {
     }
 }
 
+static int map_backdrop_at(float x, float z);   // with the grown maps' districts
 // SUPPLY STATION PLACEMENT (see supply_t, world/map.c). Run after a handmade
 // map's build, from the solids alone. A spot is good when the station's back is
 // against something solid (a wall, a container, cover) and its footprint plus a
@@ -2256,14 +2702,23 @@ static int sup_spot_ok(float *px_, float *pz_, int kind, int qt) {
   const char *const *rows = sup_rows();
   const float H = ARENA_HALF;
   if (fabsf(x) > H - 2.0f || fabsf(z) > H - 2.0f) return 0;
-  if (rows) {   // open floor, and nowhere near a spawn zone
-    const float cs = 2.0f * H / MAPGRID_N;
-    int c = (int)floorf((x + H) / cs), r = (int)floorf((z + H) / cs);
+  // Past the grid (the outer districts of the grown maps) the solids decide.
+  int in_grid = fabsf(x) < MG_HALF && fabsf(z) < MG_HALF;
+  if (map_backdrop_at(x, z)) return 0;
+  if (!in_grid)            // out here nothing says "water" but its film on the floor
+    for (int i = 0; i < g_num_solids; i++) {
+      const solid_t *sd = &g_solids[i];
+      if (sd->max.y < 0.03f && x > sd->min.x - 1.0f && x < sd->max.x + 1.0f &&
+          z > sd->min.z - 1.0f && z < sd->max.z + 1.0f) return 0;
+    }
+  if (rows && in_grid) {   // open floor, and nowhere near a spawn zone
+    const float cs = 2.0f * MG_HALF / MAPGRID_N;
+    int c = (int)floorf((x + MG_HALF) / cs), r = (int)floorf((z + MG_HALF) / cs);
     if (!strchr(".ABr^", mg_cell_ch(rows, c, r))) return 0;   // open floor (roofed counts)
     for (int dr = -3; dr <= 3; dr++)
       for (int dc = -3; dc <= 3; dc++)
         if (strchr("TK", mg_cell_ch(rows, c + dc, r + dr))) return 0;
-  } else {
+  } else if (!rows) {
     float d1 = hypotf(x - SPAWN_POS.x, z - SPAWN_POS.z), d2 = hypotf(x + SPAWN_POS.x, z + SPAWN_POS.z);
     if (fminf(d1, d2) < 6.0f) return 0;
   }
@@ -2359,6 +2814,111 @@ static void supply_place(void) {
   }
 }
 
+
+// CITADEL'S OUTER DISTRICTS. West: THE RAMPARTS — the old wall along the
+// shell, 6 m high with its wall-walk and a parapet above a jump, two stairs
+// up, two round bastions carrying cannon, and the garden at its foot (palms,
+// a well, carts, jars, benches). East: THE LOWER TOWN — a row of houses along
+// the shell, the street before them, the fountain square, the market, an
+// arched gate across the street and a domed shrine. North and south the old
+// town's roofs, a dome and a minaret are the backdrop.
+static void out_stair(int ax, float a, int dir, float b0, float b1, float y0, float rise, v3 c, v3 rail);
+static void out_seal(v3 c);   // both with the grown maps' districts, below
+static void cannon_at(float x, float y, float z, int qt) {
+  static const pbox_t B[] = {{-0.70f, 1.50f, -0.40f, 0.40f, 0.0f, 0.82f}};
+  street_prop_y(PM_CANNON, x, y, z, qt, rgb(0.52f, 0.38f, 0.18f), rgb(0.36f, 0.24f, 0.14f), B, 1);
+}
+static void citadel_outer(void) {
+  const char *const *rows = g_mg_rows;
+  g_mg_rows = NULL;
+  const town_style_t *s = &g_town;
+  v3 st = s->stone, std = tint(s->stone, 0.86f, 0.90f), stl = rgb(0.28f, 0.30f, 0.32f);
+  const float RY = 6.0f, WX0 = -70.0f, WX1 = -66.5f;
+  // the wall, broken where the two bastions stand on it
+  static const float BZ[2] = {-28.0f, 22.0f};
+  const float BR = 4.2f;
+  float z0 = -66.0f;
+  for (int b = 0; b <= 2; b++) {
+    float z1 = b < 2 ? BZ[b] - BR : 66.0f;
+    bx(WX0, 0.0f, z0, WX1, RY, z1, st);
+    if (b < 2) bx(WX0, 0.0f, z1, -68.75f, RY, BZ[b] + BR, st);       // the wall behind the bastion
+    z0 = b < 2 ? BZ[b] + BR : z0;
+  }
+  bx(WX0, RY, -66.0f, WX0 + 0.5f, RY + 1.4f, 66.0f, std);             // the parapet
+  for (float z = -65.4f; z < 65.5f; z += 1.2f)                          // and its merlons
+    bx(WX0, RY + 1.4f, z, WX0 + 0.5f, RY + 2.1f, z + 0.6f, std);
+  bx(WX1 - 0.02f, RY - 0.4f, -65.9f, WX1 + 0.16f, RY - 0.1f, 65.9f, std);   // string course
+  for (int b = 0; b < 2; b++) {
+    octa(-64.5f, BZ[b], BR, 0.0f, RY, tint(st, 0.94f, 0.98f));
+    octa(-64.5f, BZ[b], BR + 0.12f, RY - 0.5f, RY - 0.2f, std);
+    cannon_at(-62.4f, RY, BZ[b] - 1.4f, 0);
+    cannon_at(-62.4f, RY, BZ[b] + 1.4f, 0);
+  }
+  // the two stairs up, against the wall's inner face
+  out_stair(1, -41.0f, -1, WX1, WX1 + 1.4f, 0.0f, RY, st, stl);
+  out_stair(1, 39.0f, +1, WX1, WX1 + 1.4f, 0.0f, RY, st, stl);
+  // the garden at its foot
+  palm(-60.0f, -50.0f, 5.4f); palm(-58.0f, -8.0f, 5.0f); palm(-61.0f, 4.0f, 5.8f);
+  palm(-57.0f, 44.0f, 5.2f); palm(-60.0f, 58.0f, 5.6f);
+  octa(-60.0f, -40.0f, 1.0f, 0.0f, 0.9f, st);
+  street_prop(PM_WELL, -60.0f, -40.0f, 0, st, st, NULL, 0);
+  hand_cart(-56.0f, -24.0f, 1); hand_cart(-60.0f, 36.0f, 0);
+  cannon_prop(-63.0f, -45.0f, 0);                       // an old gun kept as a monument
+  clay_jars(-55.5f, -36.0f, 0); clay_jars(-62.0f, 12.0f, 1); clay_jars(-55.0f, 52.0f, 2);
+  bench_prop(-58.5f, 0.0f, 1, rgb(0.40f, 0.28f, 0.16f));
+  bench_prop(-58.5f, -60.0f, 1, rgb(0.40f, 0.28f, 0.16f));
+  for (float z = -56.0f; z <= 56.0f; z += 16.0f) lamp(-53.2f, z, 0, -1);
+  // THE LOWER TOWN
+  int bal = g_town.balconies;
+  static const float HZ[6][2] = {{-66.0f, -54.0f}, {-50.0f, -42.0f}, {-36.0f, -26.0f}, {-14.0f, -2.0f},
+                                 {8.0f, 22.0f}, {28.0f, 38.0f}};
+  for (int h = 0; h < 6; h++) {
+    int fl = 2 + (h % 2);
+    house(62.0f, HZ[h][0], 69.8f, HZ[h][1], fl, SIDE_W | SIDE_N | SIDE_S, SIDE_W, 0, 0.0f, 0.0f, 1);
+  }
+  g_town.balconies = 0;
+  house(60.0f, 44.0f, 69.8f, 56.0f, 1, SIDE_W | SIDE_N | SIDE_S, SIDE_W, 0, 0.0f, 0.0f, 0);   // the shrine
+  g_town.balconies = bal;
+  octa(65.0f, 50.0f, 3.8f, 3.2f, 4.2f, s->plaster[3]);
+  dome(65.0f, 50.0f, 3.5f, 4.2f, rgb(0.24f, 0.46f, 0.52f));
+  arch_gate(0, -40.0f, 54.5f, 59.5f, 52.0f, 62.0f, 6.0f, s->plaster[1]);
+  // the fountain square (z -2..8 between the houses' gap)
+  octa(56.5f, 3.0f, 2.4f, 0.0f, 0.55f, st);
+  octa(56.5f, 3.0f, 2.0f, 0.55f, 0.60f, rgb(0.10f, 0.22f, 0.28f));
+  octa(56.5f, 3.0f, 0.45f, 0.60f, 1.80f, std);
+  octa(56.5f, 3.0f, 0.9f, 1.80f, 2.00f, std);
+  clay_jars(60.4f, 0.5f, 3); clay_jars(53.0f, 7.0f, 1);
+  bench_prop(60.6f, 6.2f, 1, rgb(0.40f, 0.28f, 0.16f));
+  // the market: stalls and carts down the street
+  stall1(54.2f, 12.0f, 1, s->awning[0]); stall1(54.2f, 17.0f, 1, s->awning[2]);
+  stall1(54.2f, 40.0f, 1, s->awning[1]);
+  hand_cart(58.6f, 14.5f, 1); hand_cart(57.0f, -30.0f, 3);
+  clay_jars(59.0f, 19.4f, 0);
+  for (float z = -60.0f; z <= 60.0f; z += 15.0f) lamp(61.6f, z, 0, -1);
+  motorbike(57.5f, -48.0f, 1, rgb(0.62f, 0.10f, 0.08f));
+  // BACKDROP: roofs north and south, a dome, a minaret
+  for (int sd = -1; sd <= 1; sd += 2) {
+    float z0b = sd < 0 ? -68.0f : 54.0f, z1b = sd < 0 ? -54.0f : 68.0f;
+    // (roof massing, not houses: nobody comes close enough to want a window,
+    // and ten dressed houses would run the decor budget dry)
+    for (int k = 0; k < 5; k++) {
+      float x0 = -50.0f + (float)k * 20.0f, x1 = x0 + 17.0f, H = 3.2f * (float)(2 + ((k + (sd > 0)) % 3));
+      v3 pl = tint(s->plaster[(k + (sd > 0)) & 3], 0.95f, 1.03f);
+      bx(x0, 0.0f, z0b, x1, H, z1b, pl);
+      bx(x0 - 0.12f, H - 0.4f, z0b - 0.12f, x1 + 0.12f, H - 0.15f, z1b + 0.12f, tint(pl, 0.86f, 0.9f));
+      bx(x0, H, z0b, x1, H + 0.7f, z0b + 0.25f, pl);                         // parapets
+      bx(x0, H, z1b - 0.25f, x1, H + 0.7f, z1b, pl);
+    }
+  }
+  // (on the 4-storey roofs: north k = 2 and south k = 4 are 12.8 m)
+  octa(-1.5f, -61.0f, 4.0f, 12.8f, 14.0f, s->plaster[3]);
+  dome(-1.5f, -61.0f, 3.7f, 14.0f, rgb(0.24f, 0.46f, 0.52f));
+  octa(38.5f, 61.0f, 1.6f, 12.8f, 26.0f, s->plaster[2]);
+  octa(38.5f, 61.0f, 2.1f, 22.0f, 22.6f, s->stone);
+  dome(38.5f, 61.0f, 1.5f, 26.0f, rgb(0.24f, 0.46f, 0.52f));
+  out_seal(stl);
+  g_mg_rows = rows;
+}
 static void citadel_extras(void) {
   const town_style_t *s = &g_town;
   // The mosque: a hall with a drum and dome, and a minaret you climb.
@@ -2401,6 +2961,403 @@ static void citadel_extras(void) {
   env_scatter(g_mg_rows, 14);
   roof_tanks(12);
   wall_units(0.26f, 0.14f);
+  citadel_outer();
+}
+
+// ---------------------------------------------------------------------------
+// 0.8.9: THE GROWN MAPS. Harbor and Refinery were 104 m towns on their grid;
+// they are now 140 m (half 70) and the ring past the grid (MG_HALF) is built
+// here, by hand: the districts that make each one the place its name says.
+// The grid's border is opened by gates (maps.c); the bands north and south of
+// the grid are backdrop behind its 8 m border, seen from the roofs. No g_rng:
+// every choice is a position hash (wg_hash), so the layout is the map's own.
+// g_mg_rows is cleared while they build: no facade out here faces the grid.
+// ---------------------------------------------------------------------------
+// THE BACKDROP BANDS (north and south of the grid, on a map grown past it)
+// are scenery: no spawn, no supply station there, and a wall seals each one
+// from the playable districts east and west.
+static int map_backdrop_at(float x, float z) {
+  // (the sealed grids only: the Compound's desert is open on every side)
+  int sealed = g_map_id == 4 || g_map_id == 5 || g_map_id == 6;
+  return sealed && ARENA_HALF > MG_HALF + 1.0f && fabsf(x) < MG_HALF && fabsf(z) > MG_HALF - 0.5f;
+}
+static void out_seal(v3 c) {
+  for (int s = -1; s <= 1; s += 2)
+    for (int e = -1; e <= 1; e += 2)
+      bx((float)e * MG_HALF - (e > 0 ? 0.3f : 0.0f), 0.0f, s < 0 ? -ARENA_HALF : MG_HALF,
+         (float)e * MG_HALF + (e > 0 ? 0.0f : 0.3f), 3.2f, s < 0 ? -MG_HALF : ARENA_HALF, c);
+}
+// A stair of 0.4 m steps from height y0 up `rise`, running along x (ax 0) or
+// z (ax 1) from `a` in direction `dir`, spanning b0..b1 across; a handrail on
+// the b1 side. Each step is a box from y0 to its own tread.
+static void out_stair(int ax, float a, int dir, float b0, float b1, float y0, float rise, v3 c, v3 rail) {
+  int n = (int)(rise / 0.4f + 0.5f);
+  const float run = 0.5f;
+#define OS(u0, u1, v0, v1, ya, yb, cc) \
+  (ax == 0 ? bx(u0, ya, v0, u1, yb, v1, cc) : bx(v0, ya, u0, v1, yb, u1, cc))
+  for (int k = 0; k < n; k++) {
+    float s0 = a + (float)dir * (float)k * run, s1 = s0 + (float)dir * run;
+    float u0 = fminf(s0, s1), u1 = fmaxf(s0, s1), top = y0 + (float)(k + 1) * (rise / (float)n);
+    OS(u0, u1, b0, b1, y0, top, tint(c, 0.97f, 1.03f));
+    OS(u0 + 0.02f, u1 - 0.02f, b1, b1 + 0.06f, top, top + 0.95f, rail);
+  }
+#undef OS
+}
+// A railing along x (ax 0) or z (ax 1) at d, from a0 to a1, on a floor at y.
+static void out_rail(int ax, float d, float a0, float a1, float y, v3 c) {
+  if (ax == 0) bx(a0, y, d - 0.04f, a1, y + 1.05f, d + 0.04f, c);
+  else         bx(d - 0.04f, y, a0, d + 0.04f, y + 1.05f, a1, c);
+}
+
+// THE CARGO SHIP moored in the west basin: a 74 m general-cargo hull, bow
+// north, its deck at 4 m with three hatch coamings (waist-high cover) and
+// containers stowed on two of them, two deck cranes, the bulwarks open at
+// the gangways, and the accommodation block aft with its bridge, wings and
+// funnel. An outside stair climbs the block to its roof: the basin's perch.
+#define SHIP_X0 -66.0f
+#define SHIP_X1 -56.0f
+#define SHIP_DECK 4.0f
+static void harbor_ship(void) {
+  v3 navy = rgb(0.14f, 0.20f, 0.30f), red = rgb(0.46f, 0.15f, 0.12f), deck = rgb(0.34f, 0.31f, 0.27f);
+  v3 white = rgb(0.86f, 0.86f, 0.82f), stl = rgb(0.30f, 0.31f, 0.33f), win = rgb(0.10f, 0.13f, 0.16f);
+  const float D = SHIP_DECK, DF = D + 0.02f;
+  // the parallel body and the stern
+  bx(SHIP_X0, 0.02f, -34.0f, SHIP_X1, 1.20f, 34.0f, red);
+  bx(SHIP_X0, 1.20f, -34.0f, SHIP_X1, D, 34.0f, navy);
+  bx(SHIP_X0, D, -34.0f, SHIP_X1, DF, 34.0f, deck);
+  // the bow: six narrowing sections, the sheer rising to the forecastle
+  static const float BW[6] = {4.6f, 4.1f, 3.4f, 2.6f, 1.7f, 0.8f};
+  for (int i = 0; i < 6; i++) {
+    float z1 = -34.0f - (float)i * 1.2f, z0 = z1 - 1.2f, cx = (SHIP_X0 + SHIP_X1) * 0.5f;
+    float top = D + 1.0f;   // the forecastle deck
+    bx(cx - BW[i], 0.02f, z0, cx + BW[i], 1.20f, z1, red);
+    bx(cx - BW[i], 1.20f, z0, cx + BW[i], top, z1, navy);
+  }
+  float cx = (SHIP_X0 + SHIP_X1) * 0.5f;
+  bx(SHIP_X0 + 0.4f, DF, -34.0f, SHIP_X1 - 0.4f, D + 1.0f, -30.0f, navy);     // forecastle
+  bx(cx - 0.5f, D + 1.0f, -36.0f, cx + 0.5f, D + 1.8f, -35.0f, stl);          // windlass
+  bx(cx - 0.08f, D + 1.0f, -32.0f, cx + 0.08f, D + 9.0f, -31.84f, stl);       // foremast
+  // bulwarks, open at the gangways (z 12.4..14, 30.4..32 on the east side)
+  bx(SHIP_X0, DF, -30.0f, SHIP_X0 + 0.2f, D + 1.0f, 34.0f, navy);
+  bx(SHIP_X1 - 0.2f, DF, -30.0f, SHIP_X1, D + 1.0f, 12.4f, navy);
+  bx(SHIP_X1 - 0.2f, DF, 14.0f, SHIP_X1, D + 1.0f, 30.4f, navy);
+  bx(SHIP_X1 - 0.2f, DF, 32.0f, SHIP_X1, D + 1.0f, 34.0f, navy);
+  bx(SHIP_X0 + 0.2f, DF, 33.8f, SHIP_X1 - 0.2f, D + 1.0f, 34.0f, navy);       // stern rail
+  // hatch coamings and their covers
+  static const float HZ[3][2] = {{-28.0f, -16.0f}, {-13.0f, -1.0f}, {2.0f, 14.0f}};
+  v3 cov = rgb(0.22f, 0.34f, 0.24f);
+  for (int h = 0; h < 3; h++) {
+    bx(SHIP_X0 + 2.0f, DF, HZ[h][0], SHIP_X1 - 2.0f, D + 1.1f, HZ[h][1], cov);
+    for (float z = HZ[h][0] + 2.0f; z < HZ[h][1] - 0.5f; z += 2.0f)
+      bx(SHIP_X0 + 1.9f, D + 1.1f, z - 0.08f, SHIP_X1 - 1.9f, D + 1.22f, z + 0.08f, tint(cov, 0.8f, 0.85f));
+  }
+  // containers on the first two hatches (they stand on the cover ribs' tops)
+  static const v3 CC[4] = {{{0.16f, 0.36f, 0.58f}}, {{0.62f, 0.20f, 0.14f}}, {{0.78f, 0.62f, 0.20f}}, {{0.30f, 0.46f, 0.30f}}};
+  for (int h = 0; h < 2; h++)
+    for (int k = 0; k < 2; k++) {
+      float zc = HZ[h][0] + 3.2f + (float)k * 6.4f;
+      container(cx - 1.35f, zc, 1, D + 1.22f, CC[(h * 2 + k) & 3]);
+      if (wg_hash(cx, zc, 901u) < 0.55f) container(cx - 1.35f, zc, 1, D + 3.82f, CC[(h * 2 + k + 1) & 3]);
+      container(cx + 1.35f, zc, 1, D + 1.22f, CC[(h * 2 + k + 2) & 3]);
+    }
+  // two deck cranes between the hatches
+  v3 yel = rgb(0.86f, 0.64f, 0.14f);
+  for (int c = 0; c < 2; c++) {
+    float zc = c ? 0.5f : -14.5f;
+    octa(SHIP_X0 + 1.4f, zc, 0.8f, DF, D + 7.0f, yel);
+    bx(SHIP_X0 + 0.6f, D + 7.0f, zc - 1.0f, SHIP_X0 + 2.4f, D + 8.6f, zc + 1.0f, yel);         // cab
+    bx(SHIP_X0 + 1.2f, D + 8.0f, zc + 1.0f, SHIP_X0 + 1.6f, D + 8.4f, zc + 13.0f, yel);         // boom
+    bx(SHIP_X0 + 1.36f, D + 2.4f, zc + 12.6f, SHIP_X0 + 1.44f, D + 8.0f, zc + 12.7f, stl);      // fall
+  }
+  // the accommodation block aft: deck house to 10 m, the bridge over it,
+  // the wings, the funnel, the radar mast
+  const float AX0 = SHIP_X0 + 0.6f, AX1 = SHIP_X1 - 2.0f, AZ0 = 18.0f, AZ1 = 33.4f;
+  bx(AX0, DF, AZ0, AX1, 10.0f, AZ1, white);
+  for (float y = 5.6f; y < 9.6f; y += 2.6f) {                                     // window bands
+    bx(AX1, y, AZ0 + 1.0f, AX1 + 0.04f, y + 0.9f, AZ1 - 1.0f, win);
+    bx(AX0 - 0.04f, y, AZ0 + 1.0f, AX0, y + 0.9f, AZ1 - 1.0f, win);
+    bx(AX0 + 1.0f, y, AZ0 - 0.04f, AX1 - 1.0f, y + 0.9f, AZ0, win);
+  }
+  bx(AX0 + 1.0f, 10.0f, AZ0 + 2.0f, AX1 - 1.0f, 13.0f, AZ0 + 7.0f, white);         // the bridge
+  bx(AX0 + 1.0f, 11.4f, AZ0 + 1.96f, AX1 - 1.0f, 12.6f, AZ0 + 2.0f, win);
+  bx(SHIP_X0 - 0.6f, 12.0f, AZ0 + 2.0f, AX0 + 1.0f, 12.3f, AZ0 + 4.4f, white);     // wings
+  bx(AX1 - 1.0f, 12.0f, AZ0 + 2.0f, SHIP_X1 + 0.6f, 12.3f, AZ0 + 4.4f, white);
+  bx(AX0 + 1.04f, 13.0f, AZ0 + 2.04f, AX1 - 1.04f, 13.2f, AZ0 + 6.96f, stl);       // bridge roof
+  bx(cx - 0.1f, 13.2f, AZ0 + 4.4f, cx + 0.1f, 17.0f, AZ0 + 4.6f, stl);             // radar mast
+  bx(cx - 1.0f, 16.4f, AZ0 + 4.38f, cx + 1.0f, 16.5f, AZ0 + 4.62f, stl);
+  bx(cx - 1.6f, 10.0f, AZ1 - 5.0f, cx + 1.4f, 15.5f, AZ1 - 1.6f, red);             // funnel
+  bx(cx - 1.64f, 13.6f, AZ1 - 5.04f, cx + 1.44f, 14.4f, AZ1 - 1.56f, white);
+  bx(cx - 1.4f, 15.5f, AZ1 - 4.8f, cx + 1.2f, 15.6f, AZ1 - 1.8f, rgb(0.06f, 0.06f, 0.07f));
+  // the deck house roof: a railing round it, open where the stair arrives
+  out_rail(0, AZ1 - 0.1f, AX0, AX1, 10.0f, stl);
+  out_rail(1, AX0 + 0.1f, AZ0, AZ1 - 0.14f, 10.0f, stl);
+  out_rail(1, AX1 - 0.1f, AZ0, AZ1 - 7.6f, 10.0f, stl);
+  out_rail(0, AZ0 + 0.1f, AX0 + 0.14f, AX1 - 0.14f, 10.0f, stl);
+  // the outside stair: up the block's east face, from the deck at z 18.6 north
+  // to the roof at its far end
+  out_stair(1, 18.6f, +1, AX1 + 0.04f, AX1 + 1.24f, DF, 10.0f - DF, stl, stl);
+  bx(AX1 + 0.04f, 10.0f - 0.2f, 18.6f + 15.0f * 0.5f, AX1 + 1.24f, 10.0f, AZ1, stl);   // top landing
+  // a lifeboat in its davits on the west side
+  bx(SHIP_X0 - 1.4f, 7.0f, 22.0f, SHIP_X0 - 0.2f, 8.2f, 29.0f, rgb(0.92f, 0.42f, 0.10f));
+}
+// A GANGWAY from the quay strip (east of the canal) up to the ship's deck:
+// a stair along z on land, its top landing, the bridge west across the canal
+// and the basin to the bulwark's opening at z z0..z0+1.6.
+static void harbor_gangway(float z0) {
+  v3 stl = rgb(0.30f, 0.31f, 0.33f), grat = rgb(0.38f, 0.38f, 0.36f);
+  const float D = SHIP_DECK + 0.02f;
+  int n = (int)(D / 0.4f + 0.5f);
+  float lz0 = z0, lz1 = z0 + 1.6f;
+  out_stair(1, lz1 + (float)n * 0.5f, -1, -47.9f, -46.3f, 0.0f, D, grat, stl);
+  bx(-47.9f, D - 0.2f, lz0, -46.3f, D, lz1, grat);                                  // landing
+  bx(SHIP_X1, D - 0.2f, lz0, -47.9f, D, lz1, grat);                                  // the bridge
+  out_rail(0, lz0 + 0.04f, SHIP_X1, -46.3f, D, stl);
+  out_rail(0, lz1 - 0.04f, SHIP_X1, -47.9f, D, stl);
+}
+// A SHIP-TO-SHORE CRANE on the east quay: four legs on the crane rails, the
+// portal beams, the machinery house, the boom out over the water and the
+// backreach over the yard, the A-frame and its stays (stepped), the trolley
+// and cab, the spreader holding a container over the sea.
+static void sts_crane(float zc) {
+  v3 c = rgb(0.80f, 0.20f, 0.12f), w = rgb(0.86f, 0.86f, 0.82f), stl = rgb(0.26f, 0.27f, 0.29f);
+  const float XL = 58.4f, XS = 63.6f, HL = 7.5f, PY = 16.0f;
+  g_mat_force = SMAT_STEEL;
+  for (int s = -1; s <= 1; s += 2) {
+    for (int k = 0; k < 2; k++) {
+      float x = k ? XS : XL;
+      bx(x - 0.45f, 0.0f, zc + (float)s * HL - 0.45f, x + 0.45f, PY, zc + (float)s * HL + 0.45f, c);
+      bx(x - 0.7f, 0.0f, zc + (float)s * HL - 1.2f, x + 0.7f, 0.9f, zc + (float)s * HL - 0.45f, stl);   // bogies
+      bx(x - 0.7f, 0.0f, zc + (float)s * HL + 0.45f, x + 0.7f, 0.9f, zc + (float)s * HL + 1.2f, stl);
+    }
+    bx(XL + 0.45f, PY - 1.2f, zc + (float)s * HL - 0.4f, XS - 0.45f, PY, zc + (float)s * HL + 0.4f, c);  // portal
+  }
+  bx(XL - 0.45f, PY, zc - HL - 0.45f, XS + 0.45f, PY + 1.0f, zc + HL + 0.45f, c);    // the deck frame
+  bx(XL - 0.2f, PY + 1.0f, zc - 3.0f, XS + 0.2f, PY + 4.0f, zc + 3.0f, w);           // machinery house
+  // the boom and backreach: two girders from x 50 to the shell
+  for (int s = -1; s <= 1; s += 2)
+    bx(50.0f, PY + 4.6f, zc + (float)s * 1.6f - 0.35f, 69.6f, PY + 5.6f, zc + (float)s * 1.6f + 0.35f, c);
+  for (float x = 51.0f; x < 69.0f; x += 3.0f)
+    bx(x, PY + 4.8f, zc - 1.25f, x + 0.3f, PY + 5.4f, zc + 1.25f, c);
+  // the A-frame and its stays, stepped down toward both ends
+  for (int s = -1; s <= 1; s += 2) bx(60.6f, PY + 4.0f, zc + (float)s * 1.6f - 0.3f, 61.4f, PY + 12.0f, zc + (float)s * 1.6f + 0.3f, c);
+  bx(60.6f, PY + 12.0f, zc - 1.9f, 61.4f, PY + 12.8f, zc + 1.9f, c);
+  for (int i = 1; i <= 6; i++) {
+    float y = PY + 12.0f - (float)i * 1.15f;
+    bx(61.4f + (float)(i - 1) * 1.3f, y, zc - 0.12f, 61.4f + (float)i * 1.3f, y + 0.24f, zc + 0.12f, stl);
+    bx(60.6f - (float)i * 1.4f, y, zc - 0.12f, 60.6f - (float)(i - 1) * 1.4f, y + 0.24f, zc + 0.12f, stl);
+  }
+  // trolley, cab, ropes, spreader, the container in the air
+  bx(66.0f, PY + 3.2f, zc - 1.4f, 68.0f, PY + 4.6f, zc + 1.4f, w);
+  bx(66.4f, PY + 1.6f, zc + 0.6f, 67.8f, PY + 3.2f, zc + 1.8f, rgb(0.10f, 0.13f, 0.16f));
+  for (int s = -1; s <= 1; s += 2)
+    bx(66.9f + (float)s * 0.6f, 9.6f, zc - 0.05f, 67.0f + (float)s * 0.6f, PY + 3.2f, zc + 0.05f, stl);
+  bx(65.4f, 9.3f, zc - 3.1f, 68.6f, 9.6f, zc + 3.1f, rgb(0.78f, 0.62f, 0.20f));
+  g_mat_force = -1;
+  container(67.0f, zc, 1, 6.7f, rgb(0.16f, 0.36f, 0.58f));
+}
+// The container yard: two columns of stacks, one to three high, in blocks
+// with lanes between them where the grid's gates come through.
+static void harbor_yard(void) {
+  static const v3 CC[7] = {{{0.16f, 0.36f, 0.58f}}, {{0.62f, 0.20f, 0.14f}}, {{0.78f, 0.62f, 0.20f}},
+                           {{0.30f, 0.46f, 0.30f}}, {{0.62f, 0.62f, 0.60f}}, {{0.86f, 0.86f, 0.84f}},
+                           {{0.72f, 0.38f, 0.14f}}};
+  static const float BLK[5][2] = {{-66.0f, -53.0f}, {-38.0f, -16.0f}, {-4.6f, 2.0f}, {16.0f, 37.0f}, {52.0f, 66.0f}};
+  for (int b = 0; b < 5; b++)
+    for (int col = 0; col < 2; col++) {
+      float x = col ? 56.6f : 54.0f;
+      for (float z = BLK[b][0] + 3.05f; z + 3.05f <= BLK[b][1] + 0.01f; z += 6.25f) {
+        float h = wg_hash(x, z, 913u);
+        int tiers = h < 0.25f ? 1 : h < 0.70f ? 2 : 3;
+        for (int t = 0; t < tiers; t++)
+          container(x, z, 1, (float)t * 2.6f, CC[(int)(wg_hash(x + (float)t, z, 917u) * 6.99f)]);
+      }
+    }
+}
+static void harbor_outer(void) {
+  const char *const *rows = g_mg_rows;
+  g_mg_rows = NULL;
+  v3 stl = rgb(0.28f, 0.30f, 0.32f), yel = rgb(0.86f, 0.64f, 0.14f);
+  // THE WEST BASIN: the canal opens into it; the ship lies in it, two
+  // gangways come aboard from the quay strip, a fishing boat at its stern
+  water_rect(-70.0f, -70.0f, -52.0f, 70.0f);
+  harbor_ship();
+  harbor_gangway(12.4f);
+  harbor_gangway(30.4f);
+  fishing_boat(-61.0f, 50.0f, 1, rgb(0.20f, 0.36f, 0.52f), rgb(0.62f, 0.20f, 0.14f));
+  fishing_boat(-61.0f, -52.0f, 3, rgb(0.62f, 0.22f, 0.14f), rgb(0.86f, 0.86f, 0.82f));
+  bollard(-46.9f, 2.0f); bollard(-46.9f, 8.0f); bollard(-46.9f, 26.0f);   // clear of the crates
+  buoy_stand(-46.5f, 10.6f, 0);
+  // THE EAST TERMINAL: the yard, the quay with its water, bollards, two
+  // ship-to-shore cranes, a moored boat, lamp masts, the terminal office
+  water_rect(64.6f, -70.0f, 70.0f, 70.0f);
+  quay_rail(1, 64.6f, -1, -70.0f, 70.0f);
+  harbor_yard();
+  sts_crane(-26.0f);
+  sts_crane(26.0f);
+  for (float z = -64.0f; z <= 64.0f; z += 8.0f)
+    if (fabsf(fabsf(z) - 26.0f) > 2.5f) bollard(63.9f, z);
+  buoy_stand(64.0f, -8.0f, 2); buoy_stand(64.0f, 44.0f, 2);
+  fishing_boat(67.4f, 4.0f, 1, rgb(0.86f, 0.86f, 0.82f), rgb(0.16f, 0.36f, 0.58f));
+  // the terminal office on the apron between the yard blocks, its roof a perch
+  int bal = g_town.balconies;
+  g_town.balconies = 0;
+  house_climb(53.0f, -15.0f, 59.0f, -7.0f, 1, SIDE_E | SIDE_N, SIDE_E, SIDE_S, +1, 53.3f);
+  g_town.balconies = bal;
+  forklift_prop(61.4f, 8.0f, 1, yel, rgb(0.20f, 0.21f, 0.23f));
+  truck(61.0f, 40.0f, 1, rgb(0.62f, 0.20f, 0.14f));
+  truck(59.6f, -44.0f, 1, rgb(0.16f, 0.36f, 0.58f));
+  genset(61.2f, 15.6f, 1, rgb(0.22f, 0.42f, 0.56f), rgb(0.18f, 0.20f, 0.22f));
+  for (float z = -50.0f; z <= 50.0f; z += 20.0f) lamp(62.8f, z, 1, -1);
+  // BACKDROP: the dock sheds north, the grain silos and a shed south
+  for (int s = -1; s <= 1; s += 2) {
+    float z0 = s < 0 ? -68.0f : 54.0f, z1 = s < 0 ? -54.0f : 68.0f;
+    v3 shed = s < 0 ? rgb(0.52f, 0.54f, 0.56f) : rgb(0.58f, 0.50f, 0.40f);
+    for (int k = 0; k < 3; k++) {
+      float x0 = -50.0f + (float)k * 34.0f, x1 = x0 + 30.0f;
+      if (s > 0 && k == 1) continue;                                   // the silos stand here
+      bx(x0, 0.0f, z0, x1, 10.0f, z1, shed);
+      bx(x0 + 1.0f, 10.0f, z0 + 1.0f, x1 - 1.0f, 11.6f, z1 - 1.0f, tint(shed, 0.82f, 0.86f));
+      bx(x0 + 3.0f, 11.6f, z0 + 3.0f, x1 - 3.0f, 12.6f, z1 - 3.0f, tint(shed, 0.76f, 0.80f));
+    }
+    if (s > 0)
+      for (int k = 0; k < 4; k++)
+        octa(-13.0f + (float)k * 6.6f, 61.0f, 3.1f, 0.0f, 22.0f, rgb(0.80f, 0.80f, 0.76f));
+  }
+  bx(-15.0f, 22.0f, 59.6f, 8.2f, 24.0f, 62.4f, stl);                     // the silo gallery
+  out_seal(stl);
+  g_mg_rows = rows;
+}
+// A FLOATING-ROOF STORAGE TANK in its bund: the shell (octagonal, as every
+// round thing here), the wind girder, the roof sunk inside the rim, the bund
+// wall round it (waist-high cover) open at two sides, and — when `stair` — a
+// stair tower beside it with a bridge onto the rim walkway: a perch.
+static void rf_tank(float cx, float cz, float r, float h, int stair, int bund_open) {
+  const float B = r + 2.4f, T = 0.4f;
+  v3 shell = rgb(0.84f, 0.84f, 0.80f), stl = rgb(0.30f, 0.31f, 0.33f), con = rgb(0.56f, 0.55f, 0.52f);
+  octa(cx, cz, r, 0.0f, h, shell);
+  octa(cx, cz, r + 0.12f, h - 1.2f, h - 0.9f, tint(shell, 0.70f, 0.74f));      // wind girder
+  octa(cx, cz, r * 0.92f, h, h + 0.05f, rgb(0.34f, 0.35f, 0.36f));             // the floating roof
+  // the bund: a 1.05 m wall a few metres out, open on bund_open's two sides
+  if (!(bund_open & 1)) bx(cx - B, 0.0f, cz - B, cx + B, 1.05f, cz - B + T, con);           // north
+  else { bx(cx - B, 0.0f, cz - B, cx - 1.6f, 1.05f, cz - B + T, con); bx(cx + 1.6f, 0.0f, cz - B, cx + B, 1.05f, cz - B + T, con); }
+  if (!(bund_open & 2)) bx(cx - B, 0.0f, cz + B - T, cx + B, 1.05f, cz + B, con);           // south
+  else { bx(cx - B, 0.0f, cz + B - T, cx - 1.6f, 1.05f, cz + B, con); bx(cx + 1.6f, 0.0f, cz + B - T, cx + B, 1.05f, cz + B, con); }
+  bx(cx - B, 0.0f, cz - B + T, cx - B + T, 1.05f, cz + B - T, con);                         // west
+  if (!(bund_open & 4)) bx(cx + B - T, 0.0f, cz - B + T, cx + B, 1.05f, cz + B - T, con);   // east
+  else { bx(cx + B - T, 0.0f, cz - B + T, cx + B, 1.05f, cz - 2.4f, con); bx(cx + B - T, 0.0f, cz + 2.4f, cx + B, 1.05f, cz + B - T, con); }
+  if (stair) {
+    // the stair tower north of the bund, the bridge south onto the roof. THE
+    // BRIDGE MUST NOT ROOF THE STAIR: with a 2 m core (eight steps a side) the
+    // 22-step climb ends on the NORTH side, and the only flight under the
+    // south side, where the bridge leaves, is the first (tops <= 3.2 m).
+    // A 1.2 m core ended the climb on the east and ran the last round's
+    // south flight 0.5-1.7 m under the bridge: the climb was blocked there.
+    float tz = cz - B - 3.3f, H = h + 0.1f, hc = 2.0f;
+    tower(cx, tz, hc, H, rgb(0.44f, 0.45f, 0.46f), stl, 0, 0);
+    bx(cx - 0.6f, H - 0.2f, tz + hc, cx + 0.6f, H, cz - r * 0.6f, stl);
+    out_rail(1, cx - 0.56f, tz + hc, cz - r * 0.6f, H, rgb(0.86f, 0.64f, 0.14f));
+    out_rail(1, cx + 0.56f, tz + hc, cz - r * 0.6f, H, rgb(0.86f, 0.64f, 0.14f));
+  }
+}
+// A PIPE RACK along z: portal frames every 6 m, three runs of pipe on the
+// first tier and two on the second, in their service colours.
+static void rf_rack_z(float x, float z0, float z1, float y) {
+  v3 post = rgb(0.30f, 0.31f, 0.33f);
+  for (float z = z0; z <= z1 + 0.01f; z += 6.0f) {
+    if (x < 0.0f && (fabsf(z + 34.0f) < 3.0f || fabsf(z - 14.0f) < 3.0f)) continue;   // clear of the bunds' gates
+    bx(x - 1.8f, 0.0f, z - 0.15f, x - 1.5f, y + 2.15f, z + 0.15f, post);
+    bx(x + 1.5f, 0.0f, z - 0.15f, x + 1.8f, y + 2.15f, z + 0.15f, post);
+    bx(x - 1.75f, y, z - 0.12f, x + 1.75f, y + 0.25f, z + 0.12f, post);
+    bx(x - 1.75f, y + 1.8f, z - 0.12f, x + 1.75f, y + 2.0f, z + 0.12f, post);
+  }
+  static const float PX[5] = {-1.1f, 0.0f, 1.1f, -0.6f, 0.6f};
+  static const v3 PC[5] = {{{0.62f, 0.64f, 0.66f}}, {{0.52f, 0.26f, 0.18f}}, {{0.26f, 0.46f, 0.30f}},
+                           {{0.80f, 0.62f, 0.12f}}, {{0.30f, 0.40f, 0.58f}}};
+  for (int k = 0; k < 5; k++) {
+    float yy = k < 3 ? y + 0.25f : y + 2.0f, r = k < 3 ? 0.28f : 0.20f;
+    bx(x + PX[k] - r, yy, z0 - 0.4f, x + PX[k] + r, yy + 2.0f * r, z1 + 0.4f, PC[k]);
+  }
+}
+// THE TRUCK LOADING RACK: a canopy on its portal frames over two lanes, the
+// raised loading island between them (stairs at both ends, a railing, the
+// loading arms swung over the trucks), a tanker in each lane.
+static void rf_loading(float z0, float z1) {
+  v3 stl = rgb(0.30f, 0.31f, 0.33f), yel = rgb(0.86f, 0.64f, 0.14f), con = rgb(0.58f, 0.57f, 0.54f);
+  const float RY = 7.0f;
+  for (float z = z0; z <= z1 + 0.01f; z += 8.0f)
+    for (int k = 0; k < 3; k++) {
+      float x = 53.6f + (float)k * 7.0f;
+      bx(x - 0.2f, 0.0f, z - 0.2f, x + 0.2f, RY, z + 0.2f, stl);
+    }
+  bx(52.8f, RY, z0 - 1.0f, 68.4f, RY + 0.5f, z1 + 1.0f, rgb(0.84f, 0.84f, 0.80f));
+  bx(52.8f, RY - 0.4f, z0 - 1.04f, 68.4f, RY, z0 - 0.96f, yel);
+  // the island: 1.2 m high, x 59.5..61.7, stairs down both ends
+  bx(59.5f, 0.0f, z0 + 3.5f, 61.7f, 1.2f, z1 - 3.5f, con);
+  out_stair(1, z0 + 3.5f, -1, 59.5f, 61.7f, 0.0f, 1.2f, con, stl);
+  out_stair(1, z1 - 3.5f, +1, 59.5f, 61.7f, 0.0f, 1.2f, con, stl);
+  out_rail(1, 59.55f, z0 + 3.5f, z1 - 3.5f, 1.2f, yel);
+  for (float z = z0 + 6.0f; z <= z1 - 6.0f; z += 8.0f) {
+    bx(61.0f, 1.2f, z - 0.15f, 61.3f, 4.4f, z + 0.15f, stl);                 // arm column
+    bx(61.3f, 4.1f, z - 0.10f, 64.6f, 4.3f, z + 0.10f, stl);                 // the arm, over the lane
+    bx(64.4f, 3.4f, z - 0.10f, 64.6f, 4.1f, z + 0.10f, stl);
+  }
+  valve_set(66.8f, z0 - 6.0f, 1, rgb(0.80f, 0.62f, 0.12f));
+  valve_set(66.8f, z1 + 4.0f, 1, rgb(0.80f, 0.62f, 0.12f));
+  tanker_truck(56.5f, (z0 + z1) * 0.5f - 1.0f, 1, rgb(0.70f, 0.71f, 0.73f));
+  tanker_truck(65.0f, (z0 + z1) * 0.5f + 2.0f, 1, rgb(0.86f, 0.86f, 0.84f));
+}
+static void refinery_outer(void) {
+  const char *const *rows = g_mg_rows;
+  g_mg_rows = NULL;
+  v3 stl = rgb(0.30f, 0.31f, 0.33f), shell = rgb(0.84f, 0.84f, 0.80f);
+  // THE WEST TANK FARM: six floating-roof tanks in their bunds down the band,
+  // two with stair towers onto their rims, the pumps and manifolds in the
+  // gaps between them, a pipe rack along the grid's wall.
+  static const float TZ[6] = {-57.0f, -34.0f, -10.5f, 12.0f, 35.0f, 58.0f};
+  for (int i = 0; i < 6; i++) rf_tank(-63.0f, TZ[i], 4.4f, 8.6f, i == 1 || i == 4, 4);
+  for (int i = 0; i < 5; i++) {
+    if (i == 0 || i == 3) continue;                      // the stair towers stand there
+    float zg = (TZ[i] + TZ[i + 1]) * 0.5f;
+    pump_skid(-65.0f, zg - 1.2f, 0, rgb(0.24f, 0.42f, 0.62f), rgb(0.62f, 0.20f, 0.14f));
+    valve_set(-61.0f, zg + 1.0f, 0, rgb(0.62f, 0.64f, 0.66f));
+  }
+  rf_rack_z(-54.0f, -64.0f, 62.0f, 4.4f);   // its frames at the gates' edges
+  // THE EAST PLANT: two LPG spheres north, the truck loading rack mid, the
+  // cracking column and its exchangers south, a pipe rack between them
+  lpg_sphere(62.0f, -58.0f, shell, rgb(0.86f, 0.64f, 0.14f));
+  lpg_sphere(62.0f, -42.0f, shell, rgb(0.86f, 0.64f, 0.14f));
+  for (int k = 0; k < 3; k++) pump_skid(55.2f, -56.0f + (float)k * 6.0f, 1, rgb(0.62f, 0.20f, 0.14f), rgb(0.30f, 0.40f, 0.58f));
+  rf_loading(-20.0f, 4.0f);
+  // the cracking column: a stair tower to its 12 m deck, the column above
+  tower(62.0f, 36.0f, 1.8f, 12.0f, rgb(0.62f, 0.62f, 0.60f), stl, 0, -1);
+  octa(62.0f, 36.0f, 1.1f, 12.0f, 28.0f, rgb(0.78f, 0.78f, 0.76f));
+  for (float y = 15.0f; y < 28.0f; y += 3.2f) octa(62.0f, 36.0f, 1.24f, y, y + 0.3f, rgb(0.86f, 0.64f, 0.14f));
+  for (int k = 0; k < 3; k++) {                                         // heat exchangers on saddles
+    float z = 48.0f + (float)k * 5.0f;
+    bx(55.0f, 0.0f, z - 0.3f, 56.0f, 1.0f, z + 0.3f, stl);
+    bx(63.0f, 0.0f, z - 0.3f, 64.0f, 1.0f, z + 0.3f, stl);
+    bx(54.4f, 1.0f, z - 0.9f, 64.6f, 2.8f, z + 0.9f, rgb(0.72f, 0.73f, 0.74f));
+    bx(64.6f, 1.1f, z - 1.1f, 65.0f, 2.7f, z + 1.1f, rgb(0.52f, 0.26f, 0.18f));
+  }
+  rf_rack_z(55.4f, 12.0f, 30.0f, 4.4f);
+  pump_skid(66.0f, 26.0f, 1, rgb(0.26f, 0.46f, 0.30f), rgb(0.62f, 0.20f, 0.14f));
+  pump_skid(66.0f, 16.0f, 1, rgb(0.26f, 0.46f, 0.30f), rgb(0.62f, 0.20f, 0.14f));
+  for (float z = -30.0f; z <= 60.0f; z += 18.0f) lamp(69.0f, z, 1, -1);
+  for (float z = -50.0f; z <= 50.0f; z += 25.0f) lamp(-55.0f, z + 12.0f, 1, +1);
+  // BACKDROP north and south: more tanks, a second flare, the process units
+  for (int k = 0; k < 4; k++) {
+    octa(-36.0f + (float)k * 24.0f, -61.0f, 6.6f, 0.0f, 11.0f, tint(shell, 0.96f, 1.02f));
+    octa(-36.0f + (float)k * 24.0f, -61.0f, 6.7f, 5.3f, 5.7f, tint(shell, 0.64f, 0.70f));
+  }
+  flare_stack(44.0f, 62.0f, 30.0f);
+  for (int k = 0; k < 3; k++) {
+    float x = -40.0f + (float)k * 22.0f;
+    bx(x - 6.0f, 0.0f, 55.0f, x + 6.0f, 6.0f, 67.0f, rgb(0.58f, 0.58f, 0.56f));
+    octa(x - 2.0f, 61.0f, 1.3f, 6.0f, 22.0f - (float)k * 3.0f, rgb(0.78f, 0.78f, 0.76f));
+    octa(x + 3.0f, 59.0f, 0.9f, 6.0f, 16.0f, rgb(0.72f, 0.72f, 0.70f));
+  }
+  out_seal(stl);
+  g_mg_rows = rows;
 }
 
 static void harbor_extras(void) {
@@ -2438,6 +3395,7 @@ static void harbor_extras(void) {
   ladder_add(-26.0f, -2.0f, SIDE_S);
   ladder_add(-10.0f, 12.0f, SIDE_E);
   ladder_add(30.0f, 10.0f, SIDE_N);
+  harbor_outer();
 }
 
 static void refinery_extras(void) {
@@ -2467,11 +3425,91 @@ static void refinery_extras(void) {
   car(20.0f, -46.0f, 0); car(-14.0f, 47.0f, 0);
   forklift_prop(29.5f, -18.0f, 2, rgb(0.84f, 0.58f, 0.12f), rgb(0.22f, 0.23f, 0.25f));
   genset(-37.5f, -14.5f, 0, rgb(0.28f, 0.48f, 0.34f), rgb(0.20f, 0.22f, 0.22f));
+  refinery_outer();
 }
 
 // The compound's landmarks. The HQ keeps the grid's 'X' cells; the towers,
 // the helicopter, the lamps and the vehicles stand on open floor.
 #define MAP_COMPOUND_ID 7
+
+// THE COMPOUND'S DESERT, grown to half 70 and open on every side (no seal):
+// north the AA battery — two ZU-23s in their sandbag rings, the ammunition,
+// a DShK nest; west a ruined mud-brick village with its well, pen and palms;
+// east a rocky ridge (low dunes you step up, boulders) with an MG nest and an
+// old fuel dump; south the wadi runs on past the insertion point.
+static void sand_ring(float cx, float cz, float r) {
+  v3 sb = rgb(0.60f, 0.54f, 0.40f);
+  bx(cx - r, 0.0f, cz - r, cx + r, 0.9f, cz - r + 0.5f, sb);
+  bx(cx - r, 0.0f, cz + r - 0.5f, cx + r, 0.9f, cz + r, sb);
+  bx(cx - r, 0.0f, cz - r + 0.5f, cx - r + 0.5f, 0.9f, cz - 0.8f, sb);   // the west side opens
+  bx(cx - r, 0.0f, cz + 0.8f, cx - r + 0.5f, 0.9f, cz + r - 0.5f, sb);
+  bx(cx + r - 0.5f, 0.0f, cz - r + 0.5f, cx + r, 0.9f, cz + r - 0.5f, sb);
+}
+static void compound_outer(void) {
+  const char *const *rows = g_mg_rows;
+  g_mg_rows = NULL;
+  const town_style_t *s = &g_town;
+  v3 mud = rgb(0.62f, 0.50f, 0.36f), rock = rgb(0.50f, 0.43f, 0.35f), dune = rgb(0.72f, 0.62f, 0.46f);
+  v3 red = rgb(0.62f, 0.18f, 0.12f), blu = rgb(0.20f, 0.30f, 0.50f);
+  // NORTH: the AA battery
+  sand_ring(-20.0f, -62.0f, 3.2f); zu23_prop(-20.0f, -62.0f, 0);
+  sand_ring(40.0f, -61.0f, 3.2f);  zu23_prop(40.0f, -61.0f, 0);
+  ammo_stack(-14.5f, -61.0f, 1); ammo_stack(45.5f, -60.0f, 1); ammo_stack(-25.0f, -66.5f, 0);
+  sand_ring(8.0f, -64.0f, 2.2f);   dshk_prop(8.0f, -64.0f, 3);
+  // (no more vehicles out here: one costs ~55k prop verts, and the compound
+  // already parks five)
+  ammo_stack(-46.0f, -60.0f, 0); ammo_stack(24.0f, -66.0f, 2);
+  for (float x = -60.0f; x <= 60.0f; x += 30.0f) lamp(x, -55.0f, 0, 1);
+  // WEST: the ruined village
+  int bal = g_town.balconies;
+  g_town.balconies = 0;
+  house(-68.0f, -40.0f, -58.0f, -30.0f, 1, SIDE_E | SIDE_N, SIDE_E, 0, 0.0f, 0.0f, 0);
+  house(-68.0f, -20.0f, -60.0f, -8.0f, 2, SIDE_E | SIDE_S, SIDE_E, 0, 0.0f, 0.0f, 0);
+  house(-68.0f, 6.0f, -59.0f, 16.0f, 1, SIDE_E | SIDE_N | SIDE_S, SIDE_E, 0, 0.0f, 0.0f, 0);
+  house(-68.0f, 28.0f, -60.0f, 38.0f, 1, SIDE_E | SIDE_N, SIDE_E, 0, 0.0f, 0.0f, 0);
+  g_town.balconies = bal;
+  // the broken walls of the houses that fell
+  bx(-66.0f, 0.0f, -2.0f, -65.4f, 2.2f, 3.0f, mud); bx(-65.4f, 0.0f, -2.0f, -61.0f, 1.4f, -1.4f, mud);
+  bx(-66.0f, 0.0f, 20.0f, -61.0f, 1.8f, 20.6f, mud); bx(-61.6f, 0.0f, 20.6f, -61.0f, 1.1f, 24.0f, mud);
+  // the goat pen and the well, palms, carts, jars
+  for (float z = -50.0f; z <= -44.0f; z += 6.0f) bx(-64.0f, 0.0f, z, -58.0f, 1.0f, z + 0.12f, rgb(0.42f, 0.30f, 0.18f));
+  bx(-64.0f, 0.0f, -49.88f, -63.88f, 1.0f, -44.0f, rgb(0.42f, 0.30f, 0.18f));
+  octa(-55.0f, -24.0f, 1.0f, 0.0f, 0.9f, s->stone);
+  street_prop(PM_WELL, -55.0f, -24.0f, 0, s->stone, s->stone, NULL, 0);
+  palm(-56.0f, -4.0f, 5.4f); palm(-62.0f, 46.0f, 5.0f); palm(-54.0f, 24.0f, 5.8f); palm(-66.0f, -56.0f, 5.2f);
+  hand_cart(-56.0f, 4.0f, 1); clay_jars(-57.5f, -34.0f, 0); clay_jars(-57.2f, 12.0f, 3);
+  // EAST: the ridge — dunes a step high, boulders, the MG nest, the fuel dump
+  bx(56.0f, 0.0f, -40.0f, 68.0f, 0.4f, -20.0f, dune);
+  bx(58.0f, 0.4f, -36.0f, 66.0f, 0.8f, -24.0f, dune);
+  bx(60.0f, 0.8f, -33.0f, 64.0f, 1.2f, -27.0f, dune);
+  bx(56.0f, 0.0f, 10.0f, 66.0f, 0.4f, 34.0f, dune);
+  bx(58.0f, 0.4f, 14.0f, 64.0f, 0.8f, 28.0f, dune);
+  static const float BO[8][4] = {{55.0f, -52.0f, 1.4f, 2.2f}, {62.0f, -48.0f, 1.8f, 2.8f}, {57.0f, -12.0f, 1.2f, 1.6f},
+                                 {65.0f, -4.0f, 2.0f, 3.2f}, {55.5f, 4.0f, 1.0f, 1.4f}, {66.0f, 44.0f, 2.2f, 3.0f},
+                                 {57.0f, 50.0f, 1.4f, 2.0f}, {63.0f, 60.0f, 1.6f, 2.4f}};
+  for (int b = 0; b < 8; b++) {
+    float x = BO[b][0], z = BO[b][1], r = BO[b][2], h = BO[b][3];
+    bx(x - r, 0.0f, z - r * 0.8f, x + r, h, z + r * 0.8f, tint(rock, 0.92f, 1.05f));
+    bx(x - r * 0.7f, h, z - r * 0.5f, x + r * 0.6f, h + 0.5f, z + r * 0.6f, tint(rock, 0.86f, 0.92f));
+  }
+  sand_ring(53.6f, -30.0f, 1.8f); dshk_prop(53.6f, -30.0f, 0);   // the MG nest at the ridge's foot
+  for (int k = 0; k < 7; k++) {                         // the fuel dump
+    float x = 58.0f + (float)(k % 4) * 0.8f, z = 40.0f + (float)(k / 4) * 0.8f;
+    barrel(x, z, k % 3 ? red : blu);
+  }
+  fuel_bladder(61.0f, 52.0f, 1, rgb(0.62f, 0.60f, 0.52f));
+  // SOUTH: the wadi — rocks, the palm grove, an abandoned truck
+  static const float SR[6][4] = {{-20.0f, 60.0f, 2.0f, 2.4f}, {-6.0f, 66.0f, 1.4f, 1.8f}, {18.0f, 58.0f, 2.4f, 3.0f},
+                                 {34.0f, 64.0f, 1.6f, 2.0f}, {46.0f, 58.0f, 1.2f, 1.4f}, {-64.0f, 64.0f, 2.0f, 2.6f}};
+  for (int b = 0; b < 6; b++) {
+    float x = SR[b][0], z = SR[b][1], r = SR[b][2], h = SR[b][3];
+    bx(x - r, 0.0f, z - r * 0.8f, x + r, h, z + r * 0.8f, tint(rock, 0.92f, 1.05f));
+  }
+  palm(0.0f, 58.0f, 5.6f); palm(6.0f, 62.0f, 5.0f); palm(-2.0f, 66.0f, 6.0f); palm(28.0f, 56.0f, 5.2f);
+  truck(-28.0f, 64.0f, 0, rgb(0.46f, 0.40f, 0.28f));
+  dumpster(40.0f, 66.0f, 0, rgb(0.30f, 0.34f, 0.22f));
+  g_mg_rows = rows;
+}
 static void compound_extras(void) {
   const town_style_t *s = &g_town;
   // HQ: two storeys, the stair up its south wall to the roof (hostage three).
@@ -2539,6 +3577,7 @@ static void compound_extras(void) {
   palm(-46.0f, -20.0f, 5.0f); palm(46.0f, 28.0f, 5.4f); palm(-44.0f, 16.0f, 5.6f);
   palm(30.0f, 49.0f, 5.0f); palm(-10.0f, 47.0f, 5.2f); palm(10.0f, 49.0f, 4.8f);
   palm(-48.0f, 30.0f, 5.0f); palm(47.0f, -30.0f, 5.2f);
+  compound_outer();
 }
 
 static void map_compound(void) {
@@ -2572,19 +3611,26 @@ typedef struct {
   void (*build)(void);
 } map_def_t;
 static const map_def_t MAP_DEFS[] = {
-  {"ARENA",    "arena",    -1, -1, 24.0f, 0.0f,  0, NULL},
-  {"FOUNDRY",  "foundry",   1,  4, 52.0f, 0.45f, 1, map_foundry},  // SLATE, STORMFRONT: the yard + the works
+  // the procedural arena: hidden (no menu, no rotation), the proofs' ground
+  {"PROVING GROUND", "proc", -1, -1, 24.0f, 0.0f,  0, NULL},
+  {"FOUNDRY",  "foundry",   1,  4, 70.0f, 0.45f, 1, map_foundry},  // SLATE, STORMFRONT: the yard + the works + rail yard, coil hall
   {"BAZAAR",   "bazaar",    2,  1, 42.0f, 0.45f, 1, map_bazaar},    // SAND, GOLDEN HOUR: the core + the souk
-  {"OUTPOST",  "outpost",   0,  0, 24.0f, 0.0f,  0, map_outpost},   // QUARTZ, HIGH NOON
-  {"CITADEL",  "citadel",   2,  6, 52.0f, 0.45f, 1, map_citadel},   // SAND, CLEAR AFTERNOON
-  {"HARBOR",   "harbor",    1,  3, 52.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN
-  {"REFINERY", "refinery",  0,  7, 52.0f, 0.45f, 1, map_refinery},  // QUARTZ, CRISP MORNING
-  {"COMPOUND", "compound",  2,  5, 52.0f, 0.45f, 1, map_compound},  // SAND, BLUE HOUR
+  {"OUTPOST",  "outpost",   0,  0, 40.0f, 0.45f, 1, map_outpost},   // QUARTZ, HIGH NOON: the FOB round the base
+  {"CITADEL",  "citadel",   2,  6, 70.0f, 0.45f, 1, map_citadel},   // SAND, CLEAR AFTERNOON: + ramparts, lower town
+  {"HARBOR",   "harbor",    1,  3, 70.0f, 0.45f, 1, map_harbor},    // SLATE, COLD DAWN: + the basin, the terminal
+  {"REFINERY", "refinery",  0,  7, 70.0f, 0.45f, 1, map_refinery},  // QUARTZ, CRISP MORNING: + tank farm, plant
+  {"COMPOUND", "compound",  2,  5, 70.0f, 0.45f, 1, map_compound},  // SAND, BLUE HOUR: + the desert round it
+  {"ARENA",    "arena",     1,  6, 44.0f, 0.45f, 1, map_training},  // SLATE, CLEAR AFTERNOON: the training zone
 };
+static_assert(MAP_ARENA_ID == 8, "MAP_ARENA_ID is MAP_DEFS' ARENA row");
 #define MAP_COUNT ((int)(sizeof MAP_DEFS / sizeof MAP_DEFS[0]))
 #define MAP_ROTATE MAP_COUNT          // the MAP setting's extra value
 static const char *const MAP_PICK_NAMES[MAP_COUNT + 1] = {
-  "ARENA", "FOUNDRY", "BAZAAR", "OUTPOST", "CITADEL", "HARBOR", "REFINERY", "COMPOUND", "ROTATE"};
+  "PROVING GROUND", "FOUNDRY", "BAZAAR", "OUTPOST", "CITADEL", "HARBOR", "REFINERY", "COMPOUND", "ARENA",
+  "ROTATE"};
+// The MAP picker's order: ARENA first, the towns, ROTATE (never map 0).
+static const int MAP_MENU_ORDER[MAP_COUNT] = {MAP_ARENA_ID, 1, 2, 3, 4, 5, 6, 7, MAP_ROTATE};
+static_assert(MAP_COUNT == 9, "MAP_MENU_ORDER lists every map but the hidden one, and ROTATE");
 static int map_parse(const char *s) {
   for (int i = 0; i < MAP_COUNT; i++) if (!strcmp(s, MAP_DEFS[i].key)) return i;
   return !strcmp(s, "rotate") ? MAP_ROTATE : -1;
@@ -2597,15 +3643,21 @@ static int map_routes(void) { return MAP_DEFS[map_id_valid(g_map_id)].route; }
 
 // Latch the MAP setting and decide this match's map. ROTATE steps through every
 // map in table order — `advance` is 0 at session bring-up, so a rotation opens
-// on ARENA, and 1 on each restart after it.
+// on ARENA, and 1 on each restart after it (0.8.9: in MAP_MENU_ORDER, which
+// leaves out the hidden procedural map).
 static void map_pick_apply(int advance) {
   int pick = g_cfg.sp_map;
-  if (pick < 0 || pick > MAP_ROTATE) pick = 0;
+  if (pick < 0 || pick > MAP_ROTATE) pick = MAP_ARENA_ID;
   g_map_pick = pick;
   // HOSTAGE RESCUE is a mission, and its mission is on one map.
   if (g_cfg.sp_mode == GM_RESCUE && !g_home) { g_map_id = MAP_COMPOUND_ID; return; }
   if (pick < MAP_COUNT) g_map_id = pick;
-  else g_map_id = advance ? (map_id_valid(g_map_id) + 1) % MAP_COUNT : 0;
+  else if (!advance) g_map_id = MAP_ARENA_ID;           // a rotation opens on ARENA
+  else {                                                // ...and never visits map 0
+    int k = 0;
+    for (int i = 0; i < MAP_COUNT; i++) if (MAP_MENU_ORDER[i] == g_map_id) k = i;
+    g_map_id = MAP_MENU_ORDER[(k + 1) % (MAP_COUNT - 1)];
+  }
 }
 
 static void map_generate_layout(uint32_t seed);

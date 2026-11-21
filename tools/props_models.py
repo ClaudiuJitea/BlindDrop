@@ -2124,6 +2124,569 @@ def _hol_clean():
         bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
         bm.to_mesh(o.data); bm.free()
 
+
+# ---------------------------------------------------------------------------
+# 0.8.9: THE INDUSTRY PROPS — the Refinery's pump skids, valve manifolds, LPG
+# spheres and fuel tankers; the Harbor's bollards, lifebuoy stands and a
+# fishing boat. Same frame as every prop: x forward, y up, z lateral.
+# ---------------------------------------------------------------------------
+def _flange(x, y, z, r, ax='x', col=(.30,.31,.33)):
+    if ax == 'x': o = _rx(x - .025, x + .025, y, z, r, 12)
+    elif ax == 'y': o = _ry(y - .025, y + .025, x, z, r, 12)
+    else: o = cyl_z(x, y, z - .025, z + .025, r, 12)
+    finish(o, col, .5, .6, 0)
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        if ax == 'x': b = _rx(x - .032, x + .032, y + r*.78*math.cos(a), z + r*.78*math.sin(a), .010, 4)
+        elif ax == 'y': b = _ry(y - .032, y + .032, x + r*.78*math.cos(a), z + r*.78*math.sin(a), .010, 4)
+        else: b = cyl_z(x + r*.78*math.cos(a), y + r*.78*math.sin(a), z - .032, z + .032, .010, 4)
+        finish(b, (.18,.18,.19), .5, .6, 0)
+
+def _wheel_ring(c, r, t, ax='y', col=(.80,.62,.10)):
+    """A valve handwheel: a ring of four bars round the stem, with its spokes."""
+    x, y, z = c; n = 8
+    pts = []
+    for i in range(n + 1):
+        a = 2 * math.pi * i / n
+        pts.append((x + r*math.cos(a), y, z + r*math.sin(a)) if ax == 'y' else (x, y + r*math.cos(a), z + r*math.sin(a)))
+    for a_, b_ in zip(pts, pts[1:]): finish(tube(a_, b_, t, 4), col, .45, .2, 0)
+    for k in range(3):
+        a = 2 * math.pi * k / 3
+        e = (x + r*math.cos(a), y, z + r*math.sin(a)) if ax == 'y' else (x, y + r*math.cos(a), z + r*math.sin(a))
+        finish(tube(c, e, t * .7, 4), col, .45, .2, 0)
+
+def pump_skid():
+    """A centrifugal process pump on its baseplate: the electric motor (painted),
+    the coupling guard, the volute casing with the suction nozzle at its end and
+    the discharge standing up, both flanged, the drip rim and anchor bolts."""
+    clear()
+    GRY = (.30,.31,.33); DRK = (.12,.12,.13)
+    finish(box((0, .07, 0), (1.05, .07, .36)), GRY, .6, .4, 0)                          # baseplate
+    finish(box((0, .145, 0), (1.07, .008, .38)), (.24,.25,.26), .6, .4, 0)              # drip rim
+    for xx in (-.95, -.30, .40, .95):
+        for zz in (-.30, .30):
+            finish(_ry(.14, .19, xx, zz, .018, 8), DRK, .5, .6, 0)
+    # motor (-x half): ribbed frame, fan cowl, terminal box, feet
+    finish(_rx(-1.00, -.20, .50, 0, .27, 28), (.5,.5,.5), .45, .3, 0, flag=F_PAINT)
+    for k in range(5):
+        finish(_rx(-.90 + k * .15, -.88 + k * .15, .50, 0, .285, 20), (.5,.5,.5), .5, .3, 0, flag=F_PAINT)
+    finish(_rx(-1.06, -1.00, .50, 0, .25, 28), DRK, .6, .3, 0)                          # fan cowl
+    finish(box((-.55, .82, 0), (.12, .06, .10)), (.5,.5,.5), .5, .3, 0, flag=F_PAINT)  # terminal box
+    for xx in (-.85, -.35):
+        finish(box((xx, .20, 0), (.06, .06, .24)), (.5,.5,.5), .5, .3, 0, flag=F_PAINT)
+    # coupling guard
+    finish(prof_front([(-.17, .26), (.17, .26), (.17, .62), (.10, .72), (-.10, .72), (-.17, .62)], -.20, .10, 'guard'), (.80,.62,.10), .5, .2, 0)
+    # the pump: bearing frame, volute, suction (axial, +x), discharge (up)
+    finish(_rx(.10, .40, .50, 0, .12, 20), GRY, .5, .5, 0)
+    finish(_rx(.40, .66, .50, 0, .30, 28), (.5,.5,.5), .5, .4, 0, flag=F_PAINT2)
+    finish(_rx(.66, .98, .50, 0, .11, 20), GRY, .5, .5, 0)
+    _flange(.98, .50, 0, .17, 'x')
+    finish(_ry(.62, 1.02, .53, 0, .085, 18), GRY, .5, .5, 0)
+    _flange(.53, 1.02, 0, .14, 'y')
+    finish(box((.53, .40, .30), (.10, .22, .02)), DRK, .5, .4, 0)                       # volute foot
+
+def valve_manifold():
+    """A process manifold: a 10-inch header along x on two pipe stands, three
+    branch risers each closed by a flanged gate valve (body, bonnet, yoke and
+    a yellow handwheel on its stem), a pressure gauge, painted pipe (paint)."""
+    clear()
+    GRY = (.30,.31,.33); DRK = (.14,.14,.15)
+    finish(_rx(-1.25, 1.25, .62, 0, .13, 24), (.5,.5,.5), .5, .4, 0, flag=F_PAINT)
+    for xx in (-1.25, 1.25): _flange(xx, .62, 0, .19, 'x')
+    for xx in (-.90, .90):                                       # pipe stands
+        finish(box((xx, .24, 0), (.05, .24, .05)), GRY, .6, .4, 0)
+        finish(box((xx, .47, 0), (.18, .02, .16)), GRY, .6, .4, 0)
+        finish(box((xx, .015, 0), (.18, .015, .18)), DRK, .6, .4, 0)
+    for k, xx in enumerate((-.60, 0.0, .60)):
+        finish(_ry(.62, .98, xx, 0, .075, 18), (.5,.5,.5), .5, .4, 0, flag=F_PAINT)
+        _flange(xx, .98, 0, .12, 'y')
+        vb = rbox(.11, .10, .14, .02, 'vbody'); place_o(vb, (xx, 1.10, 0))
+        finish(vb, GRY, .45, .5, 0)
+        _flange(xx, 1.22, 0, .12, 'y')
+        finish(_ry(1.22, 1.34, xx, 0, .055, 14), GRY, .45, .5, 0)               # bonnet
+        for zz in (-.05, .05):                                                  # yoke
+            finish(box((xx, 1.44, zz), (.012, .10, .010)), GRY, .45, .5, 0)
+        finish(_ry(1.34, 1.66, xx, 0, .012, 8), (.70,.71,.73), .3, .8, 0)        # stem
+        _wheel_ring((xx, 1.56, 0), .15, .012)
+    finish(_ry(.75, .86, 1.05, 0, .010, 8), DRK, .4, .6, 0)                     # gauge
+    finish(cyl_z(1.05, .92, -.02, .02, .06, 18), (.85,.85,.82), .4, .2, 0)
+    finish(cyl_z(1.05, .92, .02, .026, .045, 18), (.15,.18,.20), .1, 0, 0, flag=F_GLASS)
+
+def lpg_sphere():
+    """An LPG storage sphere, 10 m across: the shell on eight tubular legs with
+    their X-bracing, the equator band where the legs meet it, the top nozzle
+    platform with its handrail and relief valves, the stair stringer running
+    up the side (drawn; the world places its own collision)."""
+    clear()
+    R, CY = 5.0, 7.2
+    bm = bmesh.new(); bmesh.ops.create_uvsphere(bm, u_segments=28, v_segments=16, radius=R)
+    o = from_bm(bm, 'sphere'); place_o(o, (0, CY, 0)); finish(o, (.5,.5,.5), .40, .15, 0, flag=F_PAINT)
+    finish(_ry(CY - .25, CY + .25, 0, 0, R + .06, 28), (.5,.5,.5), .45, .2, 0, flag=F_PAINT2)   # equator band
+    LEG = (.40,.41,.43)
+    pts = []
+    for k in range(8):
+        a = k * math.pi / 4 + math.pi / 8
+        x, z = (R + .02) * math.cos(a), (R + .02) * math.sin(a)
+        pts.append((x, z))
+        finish(_ry(0, CY, x, z, .30, 10), LEG, .55, .4, 0)
+        finish(box((x, .10, z), (.45, .10, .45)), (.45,.45,.43), .8, 0, 0)            # footing
+    for (x0, z0), (x1, z1) in zip(pts, pts[1:] + pts[:1]):
+        finish(tube((x0, .6, z0), (x1, CY - 1.4, z1), .07, 8), LEG, .55, .4, 0)
+        finish(tube((x1, .6, z1), (x0, CY - 1.4, z0), .07, 8), LEG, .55, .4, 0)
+    # top platform, railing, relief valves
+    finish(_ry(CY + R - .05, CY + R + .10, 0, 0, 1.3, 24), (.30,.31,.33), .6, .4, 0)
+    for k in range(10):
+        a = k * math.pi / 5
+        finish(_ry(CY + R + .10, CY + R + 1.10, 1.25*math.cos(a), 1.25*math.sin(a), .03, 6), (.80,.62,.10), .5, .2, 0)
+    for k in range(10):
+        a0, a1 = k * math.pi / 5, (k + 1) * math.pi / 5
+        finish(tube((1.25*math.cos(a0), CY + R + 1.08, 1.25*math.sin(a0)), (1.25*math.cos(a1), CY + R + 1.08, 1.25*math.sin(a1)), .03, 6), (.80,.62,.10), .5, .2, 0)
+    for xx in (-.4, .4):
+        finish(_ry(CY + R + .10, CY + R + .70, xx, 0, .09, 14), (.30,.31,.33), .5, .5, 0)
+        finish(_ry(CY + R + .70, CY + R + .80, xx, 0, .13, 14), (.70,.12,.10), .5, .3, 0)
+    # the stair stringer spiralling up the +x side to the platform
+    sp = []
+    for i in range(25):
+        t = i / 24.0
+        a = -.9 + 1.6 * t
+        ph = math.pi / 2 * t
+        rr = R + .9 if t < .5 else (R + .9) * math.cos((t - .5) * 2 * math.pi / 2.8)
+        sp.append((rr * math.cos(a), .4 + t * (CY + R - .4), rr * math.sin(a)))
+    for a_, b_ in zip(sp, sp[1:]):
+        finish(tube(a_, b_, .06, 6), (.80,.62,.10), .5, .2, 0)
+
+def tanker_body():
+    """A fuel tanker semi-trailer's barrel on the truck chassis (the cab is
+    PROP_TRUCK): the elliptical aluminium tank in three compartments with
+    its baffles' seams, the top walkway, the manlid hatches, the fold-down
+    rail, the rear ladder, the underslung valve cabinet and the hose trays,
+    the trailer wheels and mud flaps. Spans x -3.6 .. 3.4 like the container."""
+    clear()
+    AL = (.70,.71,.73); DRK = (.10,.10,.11)
+    bm = bmesh.new(); n = 32; rings = []
+    for xx in (-3.55, -3.45, 3.25, 3.35):
+        sc = .92 if abs(xx) > 3.4 or xx > 3.3 else 1.0
+        rings.append([bm.verts.new((xx, 2.30 + .95*sc*math.sin(2*math.pi*i/n), 1.18*sc*math.cos(2*math.pi*i/n))) for i in range(n)])
+    for k in range(len(rings) - 1):
+        for i in range(n):
+            j = (i + 1) % n
+            bm.faces.new((rings[k][i], rings[k][j], rings[k+1][j], rings[k+1][i]))
+    bm.faces.new(rings[0][::-1]); bm.faces.new(rings[-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    finish(from_bm(bm, 'barrel'), (.5,.5,.5), .30, .7, 0, flag=F_PAINT)
+    for xx in (-1.20, 1.10):                                                 # compartment seams
+        finish(_rx(xx - .03, xx + .03, 2.30, 0, 1.0, 32), (.55,.56,.58), .4, .6, 0)
+    finish(box((-.1, 3.30, 0), (3.30, .03, .30)), (.35,.36,.38), .7, .4, 0)   # walkway
+    for xx in (-2.4, -.05, 2.2):
+        finish(_ry(3.25, 3.40, xx, 0, .26, 18), AL, .3, .7, 0)
+        finish(_ry(3.40, 3.46, xx, 0, .20, 18), (.40,.41,.43), .4, .6, 0)
+    for zz in (-.34, .34):                                                   # folded rails
+        finish(_rx(-3.2, 3.2, 3.52, zz, .022, 6), (.80,.62,.10), .5, .2, 0)
+    for k in range(6):                                                       # rear ladder
+        finish(box((-3.62, 1.35 + k * .34, 0), (.02, .015, .22)), AL, .4, .6, 0)
+    for zz in (-.22, .22): finish(box((-3.62, 2.2, zz), (.02, 1.0, .02)), AL, .4, .6, 0)
+    finish(box((.2, 1.12, 0), (.75, .24, .95)), (.5,.5,.5), .5, .3, 0, flag=F_PAINT2)   # valve cabinet
+    for zz in (-1.0, 1.0):
+        finish(box((-1.8, 1.30, zz), (1.2, .08, .10)), DRK, .6, .3, 0)       # hose trays
+        finish(_rx(-3.0, -.6, 1.34, zz, .07, 10), (.20,.20,.22), .8, 0, 0)
+    for xx in (-2.95, -1.85):
+        for sz in (-1, 1):
+            finish(cyl_z(xx, .52, sz * .70, sz * 1.15, .50, 22), DRK, .9, 0, 0)
+            finish(cyl_z(xx, .52, sz * 1.15, sz * 1.16, .30, 16), (.55,.56,.58), .4, .6, 0)
+    for sz in (-1, 1):
+        finish(box((-3.40, .55, sz * .95), (.02, .30, .22)), DRK, .9, 0, 0)  # mud flaps
+
+def bollard():
+    """A cast-iron quay bollard: the mushroom head on a waisted post, its base
+    plate and four bolt heads, painted black with a worn rope groove."""
+    clear()
+    IRON = (.07,.07,.075)
+    finish(_ry(0, .06, 0, 0, .30, 24), IRON, .7, .3, 0)
+    for k in range(4):
+        a = k * math.pi / 2 + math.pi / 4
+        finish(_ry(.06, .10, .22*math.cos(a), .22*math.sin(a), .03, 8), IRON, .6, .4, 0)
+    rings = [(.06, .19), (.20, .16), (.36, .15), (.46, .17), (.52, .27), (.60, .27), (.64, .22)]
+    for (y0, r0), (y1, r1) in zip(rings, rings[1:]):
+        o = _ry(y0, y1, 0, 0, max(r0, r1), 24)
+        finish(o, IRON, .65, .3, 0)
+    finish(_ry(.44, .48, 0, 0, .175, 24), (.32,.30,.27), .9, .1, 0)
+
+def lifebuoy_stand():
+    """A quay lifebuoy station: a steel post, the bracket, the orange-and-white
+    ring buoy and its coiled throwing line in a box."""
+    clear()
+    POST = (.75,.70,.12)
+    finish(box((0, .80, 0), (.04, .80, .04)), POST, .5, .3, 0)
+    finish(box((0, .02, 0), (.15, .02, .15)), (.30,.31,.33), .6, .4, 0)
+    n = 20; R, r = .34, .065
+    for i in range(n):
+        a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
+        col = (.92,.32,.06) if (i // 5) % 2 == 0 else (.92,.92,.88)
+        finish(tube((.07, 1.10 + R*math.sin(a0), R*math.cos(a0)), (.07, 1.10 + R*math.sin(a1), R*math.cos(a1)), r, 10), col, .6, 0, 0)
+    finish(box((.05, .40, 0), (.06, .14, .14)), (.85,.20,.06), .6, 0, 0)
+
+def fishing_boat():
+    """A 10 m harbour fishing boat at its mooring: the lofted hull with its
+    sheer rising to the bow and the boot-topping band, the wheelhouse aft of
+    midships with its windows, the mast and boom, the net drum on the stern,
+    the rubbing strake and tyre fenders down the side."""
+    clear()
+    bm = bmesh.new(); n = 14; rings = []
+    sts = [(-4.6, .80, 1.25, .40), (-4.0, 1.30, 1.40, .10), (-2.0, 1.70, 1.45, -.30), (0, 1.80, 1.50, -.45),
+           (2.0, 1.60, 1.60, -.35), (3.6, 1.00, 1.85, -.05), (4.6, .15, 2.05, .40)]
+    for x, hw, top, bot in sts:
+        ring = []
+        for i in range(n + 1):
+            t = i / n
+            a = math.pi * t
+            zz = -hw * math.cos(a)
+            dep = 1 - abs(math.cos(a)) ** 2.2
+            ring.append(bm.verts.new((x, top - (top - bot) * dep, zz)))
+        rings.append(ring)
+    for k in range(len(rings) - 1):
+        for i in range(n):
+            bm.faces.new((rings[k][i], rings[k][i+1], rings[k+1][i+1], rings[k+1][i]))
+    bm.faces.new([r_[0] for r_ in rings] + [r_[-1] for r_ in rings][::-1])   # the deck
+    bm.faces.new(rings[0])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    finish(from_bm(bm, 'hull'), (.5,.5,.5), .45, .1, 0, flag=F_PAINT)
+    for sz in (-1, 1):
+        finish(box((-.2, 1.38, sz * 1.50), (3.6, .06, .05)), (.55,.32,.14), .7, 0, 0)
+        for xx in (-2.5, -.5, 1.5):
+            finish(cyl_z(xx, .95, sz * 1.50, sz * 1.72, .24, 14), (.05,.05,.055), .9, 0, 0)
+    # wheelhouse
+    finish(box((-1.1, 2.35, 0), (1.0, .75, .95)), (.90,.90,.86), .5, 0, 0)
+    finish(box((-1.1, 3.14, 0), (1.15, .06, 1.05)), (.5,.5,.5), .5, 0, 0, flag=F_PAINT2)
+    for sz in (-1, 1):
+        finish(box((-1.0, 2.62, sz * .955), (.70, .22, .01)), (.12,.17,.21), .1, 0, 0, flag=F_GLASS)
+    finish(box((-.095, 2.62, 0), (.01, .22, .75)), (.12,.17,.21), .1, 0, 0, flag=F_GLASS)
+    # mast, boom, light, net drum
+    finish(_ry(1.40, 6.2, 1.2, 0, .07, 10), (.85,.85,.82), .5, .2, 0)
+    finish(tube((1.2, 2.6, 0), (-3.6, 3.6, 0), .05, 8), (.85,.85,.82), .5, .2, 0)
+    finish(_ry(6.2, 6.4, 1.2, 0, .09, 10), (.95,.80,.30), .3, 0, 0)
+    finish(cyl_z(-3.6, 1.95, -.70, .70, .40, 20), (.25,.38,.22), .9, 0, 0)
+    for sz in (-1, 1): finish(cyl_z(-3.6, 1.95, sz * .70, sz * .76, .55, 20), (.30,.31,.33), .5, .5, 0)
+
+# ---------------------------------------------------------------------------
+# 0.8.9 (second wave): A PROP SET PER MAP for the grown Outpost, Citadel,
+# Foundry and Compound. x forward, y up, z lateral, metres.
+# ---------------------------------------------------------------------------
+OD = (.32,.34,.24); ODD = (.22,.24,.17); GUNM = (.14,.14,.15)
+def mortar():
+    """An 81 mm mortar in its pit: the round baseplate, the tube raised at 60
+    degrees on its bipod with the traversing gear and sight, two ammo cases."""
+    clear()
+    finish(_ry(0, .06, 0, 0, .30, 20), GUNM, .6, .4, 0)
+    finish(_ry(.06, .10, 0, 0, .14, 16), GUNM, .6, .4, 0)
+    a = math.radians(60); L = 1.2
+    tip = (L * math.cos(a), .10 + L * math.sin(a), 0)
+    finish(tube((0, .10, 0), tip, .045, 14), OD, .5, .3, 0)
+    finish(tube((tip[0]*.98, tip[1]*.98, 0), tip, .052, 14), GUNM, .5, .4, 0)
+    mid = (.42 * math.cos(a), .10 + .42 * math.sin(a), 0)
+    finish(box(mid, (.06, .05, .09)), GUNM, .5, .4, 0)
+    for sz in (-1, 1):
+        finish(tube(mid, (.78, .02, sz * .32), .018, 8), GUNM, .5, .4, 0)
+        finish(box((.78, .015, sz * .32), (.05, .015, .05)), GUNM, .5, .4, 0)
+    finish(box((mid[0] - .05, mid[1] + .10, .10), (.03, .04, .03)), (.20,.22,.16), .5, .2, 0)
+    for k, zz in enumerate((-.55, -.30)):
+        finish(box((-.40, .10, zz), (.30, .10, .11)), OD if k else ODD, .7, 0, 0)
+        finish(box((-.40, .205, zz), (.31, .006, .112)), (.12,.12,.10), .7, 0, 0)
+
+def porta_cabin():
+    """A field latrine: the moulded green cabin with its ribbed walls, the
+    white roof, the door with its occupied latch and the vent pipe."""
+    clear()
+    W, H = .58, 2.20
+    finish(box((0, .025, 0), (W + .02, .025, W + .02)), (.18,.30,.20), .7, 0, 0)
+    body = rbox(W, H / 2, W, .03, 'cab'); place_o(body, (0, H / 2 + .05, 0))
+    finish(body, (.5,.5,.5), .55, 0, 0, flag=F_PAINT)
+    for k in range(5):
+        for sz in (-1, 1):
+            finish(box((-.40 + k * .20, 1.1, sz * (W + .005)), (.025, .90, .01)), (.5,.5,.5), .55, 0, 0, flag=F_PAINT)
+    roof = rbox(W + .04, .06, W + .04, .03, 'roof'); place_o(roof, (0, H + .10, 0))
+    finish(roof, (.90,.90,.86), .5, 0, 0)
+    finish(box((W + .006, 1.05, 0), (.008, .92, .44)), (.5,.5,.5), .5, 0, 0, flag=F_PAINT2)
+    finish(box((W + .018, 1.15, .32), (.01, .04, .05)), (.70,.12,.10), .4, 0, 0)
+    finish(_ry(H + .1, H + .45, -.30, -.30, .05, 10), (.20,.20,.20), .6, 0, 0)
+
+def fuel_bladder():
+    """THE FUEL POINT (0.8.9, replacing the bladder nobody read as one): a 6 m
+    horizontal steel fuel tank on two saddles, painted, with its weld bands,
+    the manway and vent on top and a ladder up the end; the red FLAMMABLE
+    diamond and a yellow stripe on its side; the dispenser cabinet beside it
+    with its hose looped on the hook and the nozzle; a drip tray and a row of
+    green jerrycans. x along the tank; the dispenser on +z."""
+    clear()
+    R, L, CY = 1.05, 2.9, 1.55
+    STL = (.30,.31,.33); DRK = (.12,.12,.13)
+    rings = [(-L - .10, R * .55), (-L, R * .95), (-L + .06, R), (L - .06, R), (L, R * .95), (L + .10, R * .55)]
+    for (x0, r0), (x1, r1) in zip(rings, rings[1:]):
+        finish(_rx(x0, x1, CY, 0, max(r0, r1), 32), (.5,.5,.5), .45, .3, 0, flag=F_PAINT)
+    for xx in (-1.9, -.6, .6, 1.9):                                       # weld bands
+        finish(_rx(xx - .03, xx + .03, CY, 0, R + .015, 32), tuple(c * .8 for c in (.5,.5,.5)), .5, .3, 0, flag=F_PAINT2)
+    for sx in (-1.8, 1.8):                                               # saddles
+        finish(box((sx, .30, 0), (.18, .30, R * .85)), STL, .6, .4, 0)
+        finish(box((sx, .02, 0), (.30, .02, R * .95)), DRK, .6, .4, 0)
+    finish(_ry(CY + R - .05, CY + R + .12, .4, 0, .30, 20), STL, .5, .5, 0)   # manway
+    finish(_ry(CY + R - .05, CY + R + .45, -1.2, 0, .05, 10), STL, .5, .5, 0) # vent
+    finish(box((-1.2, CY + R + .48, 0), (.10, .04, .10)), STL, .5, .5, 0)
+    for k in range(7):                                                   # end ladder
+        finish(box((-L - .16, .35 + k * .34, 0), (.02, .015, .22)), (.86,.66,.12), .5, .3, 0)
+    for sz in (-1, 1): finish(box((-L - .16, 1.4, sz * .22), (.02, 1.2, .02)), (.86,.66,.12), .5, .3, 0)
+    # the placard and stripe, on the dispenser side
+    finish(box((0, CY + .1, R + .01), (L * .92, .07, .006)), (.86,.66,.12), .5, .2, 0)
+    pl = box((1.0, CY + .5, R * .93), (.22, .22, .01)); place_o(pl, (0, 0, 0), (0, 0, math.radians(45)))
+    finish(pl, (.78,.12,.08), .5, 0, 0)
+    # the dispenser: cabinet, display, the hose on its hook, the nozzle
+    finish(box((1.2, .75, R + 1.0), (.32, .75, .28)), (.82,.14,.10), .5, .2, 0)
+    finish(box((1.2, 1.30, R + 1.29), (.22, .14, .01)), (.10,.12,.14), .2, 0, 0, flag=F_GLASS)
+    finish(box((1.2, 1.56, R + 1.0), (.34, .06, .30)), (.86,.86,.82), .5, .2, 0)
+    pts = [(1.45, 1.10, R + 1.30), (1.75, .80, R + 1.45), (1.80, .40, R + 1.40), (1.62, .30, R + 1.30), (1.52, .95, R + 1.31)]
+    for p0, p1 in zip(pts, pts[1:]): finish(tube(p0, p1, .03, 8), (.06,.06,.06), .8, 0, 0)
+    finish(box((1.52, 1.0, R + 1.33), (.04, .08, .03)), (.20,.20,.20), .5, .5, 0)
+    finish(tube((.88, .40, R + 1.0), (.3, .40, R * .6), .05, 8), STL, .5, .5, 0)   # feed pipe
+    # drip tray and jerrycans
+    finish(box((-1.2, .04, R + .95), (.80, .04, .45)), DRK, .6, .3, 0)
+    for k in range(4):
+        jc = rbox(.17, .24, .08, .02, 'jerry'); place_o(jc, (-1.75 + k * .38, .32, R + .95))
+        finish(jc, (.24,.32,.18), .7, .1, 0)
+        finish(box((-1.75 + k * .38, .60, R + .95), (.08, .03, .03)), (.18,.24,.14), .7, 0, 0)
+
+def satcom_dish():
+    """A ground satellite terminal: the 2.4 m parabolic reflector (a turned
+    dish, its back ribbed) tilted 50 degrees up at the sky, the feed horn on
+    three struts at its focus, the azimuth-elevation mount on a steel
+    pedestal, the four outrigger feet weighed down with sandbags, the cable
+    run to its modem box."""
+    clear()
+    Rd, D = 1.2, .30                                   # radius, dish depth
+    bm = bmesh.new(); n = 32; m = 8; rings = []
+    for j in range(m + 1):
+        r = Rd * j / m; y = D * (r / Rd) ** 2
+        rings.append([bm.verts.new((r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n), y)) for i in range(n)] if j else [bm.verts.new((0, 0, 0))])
+    for j in range(1, m + 1):
+        for i in range(n):
+            k = (i + 1) % n
+            if j == 1: bm.faces.new((rings[0][0], rings[1][i], rings[1][k]))
+            else: bm.faces.new((rings[j - 1][i], rings[j][i], rings[j][k], rings[j - 1][k]))
+    back = [bm.verts.new((v.co.x, v.co.y, v.co.z - .04)) for v in rings[m]]
+    for i in range(n):
+        k = (i + 1) % n
+        bm.faces.new((rings[m][i], back[i], back[k], rings[m][k]))
+    bm.faces.new(back[::-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    dish = from_bm(bm, 'dish')
+    hz = D + .9                                        # the focus, on the axis
+    horn = cyl_z(0, 0, hz - .05, hz + .20, .09, 14, 'horn')
+    hub = cyl_z(0, 0, -.30, .02, .16, 16, 'hub')
+    ax = -math.radians(50)                             # the axis 50 deg above the horizon
+    for o in (dish, horn, hub):
+        place_o(o, (0, 1.55, 0), (ax, 0, 0))
+    def P(x, y, z):                                    # the same turn, for a point
+        return (x, 1.55 + y * math.cos(ax) - z * math.sin(ax), y * math.sin(ax) + z * math.cos(ax))
+    feed = []
+    for k in range(3):
+        a = k * 2 * math.pi / 3 + math.pi / 2
+        feed.append(tube(P(Rd * .93 * math.cos(a), Rd * .93 * math.sin(a), D * .86), P(0, 0, hz), .02, 6))
+    finish(dish, (.88,.88,.85), .45, .2, 0)
+    finish(horn, (.30,.31,.33), .5, .5, 0)
+    finish(hub, (.30,.31,.33), .5, .5, 0)
+    for o in feed: finish(o, (.70,.71,.73), .4, .6, 0)
+    finish(_ry(0, 1.40, 0, -.15, .10, 14), (.36,.38,.28), .55, .4, 0)        # pedestal
+    finish(box((0, 1.45, -.15), (.20, .12, .20)), (.36,.38,.28), .55, .4, 0)
+    for a in (0.785, 2.356, 3.927, 5.498):
+        finish(tube((0, .10, -.15), (1.1 * math.cos(a), .04, -.15 + 1.1 * math.sin(a)), .04, 8), (.30,.31,.33), .55, .4, 0)
+        sb = rbox(.24, .09, .16, .06, 'sbag'); place_o(sb, (1.1 * math.cos(a), .10, -.15 + 1.1 * math.sin(a)))
+        finish(sb, (.60,.54,.40), .95, 0, 0)
+    finish(box((1.2, .30, -.9), (.25, .30, .20)), (.36,.38,.28), .6, .3, 0)  # modem box
+    finish(tube((0, .30, -.15), (1.0, .10, -.8), .025, 6), (.06,.06,.06), .8, 0, 0)
+
+def cannon():
+    """An old fortress cannon on its garrison carriage: the bronze barrel with
+    its reinforcing rings and cascabel, the timber cheeks, the iron-shod
+    trucks (small wheels), the elevating quoin, a pyramid of shot."""
+    clear()
+    BR = (.52,.38,.18); TIM = (.36,.24,.14); IRON = (.12,.12,.13)
+    rings = [(-.55, .17), (-.45, .19), (-.30, .18), (.30, .15), (.40, .16), (1.30, .12), (1.42, .14), (1.48, .13)]
+    for (x0, r0), (x1, r1) in zip(rings, rings[1:]):
+        finish(_rx(x0, x1, .62, 0, max(r0, r1), 20), BR, .35, .8, 0)
+    _ball((-.62, .62, 0), .07, BR, .35, .8)
+    for sz in (-1, 1):
+        finish(prof([(-.70, .18), (.40, .18), (.40, .50), (.10, .62), (-.40, .55), (-.70, .40)], sz*.24 - .05, sz*.24 + .05, 'cheek'), TIM, .8, 0, 0)
+        for xx in (-.45, .25):
+            finish(cyl_z(xx, .16, sz * .28, sz * .36, .16, 16), TIM, .8, 0, 0)
+            finish(cyl_z(xx, .16, sz * .36, sz * .37, .16, 16), IRON, .5, .5, 0)
+    finish(box((-.15, .20, 0), (.50, .05, .20)), TIM, .8, 0, 0)
+    finish(box((-.40, .42, 0), (.10, .05, .16)), TIM, .8, 0, 0)
+    for k, (xx, zz, yy) in enumerate(((1.0, .45, .09), (1.18, .45, .09), (1.09, .60, .09), (1.09, .52, .23))):
+        _ball((xx, yy, zz), .09, IRON, .5, .5)
+
+def hand_cart():
+    """A two-wheeled market cart: the plank bed with its side rails, the long
+    shafts, the spoked wheels on their axle, a prop leg, sacks in the bed."""
+    clear()
+    WD = (.46,.32,.18); WDD = (.32,.22,.12)
+    finish(box((0, .62, 0), (.85, .03, .55)), WD, .85, 0, 0)
+    for sz in (-1, 1):
+        finish(box((0, .78, sz * .55), (.85, .13, .02)), WDD, .85, 0, 0)
+        finish(box((1.45, .60, sz * .40), (.75, .025, .025)), WDD, .85, 0, 0)
+        finish(cyl_z(0, .42, sz * .62, sz * .70, .42, 24), WDD, .85, 0, 0)
+        for k in range(6):
+            a = k * math.pi / 3
+            finish(tube((0, .42, sz * .66), (.40 * math.cos(a), .42 + .40 * math.sin(a), sz * .66), .018, 6), WD, .85, 0, 0)
+    finish(cyl_z(0, .42, -.72, .72, .03, 10), (.20,.20,.20), .5, .5, 0)
+    finish(box((-.80, .30, 0), (.03, .30, .04)), WDD, .85, 0, 0)
+    for k, (xx, zz) in enumerate(((-.40, -.20), (.10, .15), (.45, -.25))):
+        sk = rbox(.28, .16, .20, .08, 'sack'); place_o(sk, (xx, .81, zz))
+        finish(sk, (.66,.58,.42) if k != 1 else (.52,.44,.30), .95, 0, 0)
+
+def lathe_y(rings, x, z, seg=20, name='ly'):
+    """Rings (y, r) turned round a vertical axis through (x, z), capped."""
+    bm = bmesh.new(); rv = []
+    for y, r in rings:
+        rv.append([bm.verts.new((x + r*math.cos(2*math.pi*i/seg), y, z + r*math.sin(2*math.pi*i/seg))) for i in range(seg)])
+    for k in range(len(rv) - 1):
+        for i in range(seg):
+            j = (i + 1) % seg
+            bm.faces.new((rv[k][i], rv[k+1][i], rv[k+1][j], rv[k][j]))
+    bm.faces.new(rv[0]); bm.faces.new(rv[-1][::-1])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    return from_bm(bm, name)
+
+def clay_jars():
+    """Three big clay storage jars and a small one: turned bodies swelling to
+    their shoulders, the necks and rolled lips, one with its wooden lid."""
+    clear()
+    def jar(x, z, s, col, lid=False):
+        rings = [(0, .09), (.04, .16), (.14, .23), (.30, .28), (.46, .28), (.58, .24), (.68, .16), (.75, .10), (.80, .10), (.83, .13), (.86, .12)]
+        finish(lathe_y([(y * s, r * s) for y, r in rings], x, z, 20), col, .9, 0, 0)
+        if lid: finish(lathe_y([(.84 * s, .13 * s), (.88 * s, .13 * s), (.90 * s, .05 * s)], x, z, 16), (.36,.24,.14), .8, 0, 0)
+    jar(0, 0, 1.0, (.62,.38,.22), True); jar(.55, .20, .92, (.68,.44,.26)); jar(.10, .58, .85, (.58,.36,.22)); jar(.62, -.38, .50, (.70,.48,.30))
+
+def steel_coil():
+    """A hot-rolled steel coil on its timber saddle, eye horizontal: the wound
+    strip as a thick drum, its dark bore, the strapping bands."""
+    clear()
+    R0, R1, W = .30, .78, .70
+    finish(cyl_z(0, .86, -W/2, W/2, R1, 32), (.5,.5,.5), .45, .7, 0, flag=F_PAINT)
+    for sz in (-1, 1):
+        finish(cyl_z(0, .86, sz * W/2 - (.004 if sz < 0 else 0), sz * W/2 + (.004 if sz > 0 else 0), R0, 24), (.05,.05,.05), .9, 0, 0)
+        finish(cyl_z(0, .86, sz * .20 - .01, sz * .20 + .01, R1 + .008, 32), (.10,.10,.11), .5, .5, 0)
+    finish(box((.0, .06, 0), (.62, .06, .40)), (.40,.28,.16), .9, 0, 0)
+    for sx in (-1, 1): finish(box((sx * .48, .20, 0), (.10, .10, .40)), (.40,.28,.16), .9, 0, 0)
+
+def ladle():
+    """A foundry casting ladle at rest on its stand: the refractory-lined steel
+    bucket, its trunnions and the lifting bail, the pouring lip, the cold slag
+    crust inside, the slide-gate nozzle under it."""
+    clear()
+    STL = (.26,.26,.27); REF = (.55,.50,.44)
+    rings = [(.40, .95), (.50, 1.00), (2.20, 1.15), (2.30, 1.20)]
+    for (y0, r0), (y1, r1) in zip(rings, rings[1:]):
+        finish(_ry(y0, y1, 0, 0, max(r0, r1), 28), (.5,.5,.5), .55, .5, 0, flag=F_PAINT)
+    finish(_ry(2.22, 2.26, 0, 0, 1.06, 28), (.12,.10,.09), .9, 0, 0)
+    finish(_ry(2.20, 2.24, 0, 0, 1.10, 28), REF, .9, 0, 0)
+    for k in range(4):
+        finish(_ry(.70 + k * .40, .78 + k * .40, 0, 0, 1.08 + k * .03, 28), STL, .5, .5, 0)
+    for sz in (-1, 1):
+        finish(cyl_z(0, 1.60, sz * 1.12, sz * 1.40, .16, 16), STL, .5, .5, 0)
+        finish(box((0, 2.40, sz * 1.32), (.10, .80, .06)), STL, .5, .5, 0)
+    finish(box((0, 3.25, 0), (.12, .08, 1.38)), STL, .5, .5, 0)
+    finish(box((1.20, 2.25, 0), (.18, .05, .22)), STL, .5, .5, 0)
+    finish(_ry(.20, .40, .30, 0, .12, 12), STL, .5, .5, 0)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            finish(box((sx * .70, .20, sz * .70), (.12, .20, .12)), (.30,.31,.33), .6, .4, 0)
+
+def gas_cage():
+    """A gas cylinder cage: the steel mesh frame on its plinth, six cylinders
+    chained inside (oxygen black-and-white, acetylene maroon), the valve caps."""
+    clear()
+    FR = (.30,.31,.33)
+    for sx in (-1, 1):
+        for sz in (-1, 1):
+            finish(box((sx * .60, .85, sz * .40), (.025, .85, .025)), FR, .5, .5, 0)
+    for yy in (.05, .90, 1.68):
+        for sz in (-1, 1): finish(box((0, yy, sz * .40), (.62, .02, .02)), FR, .5, .5, 0)
+        for sx in (-1, 1): finish(box((sx * .60, yy, 0), (.02, .02, .42)), FR, .5, .5, 0)
+    finish(box((0, 1.70, 0), (.62, .015, .42)), FR, .5, .5, 0)
+    for k in range(6):
+        x = -.38 + (k % 3) * .38; z = -.17 if k < 3 else .17
+        col = (.70,.20,.20) if k % 2 else (.10,.10,.11)
+        finish(_ry(.06, 1.35, x, z, .11, 14), col, .5, .3, 0)
+        _ball((x, 1.35, z), .11, col, .5, .3)
+        finish(_ry(1.40, 1.52, x, z, .045, 10), (.85,.85,.80) if k % 2 == 0 else (.55,.55,.55), .4, .6, 0)
+
+def dshk():
+    """A DShK heavy machine gun on its tripod: the finned barrel with its
+    muzzle brake, the receiver, the spade grips, the ammo box at its side, the
+    tripod legs splayed on the sand."""
+    clear()
+    finish(_rx(.10, 1.15, .82, 0, .035, 12), GUNM, .5, .5, 0)
+    for k in range(9):
+        finish(_rx(.20 + k * .05, .22 + k * .05, .82, 0, .055, 12), GUNM, .5, .5, 0)
+    finish(_rx(1.15, 1.28, .82, 0, .055, 12), GUNM, .5, .5, 0)
+    finish(box((-.10, .82, 0), (.24, .07, .06)), GUNM, .5, .5, 0)
+    for sz in (-1, 1): finish(tube((-.34, .82, 0), (-.46, .76, sz * .10), .016, 6), GUNM, .5, .5, 0)
+    finish(box((-.05, .80, .14), (.10, .08, .06)), OD, .7, 0, 0)
+    finish(box((-.10, .72, 0), (.04, .10, .04)), GUNM, .5, .5, 0)
+    for a in (0, 2.1, 4.2):
+        finish(tube((-.10, .62, 0), (-.10 + .75 * math.cos(a), .02, .75 * math.sin(a)), .025, 8), GUNM, .5, .5, 0)
+
+def zu23():
+    """A ZU-23-2 twin anti-aircraft gun: the two long barrels with their flash
+    hiders, the cradle and the ammo boxes either side, the two seats and
+    handwheels, the mount on its travelling wheels and outrigger feet."""
+    clear()
+    for sz in (-1, 1):
+        finish(_rx(-.30, 2.10, 1.30, sz * .14, .035, 12), GUNM, .5, .5, 0)
+        finish(_rx(2.10, 2.30, 1.30, sz * .14, .05, 12), GUNM, .5, .5, 0)
+        finish(box((.10, 1.30, sz * .34), (.40, .16, .12)), OD, .7, 0, 0)
+        finish(box((-.70, .95, sz * .55), (.20, .04, .18)), ODD, .8, 0, 0)
+        _wheel_ring((-.40, 1.00, sz * .72), .14, .012, 'x')
+        finish(cyl_z(-.10, .35, sz * .92, sz * 1.08, .35, 20), (.06,.06,.06), .9, 0, 0)
+    finish(box((0, 1.30, 0), (.55, .12, .10)), OD, .7, 0, 0)
+    finish(box((-.20, .75, 0), (.60, .30, .55)), OD, .7, 0, 0)
+    finish(_ry(.30, .45, -.20, 0, .70, 20), ODD, .8, 0, 0)
+    for a in (0, 1.57, 3.14, 4.71):
+        finish(box((1.1 * math.cos(a), .05, 1.1 * math.sin(a)), (.20, .05, .20)), GUNM, .5, .5, 0)
+        finish(tube((0, .35, 0), (1.1 * math.cos(a), .08, 1.1 * math.sin(a)), .04, 8), ODD, .7, 0, 0)
+
+def ammo_stack():
+    """A stack of green ammunition crates: six wooden boxes with rope handles
+    and stencilled bands, two lids prised up."""
+    clear()
+    for k, (x, y, z, ang) in enumerate(((0, 0, 0, 0), (0, 0, .42, 0), (.02, .26, .20, .08), (-.62, 0, .10, 0), (-.62, .26, .10, 0), (0, .52, .20, 0))):
+        b = rbox(.28, .13, .19, .012, 'crate'); place_o(b, (x, y + .13, z), (0, ang, 0))
+        finish(b, (.5,.5,.5), .85, 0, 0, flag=F_PAINT)
+        bd = box((x, y + .13, z + .195), (.20, .03, .004)); finish(bd, (.80,.72,.20), .7, 0, 0)
+
+def range_target():
+    """A pop-up range target: the steel A-frame base with its hinge, the
+    silhouette plate (head, shoulders, torso, in olive) with its white scoring
+    rings and the red centre, the orange top marker. Faces +x."""
+    clear()
+    STL = (.22,.23,.24)
+    finish(box((0, .06, 0), (.25, .06, .42)), STL, .6, .4, 0)
+    for sz in (-1, 1): finish(tube((0, .12, sz * .38), (0, .32, sz * .10), .025, 6), STL, .6, .4, 0)
+    finish(cyl_z(0, .34, -.30, .30, .035, 10), STL, .5, .5, 0)
+    finish(box((0, .55, 0), (.02, .22, .03)), STL, .5, .5, 0)
+    sil = [(-.36, .76), (.36, .76), (.36, 1.30), (.22, 1.40), (.12, 1.42), (.12, 1.52), (.15, 1.62), (.10, 1.74),
+           (-.10, 1.74), (-.15, 1.62), (-.12, 1.52), (-.12, 1.42), (-.22, 1.40), (-.36, 1.30)]
+    finish(prof_front(sil, -.012, .012, 'plate'), (.5,.5,.5), .8, 0, 0, flag=F_PAINT)
+    o = [x for x in bpy.context.collection.objects][-1]
+    for x in [o]:
+        x.rotation_euler = (0, math.pi / 2, 0)
+        bpy.context.view_layer.objects.active = x; x.select_set(True)
+        bpy.ops.object.transform_apply(rotation=True); x.select_set(False)
+    for k, (r, w) in enumerate(((.26, .016), (.17, .016), (.08, .016))):
+        n = 16
+        for i in range(n):
+            a0, a1 = 2 * math.pi * i / n, 2 * math.pi * (i + 1) / n
+            finish(tube((.016, 1.10 + r * math.sin(a0), r * math.cos(a0)), (.016, 1.10 + r * math.sin(a1), r * math.cos(a1)), w * .5, 4), (.92,.92,.88), .6, 0, 0)
+    finish(cyl_z(.018, 1.10, -.03, .03, .035, 12), (.80,.12,.08), .5, 0, 0)
+    finish(box((0, 1.78, 0), (.03, .04, .14)), (.95,.45,.08), .5, 0, 0)
+
 PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5), (pickup, 'PROP_PICKUP', 8.0, .5),
                (dumpster, 'PROP_DUMPSTER', 4.0, .3), (motorbike, 'PROP_MOTO', 4.0, .2),
                (ac_unit, 'PROP_AC', 2.0, .15), (sat_dish, 'PROP_DISH', 2.0, .15),
@@ -2135,4 +2698,14 @@ PROP_MODELS = [(well_frame, 'PROP_WELL', 4.0, .3), (sedan, 'PROP_SEDAN', 8.0, .5
                (supply_med, 'PROP_SUP_MED', 4.0, .15), (supply_med_item, 'PROP_SUP_MED_I', 2.0, .10),
                (supply_ammo, 'PROP_SUP_AMMO', 4.0, .15), (supply_ammo_item, 'PROP_SUP_AMMO_I', 2.0, .08),
                (helicopter, 'PROP_HELI', 16.0, .5), (truck_cab, 'PROP_TRUCK', 8.0, .4),
-               (holster, 'FIG_HOLSTER', 1.0, .02)]
+               (holster, 'FIG_HOLSTER', 1.0, .02),
+               (pump_skid, 'PROP_PUMP', 4.0, .25), (valve_manifold, 'PROP_VALVES', 4.0, .2),
+               (lpg_sphere, 'PROP_SPHERE', 16.0, 1.0), (tanker_body, 'PROP_TANKER', 8.0, .4),
+               (bollard, 'PROP_BOLLARD', 2.0, .10), (lifebuoy_stand, 'PROP_BUOY', 2.0, .10),
+               (fishing_boat, 'PROP_BOAT', 8.0, .4),
+               (mortar, 'PROP_MORTAR', 2.0, .10), (porta_cabin, 'PROP_PORTA', 4.0, .15),
+               (fuel_bladder, 'PROP_BLADDER', 8.0, .3), (satcom_dish, 'PROP_SATCOM', 4.0, .2), (range_target, 'PROP_TARGET', 2.0, .10), (cannon, 'PROP_CANNON', 4.0, .15),
+               (hand_cart, 'PROP_CART', 4.0, .15), (clay_jars, 'PROP_JARS', 2.0, .10),
+               (steel_coil, 'PROP_COIL', 2.0, .15), (ladle, 'PROP_LADLE', 4.0, .3),
+               (gas_cage, 'PROP_CYLS', 2.0, .15), (dshk, 'PROP_DSHK', 2.0, .10),
+               (zu23, 'PROP_ZU23', 4.0, .2), (ammo_stack, 'PROP_AMMO', 2.0, .10)]

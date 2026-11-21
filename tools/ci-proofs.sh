@@ -41,7 +41,9 @@ esac
 fail=0
 CROSS=""
 say() { printf '%s\n' "$*"; }
-run() { rm -f "$CFG"; ( cd "$ROOT" && $RUN "$BIN" --seed 1337 --config "$CFG" --do "$1" ) 2>&1; }
+# (0.8.9) the battery runs on the procedural arena it was measured on, now
+# map 0 "proc": the menus' ARENA is the handmade training zone
+run() { printf 'sp_map proc\n' > "$CFG"; ( cd "$ROOT" && $RUN "$BIN" --seed 1337 --config "$CFG" --do "$1" ) 2>&1; }
 field() { printf '%s' "$1" | sed -n "s/.* $2=\([0-9]*\).*/\1/p" | head -1; }
 
 # figcheck at the four DIST tiers — invariants AND the near quadruple
@@ -503,7 +505,37 @@ WANT_NEAR="56 56 64 52"
 # filler blending into the panels, by design), seat/thigh 952 -> 441 and
 # torso/seat 175 -> 37 (fewer crossings), plus belt/pistolpouch 0 -> 19 (belt
 # kit sits on the shallower trouser surface). open/flip/zfight/degen 0.
-WANT_CROSS="264 264 167 135"
+# +2 +2 -3 +3 with the SHOULDERS AND HANDS pass (2026-11-20, 0.8.9): flat
+# carrier straps rolled about the shoulder line, the deltoid pad's buried ring
+# kept inside the shoulder ball, a cup elbow pad, a gentler forearm ramp and
+# domed finger and thumb tips. By `figv` class at DIST 0: sho_ball/deltoid
+# 1185 -> 758 and torso/deltoid 56 -> 21 tri pairs (the notch gone), torso/
+# strap 0 -> 297 and strap/neck 0 -> 378 (webbing lying ON the body, which is
+# a shallow crossing by construction), gun/hand 162 -> 219 (the domed tips
+# touch the grip). `near` unchanged; open/flip/zfight/degen 0.
+# +6 +6 +7 +6 with the SHOULDER BRIDGE and the FRAG GRIP (2026-11-20, 0.8.9
+# second pass): the trapezius anchored on the shoulder joint and swelling into
+# the ball, a front run from the pectoral into it, the deltoid pad tapered
+# down two thirds of the upper arm, and the frag drawn from GR_EGG with the
+# hand closing on that profile. By `figv` class at DIST 0: the bridge blends
+# into what it bridges (strap/trap 0 -> 218, trap/neck 68 -> 199, trap/trap
+# 0 -> 134, trap/sho_ball 0 -> 38) while carrier/trap fell 175 -> 50; deltoid/
+# farm 0 -> 60 at the bent elbow. The pad's first taper laid it along the arm
+# at a graze (uarm/deltoid 0 -> 2640) and was made a decisive dive before this
+# baseline; it is 0. `near` unchanged; open/flip/zfight/degen 0.
+# 0 0 +9 +2 with the LOW-READY ARM fix (2026-11-21): the carry holds the rifle
+# 160 mm out of the chest (was 65) and blades the standing shoulders 0.30 rad,
+# and the ready firing-elbow pole drops ~40 degrees below horizontal. The
+# trigger arm stops folding to 52 degrees across the chest (figm R 52 -> 69,
+# reach 259 -> 333 mm), so the low-detail forearm/carrier pairs re-sort at the
+# far tiers. `near` unchanged; open/flip/zfight/degen 0; figbury 0 for ar/sr.
+# -9 -9 -3 -5 with the TRIGGER WRIST BEHIND THE GRIP (same day): the long-gun
+# wrist was parked under the pistol grip, so the forearm ran up the grip axis
+# and the hand folded 82-92 degrees forward into the receiver. It is now placed
+# off the grip cylinder against the bore, as the pistol's is (bend 29 degrees in
+# the carry); the glove stops crossing the stock. `near` unchanged; open/flip/
+# zfight/degen 0.
+WANT_CROSS="263 263 177 141"
 [ "${CROSS:-}" = "$WANT_CROSS" ] || { say "GATE cross '${CROSS:-}' != baseline '$WANT_CROSS'"; fail=1; }
 
 # parity: no MISMATCH in the shared-code rows
@@ -521,7 +553,7 @@ done
 # decor on every map: the static world mesh is truncated at DECOR_MAX_VERTS, and
 # the cut is a silent hole in whatever was dressed last. The world mesh is built
 # on the first rendered frame, so each map renders one shot before `budget`.
-for m in arena foundry bazaar outpost citadel harbor refinery compound; do
+for m in proc arena foundry bazaar outpost citadel harbor refinery compound; do
   dl="$(run "usemap $m; restart; wait 10; shot screenshots/_ci.png; budget" | grep '^budget' | head -1)"
   v="$(field "$dl" world_drops)"
   [ "${v:-x}" = 0 ] || { say "GATE decor map=$m world_drops=$v (want 0)"; fail=1; }
@@ -530,7 +562,7 @@ rm -f "$ROOT/screenshots/_ci.png"
 
 # props on every map: no prop's collision box may cut into another solid (a
 # barrel half inside a container, a table in a wall). `propcheck` lists them.
-for m in foundry bazaar outpost citadel harbor refinery compound; do
+for m in arena foundry bazaar outpost citadel harbor refinery compound; do
   v="$(run "usemap $m; restart; wait 2; propcheck" | sed -n 's/^propcheck merges=\([0-9]*\).*/\1/p' | head -1)"
   [ "${v:-x}" = 0 ] || { say "GATE props map=$m merges=$v (want 0)"; fail=1; }
 done

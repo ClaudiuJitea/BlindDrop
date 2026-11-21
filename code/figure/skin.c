@@ -22,6 +22,22 @@
 #define FIG_KMAX 20   // profile vertices
 #define FIG_NMAX 10   // nodes per chain
 
+// THE HOSTAGE (HOSTAGE RESCUE): the same body the operators and insurgents are
+// built from, dressed as a civilian — light shirt, trousers, shoes, bare hands
+// and face — with a BOMB VEST strapped over the shirt and, while captive, a
+// sack over the head. 0 = not a hostage, else 1 + which of the three (their
+// shirts differ). Built on the insurgent's frame (no pads, no pack, the long
+// shirt), never armed. Set by rescue_world.c around its scene_draw_figure.
+static int g_fig_hos;
+static int g_fig_hos_hood;    // the sack is over the head (captive)
+static int g_fig_hos_led;     // the vest's lamp: 0 off, 1 armed (red, blinking), 2 safe (green)
+// The boot's "up" when it is not the spine's (a kneeler's feet lie instep-down
+// behind him): a zero vector follows the spine. One per foot, hostages only.
+static v3 g_fig_bup[2];
+// A civilian's arm under a shirt, not an operator's under a combat sleeve.
+static float g_fig_hos_ars = 0.86f;   // that hostage's arm girth (set per person)
+#define ARS (g_fig_hos ? g_fig_hos_ars : 1.0f)
+
 typedef struct {
   v3    p;          // joint position
   v3    col;        // color of the band ARRIVING here (node 0: its end cap)
@@ -834,6 +850,35 @@ static v3 fig_guard_clear(v3 p, float r) {
 // the support HEEL grip: palm heel under the handguard, fingers wrapping the
 // far flank, THUMB POINTING FORWARD along the near-upper flank — the modern
 // C-clamp-family hold both weapons now share on the fore-end.
+// THE FRAG'S SHELL, ONE TABLE FOR THE EGG AND THE HAND THAT HOLDS IT (0.8.9).
+// (station along the grip axis from the hold centre, radius), metres at
+// girth 1. The third-person grenade is drawn from it (gun_build) and, while
+// g_hand_egg is set, fig_hand closes each finger and the thumb at the radius
+// the shell has AT THAT FINGER's station. A grip is a cylinder and an egg is
+// not: with one radius the four fingers (60 mm apart along the axis) could
+// not all lie on the shell — the egg was also drawn 1.2x the 30 mm grip and
+// 20 mm above it, so the middle fingers sank 6 mm into it while the little
+// finger closed round nothing under its belly.
+#define GR_EGG_N 8
+static const float GR_EGG[GR_EGG_N][2] = {
+  {-0.040f, 0.0110f}, {-0.033f, 0.0240f}, {-0.022f, 0.0310f}, {-0.008f, 0.0345f},
+  { 0.006f, 0.0350f}, { 0.020f, 0.0335f}, { 0.033f, 0.0285f}, { 0.045f, 0.0160f}};
+#define GR_EGG_R 0.0345f   // the grip radius the palm rides on: the belly
+static float g_hand_egg;   // > 0: fig_hand follows GR_EGG, scaled by this (girth)
+static float gr_egg_r(float ax, float k) {
+  float a = ax / k;
+  if (a <= GR_EGG[0][0]) return GR_EGG[0][1] * k;
+  for (int i = 0; i + 1 < GR_EGG_N; i++)
+    if (a <= GR_EGG[i + 1][0]) {
+      float t = (a - GR_EGG[i][0]) / (GR_EGG[i + 1][0] - GR_EGG[i][0]);
+      return (GR_EGG[i][1] + (GR_EGG[i + 1][1] - GR_EGG[i][1]) * t) * k;
+    }
+  return GR_EGG[GR_EGG_N - 1][1] * k;
+}
+// The radius a digit at axial station `ax` wraps: the grip's own, or the shell's.
+static float hand_wrap_r(float ax, float gr) {
+  return g_hand_egg > 0.0f ? gr_egg_r(ax, g_hand_egg) : gr;
+}
 static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
                      int style, const v3 *trig_pt, v3 *out_palm_dir) {
   ga = v3_norm(ga);
@@ -1097,7 +1142,7 @@ static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
     static const float FKN[4] = {-0.22f, -0.08f, 0.01f, 0.06f};        // knuckle arc
     g_fig_jit = 0.0f;    // a digit is not a crate — see the note on g_fig_jit
     for (int f = 0; f < 4; f++) {
-      float r = FGR[f], rr = gr + r - 0.0034f + FLF[f];
+      float r = FGR[f], rr = hand_wrap_r(FAX[f], gr) + r - 0.0034f + FLF[f];
       float ph0 = KN_PH + side * FKN[f];
       // THE TRIGGER FINGER. Four identical curled digits clamped on a pistol
       // grip is a clamp, not a firing grip: what says "about to shoot" is one
@@ -1118,7 +1163,7 @@ static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
       // alone measured 4-9 pixels of travel.
       if (style == 1 && !aimed) sweep += TRIG_GRIP * g_gun_trig_s;
       if (style == 1 && f == 3 && !aimed) { sweep = 1.42f; reach = 0.0125f; }
-      fnode_t fg[6];   // 5 authored + one DOME ring, below
+      fnode_t fg[8];   // 5 authored + three DOME rings, below
       // Node 0 sits BEHIND the knuckle row and inside the palm, so the root cap
       // is buried whatever the wrap angle; node 1 is the METACARPAL HEAD and is
       // deliberately fat enough to stand ~3 mm proud of the palm's distal end,
@@ -1304,16 +1349,26 @@ static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
         v3 d = v3_sub(fg[4].p, fg[3].p);
         float dl = v3_len(d);
         v3 dir = dl > 1e-6f ? v3_scale(d, 1.0f / dl) : ga;
-        fg[5] = fg[4];
-        fg[5].rx = fg[4].rx * 0.34f;
-        fg[5].rz = fg[4].rz * 0.34f;
-        fg[5].p = v3_add(fg[4].p, v3_scale(dir, fmaxf(fg[4].rx, fg[4].rz) * 0.58f));
-        fg[5].p = fig_guard_clear(fg[5].p, fmaxf(fg[5].rx, fg[5].rz));
-        fg[5].p = fig_body_clear(fg[5].p, fmaxf(fg[5].rx, fg[5].rz) * 0.72f);
+        // 0.8.9: THREE dome rings on a round profile, closing to an eighth of
+        // the width. With one ring at a third of the width the cap left over
+        // was still a third of the finger across, flat, its normal straight
+        // along the digit — from the support side it lit as a bright button
+        // on every fingertip. Closed to 0.12 the cap is a point.
+        float tr = fmaxf(fg[4].rx, fg[4].rz);
+        static const float DK[3] = {0.88f, 0.62f, 0.12f}, DL[3] = {0.40f, 0.74f, 0.96f};
+        for (int q = 0; q < 3; q++) {
+          fnode_t *n = &fg[5 + q];
+          *n = fg[4];
+          n->rx = fg[4].rx * DK[q];
+          n->rz = fg[4].rz * DK[q];
+          n->p = v3_add(fg[4].p, v3_scale(dir, tr * DL[q]));
+          n->p = fig_guard_clear(n->p, fmaxf(n->rx, n->rz));
+          n->p = fig_body_clear(n->p, fmaxf(n->rx, n->rz) * 0.72f);
+        }
       }
       const char *pv = g_probe_on && g_nprobe ? g_probe[g_nprobe - 1].name : NULL;
       if (aimed) probe("trigfinger");
-      fig_chain(fg, 6, FIG_DIGIT_K, 1, 1, ga);
+      fig_chain(fg, 8, FIG_DIGIT_K, 1, 1, ga);
       if (aimed) probe(pv);
     }
     g_fig_jit = 1.0f;
@@ -1420,11 +1475,11 @@ static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
       tb3 = hand_pt(gc, ga, e1, e2, 0.0560f, -side * 0.76f, gr + 0.0052f);
       tb4 = hand_pt(gc, ga, e1, e2, 0.0660f, -side * 0.70f, gr + 0.0033f);
     } else {
-      tb2 = hand_pt(gc, ga, e1, e2, 0.0455f, -side * 0.62f * TWRAP, gr + 0.0092f);
-      tb3 = hand_pt(gc, ga, e1, e2, 0.0430f, -side * 1.28f * TWRAP, gr + 0.0079f);
-      tb4 = hand_pt(gc, ga, e1, e2, 0.0395f, -side * 1.76f * TWRAP, gr + 0.0040f);
+      tb2 = hand_pt(gc, ga, e1, e2, 0.0455f, -side * 0.62f * TWRAP, hand_wrap_r(0.0455f, gr) + 0.0092f);
+      tb3 = hand_pt(gc, ga, e1, e2, 0.0430f, -side * 1.28f * TWRAP, hand_wrap_r(0.0430f, gr) + 0.0079f);
+      tb4 = hand_pt(gc, ga, e1, e2, 0.0395f, -side * 1.76f * TWRAP, hand_wrap_r(0.0395f, gr) + 0.0040f);
     }
-    fnode_t th[5] = {
+    fnode_t th[7] = {
       {tb0, col, col, 0.0119f, 0.0132f, 0, 0.86f},
       {tb1, col, col, 0.0134f, 0.0150f, 0, 0.92f},
       {tb2, col, col, 0.0123f, 0.0137f, 0, 0.96f},
@@ -1432,19 +1487,34 @@ static void fig_hand(v3 wrist, v3 gc, v3 ga, float gr, float side, v3 col,
       // The last node domes the tip instead of leaving a flat octagon facing
       // whatever the camera happens to be. Same trick on the fingers.
       {tb4, col, col, 0.0071f, 0.0078f, 0, 0.96f}};
+    // ...and 0.8.9 closes that dome: tb4's ring is still 60% of the thumb's
+    // width, and its flat cap lit as a bright octagon at the end of every
+    // support thumb. Two rings more along the last bone, down to 0.12.
+    {
+      v3 d = v3_sub(tb4, tb3);
+      float dl = v3_len(d);
+      v3 dir = dl > 1e-6f ? v3_scale(d, 1.0f / dl) : ga;
+      static const float TK[2] = {0.70f, 0.14f}, TL[2] = {0.55f, 0.92f};
+      for (int q = 0; q < 2; q++) {
+        th[5 + q] = th[4];
+        th[5 + q].rx = th[4].rx * TK[q];
+        th[5 + q].rz = th[4].rz * TK[q];
+        th[5 + q].p = v3_add(tb4, v3_scale(dir, th[4].rz * TL[q]));
+      }
+    }
     // The thumb sweeps 1.9 rad over four bones, so every interior node earns a
     // bevel PAIR — five nodes is eight rings, which is more geometry than the
     // whole far-tier hand it sits on. Beyond 6 m it drops to the three nodes that
     // carry the silhouette: base, knuckle, tip.
     // The thumb comes up the NEAR side of the grip, which is the side the
     // guard's rear strap is on. Same no-go rule as the fingers.
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
       th[i].p = fig_guard_clear(th[i].p, fmaxf(th[i].rx, th[i].rz));
       th[i].p = fig_body_clear(th[i].p, fmaxf(th[i].rx, th[i].rz) * 0.72f);
     }
     g_fig_jit = 0.0f;
     if (g_fig_k >= 16) {
-      fig_chain(th, 5, FIG_DIGIT_K, 1, 1, ga);
+      fig_chain(th, 7, FIG_DIGIT_K, 1, 1, ga);
     } else {
       fnode_t t3[3] = {th[0], th[2], th[4]};
       t3[2].rx = 0.0082f; t3[2].rz = 0.0092f;
@@ -1486,8 +1556,11 @@ static void fig_forearm(v3 wrist, v3 back, v3 pd, v3 lat, float side,
   // band next to the hand keeps the measured albedo; only the ones below it
   // move, and the last step is the biggest on purpose because it sits where the
   // arm is already leaving the frame.
-  v3 slv1 = v3_scale(sleeve, 0.94f), slv2 = v3_scale(sleeve, 0.86f);
-  v3 slv3 = v3_scale(sleeve, 0.76f), slv4 = v3_scale(sleeve, 0.58f);
+  // (0.8.9: 0.98 -> 0.92, ending on the elbow ball's own 0.92. The old ramp
+  // ran down to 0.58, which from behind put a dark disc at the elbow end of
+  // every bent arm — an empty sleeve — and a two-tone arm in light outfits.)
+  v3 slv1 = v3_scale(sleeve, 0.98f), slv2 = v3_scale(sleeve, 0.96f);
+  v3 slv3 = v3_scale(sleeve, 0.94f), slv4 = v3_scale(sleeve, 0.92f);
   float sc = 1.0f;
   if (elbow) {
     float l = v3_len(v3_sub(*elbow, wrist));
@@ -1532,6 +1605,12 @@ static void fig_forearm(v3 wrist, v3 back, v3 pd, v3 lat, float side,
     // an arm continuing off frame.
     FAN( 0.268f, 0.0426f, 0.0336f, slv4,   0.46f)};
   #undef FAN
+  if (g_fig_hos) {   // THE HOSTAGE'S ROLLED SLEEVE: bare forearm, a thick roll of shirt below the elbow
+    fa[0].col = fa[0].bcol = gnt;
+    for (int q = 4; q <= 6; q++) { fa[q].col = fa[q].bcol = gnt; fa[q].rx *= 0.94f; fa[q].rz *= 0.94f; }
+    fa[7].rx = 0.0510f; fa[7].rz = 0.0410f;   // the roll stands proud of the arm
+    fa[7].col = v3_scale(sleeve, 0.90f); fa[7].bcol = sleeve;
+  }
   // Past 12 m the cuff's three rings are under two pixels apart and the whole
   // gauntlet is one band, so the far tier keeps only the stations that carry the
   // silhouette: the buried root, the cuff crown, the leather/slate boundary, the

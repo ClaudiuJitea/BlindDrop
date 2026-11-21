@@ -30,12 +30,13 @@ static int g_team_score_all[SRV_LOBBIES][2];
 #define g_team_score (g_team_score_all[g_lobby])
 // A mode with its rules, as one label: "TEAM ELIMINATION", "DEATHMATCH /
 // SNIPERS ONLY". The server browser, the scoreboard and the host line use it.
+static const char *wr_name(int w);
 static const char *mode_label(int m, int teams, int wrule, char *buf, size_t cap) {
   m = m >= 0 && m < GM_COUNT ? m : GM_DM;
   int rules = gm_has_rules(m);
+  int pick = rules && wrule != WR_ALL && wr_valid(wrule);
   snprintf(buf, cap, "%s%s%s%s", rules && teams ? "TEAM " : "", GM_NAMES[m],
-           rules && wrule > 0 && wrule < WR_COUNT ? " / " : "",
-           rules && wrule > 0 && wrule < WR_COUNT ? WR_NAMES[wrule] : "");
+           pick ? " / " : "", pick ? wr_name(wrule) : "");
   return buf;
 }
 // The MATCH tab's mode and rules, latched into the match at every (re)start
@@ -43,7 +44,7 @@ static const char *mode_label(int m, int teams, int wrule, char *buf, size_t cap
 static void match_rules_latch(void) {
   g_match.mode = g_cfg.sp_mode;
   g_match.teams = g_cfg.sp_teams ? 1 : 0;
-  g_match.wrule = g_cfg.sp_wrule >= 0 && g_cfg.sp_wrule < WR_COUNT ? g_cfg.sp_wrule : WR_ALL;
+  g_match.wrule = wr_valid(g_cfg.sp_wrule) ? g_cfg.sp_wrule : WR_ALL;
   g_match.gg_n = 0;
   for (int i = 0; i < g_cfg.gg_n && i < GG_MAX; i++)
     if (gg_rung_valid(g_cfg.gg[i])) g_match.gg[g_match.gg_n++] = g_cfg.gg[i];
@@ -54,7 +55,17 @@ static int teams_on(void) { return !g_home && gm_has_rules(game_mode()) && g_mat
 // The WEAPONS rule in force (WR_ALL outside DEATHMATCH / ELIMINATION).
 static int mode_wrule(void) {
   int w = g_match.wrule;
-  return !g_home && gm_has_rules(game_mode()) && w > 0 && w < WR_COUNT ? w : WR_ALL;
+  return !g_home && gm_has_rules(game_mode()) && w != WR_ALL && wr_valid(w) ? w : WR_ALL;
+}
+// A rule's name: "ALL", "AK-47 + NADES", "KNIFE + NADES".
+static const char *wr_name(int w) {
+  static char buf[8][32];
+  static int at;
+  if (w == WR_ALL || !wr_valid(w)) return "ALL";
+  char *b = buf[at++ & 7];
+  if (wr_slot(w) == WPN_KN) snprintf(b, 32, "KNIFE + NADES");
+  else snprintf(b, 32, "%s + NADES", wvar_name(wr_slot(w), wr_var(w)));
+  return b;
 }
 // Frags only, no smoke or fire: GUN GAME and KNIVES + NADES.
 static int mode_frag_only(void) { return game_mode() == GM_GUN || mode_wrule() == WR_BLADES; }
@@ -124,6 +135,14 @@ static const char *gg_rung_name(int r) { return wvar_name(GG_SLOT(r) % WPN_COUNT
 // promotion, every weapon tick), so a rung's AK-47 stays an AK-47. A changed
 // variant arrives with a full magazine.
 static void mode_gg_var(int ent, weapon_t *w) {
+  int wr = mode_wrule();
+  if (wr != WR_ALL) {                // ONE GUN + NADES: the pick's own variant
+    int s = wr_slot(wr);
+    if (wpn_var_row(s) < 0 || w->var[s] == wr_var(wr)) return;
+    w->var[s] = wr_var(wr);
+    w->ammo[s] = wdef(w, s)->mag;
+    return;
+  }
   if (game_mode() != GM_GUN) return;
   int r = gg_rung(gg_level(ent)), s = GG_SLOT(r);
   if (wpn_var_row(s) < 0 || w->var[s] == GG_VAR(r)) return;
@@ -138,8 +157,8 @@ static int mode_allowed(int ent, int wpn) {
     // The operator carries the suppressed sniper, a sidearm and the knife.
     case GM_RESCUE: return !resc_is_squad(ent) || wpn == WPN_SR || wpn == WPN_PT || wpn == WPN_KN;
     default:
-      return mode_wrule() == WR_SNIPERS ? wpn == WPN_SR
-           : mode_wrule() == WR_BLADES  ? wpn == WPN_KN || wpn == WPN_GR : 1;
+      // ONE GUN + NADES: the pick, the grenades and the knife at the belt.
+      return mode_wrule() == WR_ALL || wpn == wr_slot(mode_wrule()) || wpn == WPN_KN || wpn == WPN_GR;
   }
 }
 
@@ -149,7 +168,7 @@ static int mode_primary(int ent) {
     case GM_GUN:    return gg_slot(gg_level(ent));
     case GM_RESCUE: return resc_is_squad(ent) ? WPN_SR : WPN_AR;
     default:
-      return mode_wrule() == WR_SNIPERS ? WPN_SR : mode_wrule() == WR_BLADES ? WPN_KN : WPN_AR;
+      return mode_wrule() == WR_ALL ? WPN_AR : wr_slot(mode_wrule());
   }
 }
 

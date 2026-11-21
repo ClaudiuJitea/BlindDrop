@@ -1,20 +1,23 @@
 BlindDrop is an arena FPS in one C program. No engine and nothing to install: maps and weapons are generated in code, and the sound bank is built into the one binary.
 
-## What's new in 0.8.8
+## What's new in 0.8.9
 
-- **Cleaner third-person seat:** from behind, the trousers now read as one surface under the belt, standing, running and crouched. In light outfits like Sahara and Arctic, the seat used to show two round cheeks with a lump between them.
+- **Arena is a military training zone:** an 88 m camp with a concrete shoot house and a catwalk over it, a six-lane firing range with pop-up targets, an obstacle course, a range control tower and a container village.
+- **Six maps grew:** Harbor, Refinery, Citadel, Foundry and Compound now span 140 m, and Outpost 80 m:
+  - **Harbor:** a moored cargo ship you can board.
+  - **Refinery:** LPG spheres and a tanker loading rack.
+  - **Citadel:** a rampart you can walk along, bastions with cannons and a lower town.
+  - **Foundry:** a rail yard and a coil warehouse.
+  - **Compound:** anti-aircraft guns and a ruined village.
+  - **Outpost:** a whole camp with a helipad, a motor pool, a fuel point and a satellite dish.
+- **Climbing fixed:** ladders no longer knock you off at the top. All Outpost towers can be climbed, the Refinery tower stairs have headroom, and bots can now reach the Bazaar souk.
+- **Pick one gun:** the Weapons setting is now ALL or any single gun + nades, such as AK-47 + NADES or DESERT EAGLE + NADES. Everyone, bots too, spawns with it. Servers take `--weapons all` or a gun key such as `sr0` (the AWP); `snipers` and `blades` still work.
+- **Rebuilt guns:** a real banana magazine on the AK-47, and new R8 Revolver and Nova models.
+- **Real hostages:** the three hostages are built like the operators: an older man, a young man and a woman, each in their own clothes. They wear bomb vests with a blinking detonator and kneel hooded with their hands tied. Once you cut them loose, the lamp turns green and they follow you.
+- **Clearer wounds:** a dark red edge closes in as your health drops, the screen edge facing the shooter glows, and the hit marker points to them for a second.
+- **More natural hands:** reshaped shoulders, a firing hand that sits behind the grip, and every finger on the grenade.
 
-0.8.8 still uses network protocol 24, so it plays with 0.8.7.
-
-## Also in 0.8.7
-
-- **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter: a roofed souk hallway with paper lanterns and shop counters, alleys strung with washing, a market street under striped canopies, and tall houses all round.
-- **Stairs and towers:** stone stairs to six roof terraces, a lantern tower in each corner and two pagoda towers to climb. Bots find their way round it.
-- **New outfits:** Sahara, Viper, Nightshade and Abyss replace Coyote, Ranger and Shadow. Slate, Arctic and Reaper stay, and a saved Arctic or Reaper pick carries over.
-- **A readable compass:** the forearm compass shows your heading in three big digits over a scrolling N / E / S / W strip.
-- **Calmer weapon swaps:** the new weapon comes up in 0.55 s instead of 0.30 s.
-
-0.8.7 uses network protocol 24, so it can't play with older versions.
+0.8.9 uses network protocol 25, so it can't play with older versions.
 
 This build has no telemetry, no update check and no built-in server. It only uses the network when you join or host a multiplayer game.
 

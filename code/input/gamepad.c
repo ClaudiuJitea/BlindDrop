@@ -132,7 +132,8 @@ enum { HEAD_HELMET, HEAD_CAP, HEAD_WRAP, HEAD_BARE, HEAD_NVG_UP, HEAD_NVG_DOWN }
 static const char *const HEAD_GEAR_NAMES[HEAD_GEAR_COUNT] = {
   "HELMET", "CAP", "HEAD WRAP", "BARE", "NVG UP", "NVG DOWN"};
 #define VEST_GEAR_COUNT 3
-enum { VEST_CARRIER, VEST_RIG, VEST_NONE };
+enum { VEST_CARRIER, VEST_RIG, VEST_NONE,
+       VEST_BOMB };   // not in the armory: the HOSTAGE RESCUE hostages' explosive vest
 static const char *const VEST_GEAR_NAMES[VEST_GEAR_COUNT] = {
   "PLATE CARRIER", "CHEST RIG", "NONE"};
 #define PACK_GEAR_COUNT 2

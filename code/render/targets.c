@@ -261,7 +261,8 @@ static void post_pass(int fx) {
   }
   glUniform1f(uloc(pp, "uBloomK"), 0.05f + a->bloom * 0.16f);
   glUniform1f(uloc(pp, "uCA"), 0.0065f + 0.045f * g_hurt_u[0] + 0.008f * g_hurt_u[1]);
-  glUniform4f(uloc(pp, "uHurt"), g_hurt_u[0], g_hurt_u[1], g_hurt_u[2], 0.0f);
+  glUniform4f(uloc(pp, "uHurt"), g_hurt_u[0], g_hurt_u[1], g_hurt_u[2], g_hurt_u[3]);
+  glUniform4fv(uloc(pp, "uDmg"), 4, &g_dmg_u[0][0]);
   glUniform1f(uloc(pp, "uMotion"), R.have_prev && !snap ? 0.32f : 0.0f);
   glUniform1f(uloc(pp, "uAds"), R.ads_now);
   glUniform1f(uloc(pp, "uVmOn"), R.vm_drawn ? 1.0f : 0.0f);

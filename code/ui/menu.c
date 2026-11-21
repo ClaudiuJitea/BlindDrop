@@ -326,10 +326,11 @@ static int mp_host_start(void) {
   snprintf(tms, sizeof tms, "%d", g_cfg.host_teams ? 1 : 0);
   if (g_cfg.gg_n > 0) gg_format(g_cfg.gg, g_cfg.gg_n, lad, sizeof lad);
   else gg_format(GG_DEFAULT, GG_DEFAULT_N, lad, sizeof lad);
-  int wr = g_cfg.host_wrule >= 0 && g_cfg.host_wrule < WR_COUNT ? g_cfg.host_wrule : WR_ALL;
+  char wrk[12];
+  wr_key(g_cfg.host_wrule, wrk, sizeof wrk);
   char *argv[] = {"blinddrop", "--server", "--port", port,
                   "--mode", (char *)GM_KEYS[mode], "--teams", tms,
-                  "--weapons", (char *)WR_KEYS[wr], "--ladder", lad,
+                  "--weapons", wrk, "--ladder", lad,
                   "--map", (char *)map_pick_key(g_cfg.host_map),
                   "--cap-public", capp, "--cap-bots", bots, "--skill", skill,
                   "--fraglimit", frag, "--rounds", rounds, "--name", name,

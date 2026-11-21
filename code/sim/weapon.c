@@ -849,7 +849,13 @@ static void player_move_tick(player_t *p, int ent, const int held[IN_COUNT],
         p->sliding = 0;
         float vy = into * LADDER_CLIMB;
         if (p->grounded && vy < 0.0f) vy = 0.0f;
-        float hold = into > 0.0f ? 1.5f : 0.0f;      // keep the body on the rungs
+        // Keep the body ON the rungs, not IN them (0.8.9): pressed against a
+        // 4 cm rung, the millimetre of contact could read on the vertical
+        // sweep as hitting it from below — the climber was snapped to the
+        // floor half way up. The hold now eases off a centimetre short.
+        float dface = (p->pos.x - L->x) * L->nx + (p->pos.z - L->z) * L->nz;
+        float rest = PLAYER_RADIUS + 0.18f + 0.01f;   // the rungs' outer face
+        float hold = into > 0.0f ? f_clamp((dface - rest) * 60.0f, 0.0f, 1.5f) : 0.0f;
         if (p->pos.y > L->top - 0.35f && into > 0.0f) {
           vy = fmaxf(vy, 2.0f);                       // clear the crown...
           hold = 3.0f;                                // ...and step over it

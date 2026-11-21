@@ -2543,35 +2543,47 @@ def rifle_ak():
     ar_grip(grip_col=AK_BAKELITE, guard_col=BLUED, grip_rough=.62, guard_rough=.45, guard_metal=.5)
     ak_wood_stock()
     kobra_sight()
-    pts_f = []; pts_b = []
-    for i in range(9):
-        t = i / 8.0; a = .58 * t
-        cy = -.018 - .150 * math.sin(a) / .548 * .97
-        cz = .118 + .080 * (1 - math.cos(a)) / .164
-        hw = .0255 - .002 * t
-        nx, nz = math.cos(a), math.sin(a)
-        pts_f.append((cz + hw * nx, cy + hw * nz * .25))
-        pts_b.append((cz - hw * nx, cy - hw * nz * .25))
-    mag = prof(pts_f + pts_b[::-1], -.0110, .0110, 'mag')
-    finish(mag, (.180,.182,.190), .50, .35, .0018, 2, group=1)
-    # the stamped reinforcing rib down each side, following the magazine's
-    # curve (a raised strip a third of its depth, as the AKM's steel mags have)
-    rf = []; rb = []
-    for i in range(9):
-        t = i / 8.0; a = .58 * t
-        cy = -.018 - .150 * math.sin(a) / .548 * .97
-        cz = .118 + .080 * (1 - math.cos(a)) / .164
-        hw = (.0255 - .002 * t) * .34
-        nx, nz = math.cos(a), math.sin(a)
-        rf.append((cz + hw * nx, cy + hw * nz * .25 - (.004 if i == 0 else 0)))
-        rb.append((cz - hw * nx, cy - hw * nz * .25 - (.004 if i == 0 else 0)))
+    ak_magazine()
+
+def ak_magazine():
+    """THE AKM's 30-ROUND STEEL MAGAZINE (group 1), after the reference dimensions
+    (about 231 x 64 x 32 mm; x0.89 for this model's scale): one true arc down its
+    spine (the 7.62x39 case's taper is what bends it), the section offset along
+    the arc's own normal so front and back stay parallel and it widens a little
+    toward the floor, the feed lips' straight throat up in the well, the raised
+    side panel stamped along the curve, the front locking lug, the rear catch lug
+    and the floorplate with its rolled edge."""
+    MCOL = (.180,.182,.190); MDK = (.150,.152,.160)
+    Z0, Y0, SW, L = .1185, -.0060, .62, .196       # throat centre, sweep (rad), spine length
+    R = L / SW
+    def st(t, w):
+        a = SW * t
+        cz = Z0 + R * (1 - math.cos(a)); cy = Y0 - .016 - R * math.sin(a)
+        nz, ny = math.cos(a), math.sin(a)          # the section's direction (front)
+        return (cz + w * nz, cy + w * ny)
+    n = 14
+    hw = lambda t: .0262 + .0030 * t               # half the front-to-back depth
+    f = [st(i / (n - 1), hw(i / (n - 1))) for i in range(n)]
+    b = [st(i / (n - 1), -hw(i / (n - 1)) * .96) for i in range(n)]
+    throat = [(Z0 + .0262, Y0), (Z0 - .0250, Y0)]                  # straight up into the well
+    body = prof([throat[0]] + f + b[::-1] + [throat[1]], -.0136, .0136, 'mag')
+    finish(body, MCOL, .50, .35, .0020, 2, group=1)
+    # the stamped side panel: a raised field inset from every edge
+    pf = [st(.10 + .80 * i / (n - 1), hw(.10 + .80 * i / (n - 1)) * .70) for i in range(n)]
+    pb = [st(.10 + .80 * i / (n - 1), -hw(.10 + .80 * i / (n - 1)) * .66) for i in range(n)]
     for s_ in (-1, 1):
-        x0, x1 = sorted((s_ * .0108, s_ * .0118))
-        finish(prof(rf + rb[::-1], x0, x1, 'mag_rib', r=0), (.165,.167,.175), .50, .35, .0004, 1, group=1)
-    lt = pts_f[-1]; lb = pts_b[-1]
-    finish(box((0, (lt[1]+lb[1])/2 - .004, (lt[0]+lb[0])/2), (.0122, .0040, .0280)), (.165,.167,.175), .50, .35, .0008, 1, group=1)
-    # the locking lug at the front of the magazine's mouth
-    finish(box((0, -.0200, .1430), (.0060, .0030, .0030)), (.165,.167,.175), .50, .35, .0004, group=1)
+        x0, x1 = sorted((s_ * .0130, s_ * .0144))
+        finish(prof(pf + pb[::-1], x0, x1, 'mag_panel', r=0), MDK, .50, .35, .0005, 1, group=1)
+    # the floorplate, square to the spine's last station, its rolled lip
+    a = SW; cz, cy = st(1.0, 0.0)
+    nz, ny = math.cos(a), math.sin(a); tz, ty = math.sin(a), -math.cos(a)
+    w0 = hw(1.0) + .0016
+    fp = [(cz + nz*w0, cy + ny*w0), (cz + nz*w0 + tz*.0060, cy + ny*w0 + ty*.0060),
+          (cz - nz*w0*.96 + tz*.0060, cy - ny*w0*.96 + ty*.0060), (cz - nz*w0*.96, cy - ny*w0*.96)]
+    finish(prof(fp, -.0150, .0150, 'floor'), MDK, .48, .40, .0012, 2, group=1)
+    # front locking lug and the rear catch lug at the mouth
+    finish(box((0, Y0 - .0030, Z0 + .0285), (.0050, .0040, .0026)), MDK, .50, .35, .0005, group=1)
+    finish(box((0, Y0 - .0120, Z0 - .0262), (.0070, .0034, .0020)), MDK, .50, .35, .0005, group=1)
 
 def rifle_famas():
     """FAMAS bullpup in desert digital, after the reference: a thick-walled carry handle

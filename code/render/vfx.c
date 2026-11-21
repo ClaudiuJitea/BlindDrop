@@ -350,7 +350,7 @@ static float fx_range_k(float d) {
                              // rather than queueing behind it
 #define KILLFEED_N     5
 #define KILLFEED_TICKS 480   // 4 s on screen, the last 0.5 s fading
-#define DMG_TICKS      36    // incoming-damage flash
+#define DMG_TICKS      120   // incoming-damage flash: 1 s, long enough to read the direction
 
 // A round in flight, for the eye. The sim is hitscan, so the impact already
 // happened; this is the bolt that visibly crosses the same line at the weapon's
@@ -584,6 +584,7 @@ static float g_hurt_kick;
 static struct { v3 from; float x, y, r; int life, max, placed; uint32_t seed; } g_splat[SPLAT_N];
 static int g_splat_head;
 static float g_hurt_u[4];
+static float g_dmg_u[4][4];   // per attacker: screen dir x, y (up), strength, -
 static float splat_rand(uint32_t *h) {
   *h ^= *h << 13; *h ^= *h >> 17; *h ^= *h << 5;
   return (float)(*h & 0xFFFFu) / 65535.0f;

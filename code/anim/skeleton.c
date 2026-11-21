@@ -1276,7 +1276,13 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
              // i.e. the scope. A man at the low ready holds the rifle in front of
              // himself; this is that 65 mm, and it is the one term in the hold
              // that is perpendicular to the body rather than along the weapon.
-             v3_add(v3_scale(F, 0.065f * rl),
+             // ...and 160 mm, not 65: at 65 the trigger wrist sat 60 mm ahead
+             // of its own shoulder and 259 mm from it, so a 580 mm arm had to
+             // fold to 52 degrees and throw the elbow 26 cm out sideways with
+             // the forearm flat across the chest — a chicken wing seen from
+             // behind. At 160 the reach is 333 mm, the wrist 22 cm forward,
+             // and the elbow hangs beside the ribs; `figbury` stays at 0.
+             v3_add(v3_scale(F, 0.160f * rl),
                     // THE STOCK STAYS IN THE POCKET WHEN THE RIFLE COMES UP.
                     // Going from ready to ADS used to LIFT the whole weapon
                     // 170 mm and pull it 95 mm inboard onto the cheek, which
@@ -1474,7 +1480,11 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
   // one pose a player spends most of a round in. A man running with a rifle
   // across his body turns his shoulders into it; 0.20 rad is a fifth of the
   // shouldered blade and it is enough.
-  float blade = 0.52f * a->ready_s + 0.20f * runT * (1.0f - a->ready_s);
+  // ...and a man STANDING at the low ready blades too (0.30 rad): the carry
+  // now holds the rifle 160 mm out of the chest (see gun_o), which put the
+  // fore-end 682 mm from a square weak shoulder; leading with that shoulder
+  // brings it back to 555, inside the 557 the reach guard below allows.
+  float blade = 0.52f * a->ready_s + (0.20f * runT + 0.30f * (1.0f - runT)) * (1.0f - a->ready_s);
   float blc = cosf(blade), bls = sinf(blade);
   v3 fwdh = v3_norm((v3){{aimd.x, 0.0f, aimd.z}});
   for (int i = 0; i < 2; i++) {
@@ -1499,9 +1509,15 @@ static void skel_solve(anim_t *a, v3 base, float yaw, float pitch) {
     // ready lets the firing elbow hang, a little out and behind him; it rises
     // and opens with the weapon as it comes up (ready_s). The "behind" term is
     // the HORIZONTAL forward: on the aim it turned into "up" looking down.
+    // ...and UP AND OUT is a lift of the elbow, not a horizontal one. At the
+    // old ready values (1.30 out, -0.30 down) the elbow pointed straight out
+    // sideways at shoulder height, and with the arm folded to ~52 degrees the
+    // forearm doubled back along the upper arm — a chicken wing that the boot
+    // reel's behind-the-shoulder shots put in the middle of the frame. A real
+    // firing elbow sits out and roughly 40 degrees BELOW horizontal.
     float rk_ = a->ready_s;
-    v3 pole = i ? v3_norm(v3_add(v3_scale(Rc, 0.45f + 0.85f * rk_ + 0.30f * a->crouch_s),
-                          v3_add(v3_scale(U, -1.00f + 0.70f * rk_ + 0.55f * a->air_s),
+    v3 pole = i ? v3_norm(v3_add(v3_scale(Rc, 0.45f + 0.40f * rk_ + 0.30f * a->crouch_s),
+                          v3_add(v3_scale(U, -1.00f + 0.30f * rk_ + 0.55f * a->air_s),
                                  v3_add(v3_scale(aimd, -0.18f * rk_),
                                         v3_scale(fwdh, -0.35f * (1.0f - rk_))))))
                 : v3_norm(v3_add(v3_scale(Rc, -0.60f - 0.20f * a->crouch_s

@@ -1,16 +1,20 @@
 // code/render/rescue_world.c — part of the game.c unity build: #included by code/game.c at a
 // fixed position, never compiled on its own. See the file map there.
 // ---------------------------------------------------------------------------
-// HOSTAGE RESCUE in the world: the hostages (a civilian figure of soft
-// ellipsoids — kneeling, hooded and tied while captive; walking, hunched, once
-// freed) and the helicopter's rotor, which spins up as the evacuation starts.
-// ---------------------------------------------------------------------------
-static void hfig_limb(v3 a, v3 b, float r, v3 col, v3 hint) {
-  v3 ax = v3_sub(b, a);
-  float l = v3_len(ax);
-  if (l < 1e-4f) return;
-  fig_ball(v3_lerp(a, b, 0.5f), r, l * 0.5f + r * 0.35f, r, ax, hint, 10, col);
-}
+// HOSTAGE RESCUE in the world: the hostages and the helicopter's rotor, which
+// spins up as the evacuation starts.
+//
+// THE HOSTAGES ARE BUILT LIKE EVERY OTHER MAN IN THE GAME. They used to be a
+// figure of their own — eleven soft ellipsoids — standing among operators and
+// insurgents swept from the full figure builder: a toy beside the people
+// sent to rescue it. Now each one is a pose_t on the shared skeleton's
+// proportions (the operator's hip, chest, neck, head and shoulder stations,
+// the same thigh/shin and upper/fore arm lengths, the knees and elbows solved
+// by the same two-bone IK) handed to scene_draw_figure with the HOSTAGE kit
+// (g_fig_hos): civilian shirt and trousers, bare hands and face, the bomb vest,
+// and the sack over the head while captive. The pose is built here because no
+// sim skeleton kneels: on his knees, sat up, hands cable-tied behind his back
+// and head bowed while captive; standing and walking, hunched, once freed.
 typedef struct { v3 o, R, Y, F; float topple; } hframe_t;
 static v3 hfp(const hframe_t *f, float x, float y, float z) {
   if (f->topple > 0.0f) {   // the executed: fallen on their side
@@ -20,107 +24,138 @@ static v3 hfp(const hframe_t *f, float x, float y, float z) {
   }
   return v3_add(f->o, v3_add(v3_scale(f->R, x), v3_add(v3_scale(f->Y, y), v3_scale(f->F, z))));
 }
+static v3 hfl(const hframe_t *f, v3 p) { return hfp(f, p.x, p.y, p.z); }
+static v3 hfd(const hframe_t *f, v3 at, v3 d) {   // a direction at a point, through the topple
+  v3 a = hfl(f, at), b = hfl(f, v3_add(at, v3_scale(d, 0.1f)));
+  return v3_norm(v3_sub(b, a));
+}
+static v3 hv3(float x, float y, float z) { return (v3){{x, y, z}}; }
 static void hostage_draw(const hostage_t *h, int i, float alpha) {
-  // CIVILIAN, AND THE LIGHTEST THING IN THE COMPOUND. A third read beside the
-  // two forces: white, sky blue and pale yellow shirts that neither the dark
-  // insurgent tunics nor any operator kit come near, so the figure on its knees
-  // in a guarded room is never mistaken for one to shoot. (The tan shirt this
-  // replaces was the insurgents' own old khaki.)
-  static const v3 SHIRT[RESC_HOSTAGES] = {{{0.86f, 0.85f, 0.80f}}, {{0.50f, 0.68f, 0.86f}},
-                                          {{0.86f, 0.78f, 0.46f}}};
-  static const v3 PANTS[RESC_HOSTAGES] = {{{0.20f, 0.22f, 0.28f}}, {{0.32f, 0.28f, 0.22f}},
-                                          {{0.16f, 0.17f, 0.18f}}};
-  v3 skin = rgb(0.60f, 0.43f, 0.32f), hood = rgb(0.47f, 0.39f, 0.27f),
-     shoe = rgb(0.10f, 0.09f, 0.08f), hair = rgb(0.09f, 0.07f, 0.06f);
   v3 pos = v3_lerp(h->prev, h->pos, alpha);
   float yaw = h->prev_yaw + wrap_pi(h->yaw - h->prev_yaw) * alpha;
   float pose = h->prev_pose + (h->pose - h->prev_pose) * alpha;
   float m = h->prev_move + (h->move - h->prev_move) * alpha;
   float g = h->prev_gait + (h->gait - h->prev_gait) * alpha;
   float st = smooth01(pose);
+  int captive = h->state == HS_CAPTIVE, dead = h->state == HS_DEAD;
   hframe_t f = {pos, {{cosf(yaw), 0, sinf(yaw)}}, {{0, 1, 0}}, {{sinf(yaw), 0, -cosf(yaw)}},
-                h->state == HS_DEAD ? 1.45f : 0.0f};
-  float breath = 0.006f * sinf((float)g_tick * TICK_DT * 1.7f + (float)i);
-  // Kneeling (st 0) and walking (st 1) joints, blended.
-  float hy = 0.42f + st * (0.92f - 0.10f * m - 0.42f);
-  float lean = 0.07f + st * (0.05f + 0.16f * m);   // slumped kneeling, hunched running
-  v3 pel = hfp(&f, 0.0f, hy, -0.02f);
-  v3 neck = hfp(&f, 0.0f, hy + 0.61f + breath, 0.0f + lean * 1.2f);
-  float bow = h->state == HS_CAPTIVE ? 0.07f : 0.03f;
-  v3 head = hfp(&f, 0.0f, hy + 0.73f + breath - bow * 0.4f, lean * 1.3f + bow);
-  mat_set(0.85f, 0.0f);
-  ao_off();
-  // Legs.
-  for (int s = -1; s <= 1; s += 2) {
-    float ph = g + (s > 0 ? 0.0f : F_PI);
-    float a = 0.55f * m * sinf(ph);                       // thigh swing
-    float kb = 0.25f + 0.85f * m * fmaxf(0.0f, sinf(ph + 1.3f));   // knee bend
-    // walking
-    v3 hipw = {{(float)s * 0.10f, hy, -0.02f - 0.10f * (1.0f - st)}};
-    v3 knw = {{(float)s * 0.11f, hy - 0.44f * cosf(a), -0.02f + 0.44f * sinf(a)}};
+                dead ? 1.45f : 0.0f};
+  float t = (float)g_tick * TICK_DT;
+  float breath = 0.006f * sinf(t * 1.7f + (float)i);
+  // ---- the trunk, in the figure's own frame (x right, y up, z forward) ----
+  // Kneeling upright (hips 0.50 over the knees: thighs near vertical, the
+  // weight forward of the heels), walking at the operator's 0.87 less a stoop.
+  // THREE PEOPLE: the older man kneels sat back on his heels and stoops; the
+  // young man kneels upright; the woman is slighter (narrower shoulders, a
+  // finer arm) and kneels between the two.
+  static const float KNEEL_HIP[3] = {0.44f, 0.50f, 0.47f}, STOOP[3] = {0.07f, 0.0f, 0.02f},
+                     SHO_W[3] = {0.98f, 1.00f, 0.86f}, ARM[3] = {0.88f, 0.86f, 0.78f};
+  int pv = i % 3;
+  float hipy = KNEEL_HIP[pv] + st * (0.872f - 0.035f * m - KNEEL_HIP[pv]);
+  float lean = (1.0f - st) * (0.10f + STOOP[pv] * 1.5f) + st * (0.07f + STOOP[pv] + 0.16f * m);
+  v3 sp = hv3(0.0f, cosf(lean), sinf(lean));                     // the spine
+  v3 pel = hv3(0.0f, hipy + 0.070f, -0.010f);
+  v3 chest = v3_add(pel, v3_scale(sp, 0.400f + breath));
+  v3 neck = v3_add(chest, v3_scale(sp, 0.100f));
+  // the head bowed while captive (a man on his knees under a sack looks at the
+  // floor), lifting as he is freed
+  float bow = captive ? 0.42f + 0.10f * (float)(pv == 0) - 0.12f * (float)(pv == 1) + 0.05f * sinf(t * 0.35f + (float)i * 2.1f)
+                      : 0.10f + 0.20f * m;
+  v3 hfw = hv3(0.0f, -sinf(bow), cosf(bow));
+  v3 head = v3_add(neck, v3_add(v3_scale(sp, 0.150f), v3_scale(hfw, 0.020f)));
+  v3 hip[2], ank[2], toe[2], sho[2], wri[2], pole_k[2], pole_e[2];
+  for (int s = 0; s < 2; s++) {
+    float sd = s ? 1.0f : -1.0f;
+    hip[s] = v3_add(pel, hv3(sd * 0.095f, -0.070f, 0.010f));
+    // ---- legs: knees on the floor, shins flat behind; or a walk ----
+    // kneeling ankle: sat back on the heels, the shins run shorter behind
+    v3 ak = hv3(sd * 0.115f, 0.078f, -0.285f + (0.50f - KNEEL_HIP[pv]) * 1.2f);
+    v3 tk = v3_add(ak, hv3(0.0f, -0.030f, -0.172f));             // instep down, toe back
+    float ph = g + (s ? 0.0f : F_PI);
+    float a = 0.50f * m * sinf(ph);                               // thigh swing
+    float kb = 0.18f + 0.80f * m * fmaxf(0.0f, sinf(ph + 1.3f));  // knee bend
+    v3 kw = v3_add(hip[s], hv3(sd * 0.020f, -ANIM_THIGH * cosf(a), ANIM_THIGH * sinf(a)));
     float a2 = a - kb;
-    v3 anw = {{(float)s * 0.11f, knw.y - 0.43f * cosf(a2), knw.z + 0.43f * sinf(a2)}};
-    if (anw.y < 0.08f) anw.y = 0.08f;
-    // kneeling
-    v3 knk = {{(float)s * 0.13f, 0.10f, 0.28f}}, ank = {{(float)s * 0.09f, 0.08f, -0.20f}};
-    v3 kn = v3_lerp(knk, knw, st), an = v3_lerp(ank, anw, st), hp = hipw;
-    v3 HP = hfp(&f, hp.x, hp.y, hp.z), KN = hfp(&f, kn.x, kn.y, kn.z), AN = hfp(&f, an.x, an.y, an.z);
-    hfig_limb(HP, KN, 0.078f, PANTS[i], f.R);
-    hfig_limb(KN, AN, 0.058f, PANTS[i], f.R);
-    // the foot: flat behind a kneeler (sole up), forward under a walker
-    v3 toe = st > 0.5f ? hfp(&f, an.x, fmaxf(an.y - 0.05f, 0.04f), an.z + 0.17f)
-                       : hfp(&f, an.x, 0.05f, an.z - 0.16f);
-    hfig_limb(AN, toe, 0.048f, shoe, f.Y);
+    v3 aw = v3_add(kw, hv3(sd * 0.010f, -ANIM_SHIN * cosf(a2), ANIM_SHIN * sinf(a2)));
+    if (aw.y < ANIM_ANKLE_Y) aw.y = ANIM_ANKLE_Y;
+    v3 tw = v3_add(aw, hv3(sd * 0.020f, 0.0f, 0.172f));
+    if (tw.y < ANIM_ANKLE_Y) tw.y = ANIM_ANKLE_Y;
+    ank[s] = v3_lerp(ak, aw, st);
+    toe[s] = v3_lerp(tk, tw, st);
+    pole_k[s] = hv3(sd * 0.10f, 0.0f, 1.0f);
+    // ---- arms: wrists crossed and tied at the small of the back; or hanging ----
+    sho[s] = v3_add(chest, v3_add(v3_scale(sp, 0.050f), hv3(sd * ANIM_SHO_HALF * SHO_W[pv], 0.0f,
+                    captive ? -0.030f : 0.0f)));
+    v3 wk = v3_add(pel, v3_add(v3_scale(sp, 0.130f), hv3(sd * 0.030f, 0.0f, -0.205f)));
+    float sw = 0.40f * m * sinf(ph + F_PI);
+    v3 ww = v3_add(sho[s], hv3(sd * 0.040f, -0.540f * cosf(sw), 0.060f + 0.540f * sinf(sw) + 0.06f * m));
+    float fr = captive ? 0.0f : st;   // cut loose: the hands come round as he stands
+    wri[s] = v3_lerp(wk, ww, fr);
+    pole_e[s] = v3_norm(v3_lerp(hv3(sd * 0.75f, -0.15f, -0.65f), hv3(sd * 0.35f, -0.20f, -0.90f), fr));
   }
-  // Torso, a little wider than deep.
-  {
-    v3 ax = v3_sub(neck, pel);
-    float l = v3_len(ax);
-    fig_ball(v3_lerp(pel, neck, 0.52f), 0.175f, l * 0.55f, 0.115f, ax, f.R, 12, SHIRT[i]);
-    fig_ball(v3_add(pel, (v3){{0, 0.03f, 0}}), 0.165f, 0.11f, 0.12f, f.Y, f.R, 10, PANTS[i]);
+  // ---- into the world ----
+  pose_t P;
+  memset(&P, 0, sizeof P);
+  for (int s = 0; s < 2; s++) {
+    P.hip[s] = hfl(&f, hip[s]);
+    P.ankle[s] = hfl(&f, ank[s]);
+    P.toe[s] = hfl(&f, toe[s]);
+    P.knee[s] = ik_solve(P.hip[s], P.ankle[s], ANIM_THIGH, ANIM_SHIN, hfd(&f, hip[s], pole_k[s]));
+    P.sho[s] = hfl(&f, sho[s]);
+    P.wri[s] = hfl(&f, wri[s]);
+    P.elb[s] = ik_solve(P.sho[s], P.wri[s], ANIM_UARM, ANIM_FARM, hfd(&f, sho[s], pole_e[s]));
+    // a kneeler's feet lie instep-down: the boot's top faces the floor
+    g_fig_bup[s] = st < 0.5f ? hfd(&f, ank[s], hv3(0.0f, -1.0f, 0.0f)) : (v3){{0, 0, 0}};
   }
-  hfig_limb(neck, head, 0.05f, skin, f.R);
-  // Arms: tied behind the back while captive; swinging once free.
-  for (int s = -1; s <= 1; s += 2) {
-    float ph = g + (s > 0 ? F_PI : 0.0f);
-    float b = 0.45f * m * sinf(ph);
-    v3 sh = {{(float)s * 0.20f, hy + 0.54f + breath, -0.02f + lean}};
-    v3 elw = {{(float)s * 0.22f, sh.y - 0.27f * cosf(b), sh.z + 0.27f * sinf(b)}};
-    v3 wrw = {{(float)s * 0.21f, elw.y - 0.24f * cosf(b + 0.5f + 0.4f * m), elw.z + 0.24f * sinf(b + 0.5f + 0.4f * m)}};
-    v3 elk = {{(float)s * 0.19f, hy + 0.32f, -0.12f}}, wrk = {{(float)s * 0.045f, hy + 0.17f, -0.17f}};
-    v3 el = v3_lerp(elk, elw, st), wr = v3_lerp(wrk, wrw, st);
-    v3 SH = hfp(&f, sh.x, sh.y, sh.z), EL = hfp(&f, el.x, el.y, el.z), WR = hfp(&f, wr.x, wr.y, wr.z);
-    hfig_limb(SH, EL, 0.052f, SHIRT[i], f.F);
-    hfig_limb(EL, WR, 0.043f, st > 0.5f ? skin : SHIRT[i], f.F);
-    fig_ball(WR, 0.045f, 0.05f, 0.035f, v3_sub(WR, EL), f.F, 8, skin);
-  }
-  if (h->state == HS_CAPTIVE) {   // the cable tie at the wrists, the sack over the head
-    scene_box(hfp(&f, 0.0f, hy + 0.17f, -0.18f), v3_scale(f.R, 0.075f), v3_scale(f.Y, 0.012f),
-              v3_scale(f.F, 0.014f), rgb(0.05f, 0.05f, 0.05f));
-    fig_ball(head, 0.112f, 0.13f, 0.118f, f.Y, f.R, 12, hood);
-    fig_ball(hfp(&f, 0.0f, hy + 0.62f, lean * 1.2f + 0.02f), 0.085f, 0.03f, 0.08f, f.Y, f.R, 10,
-             tint(hood, 0.8f, 0.85f));   // the drawstring gather
-  } else {
-    fig_ball(head, 0.092f, 0.112f, 0.102f, f.Y, f.R, 12, skin);
-    fig_ball(v3_add(head, v3_add(v3_scale(f.Y, 0.035f), v3_scale(f.F, -0.02f))), 0.097f, 0.085f,
-             0.10f, f.Y, f.R, 10, hair);
+  P.pelvis = hfl(&f, pel);
+  P.chest = hfl(&f, chest);
+  P.neck = hfl(&f, neck);
+  P.head = hfl(&f, head);
+  P.right = hfd(&f, chest, hv3(1, 0, 0));
+  P.head_f = hfd(&f, head, hfw);
+  P.gun_o = P.chest;   // no weapon; pose_gun_frame still wants a frame
+  P.gun_f = hfd(&f, chest, hv3(0, 0, 1));
+  P.gun_u = hfd(&f, chest, hv3(0, 1, 0));
+  static anim_t A;
+  memset(&A, 0, sizeof A);
+  A.pose = P;
+  A.prev_pose = P;
+  gunanim_t gs;
+  memset(&gs, 0, sizeof gs);
+  g_fig_hos = i + 1;
+  g_fig_hos_ars = ARM[pv];
+  g_fig_hos_hood = captive;
+  g_fig_hos_led = dead ? 0 : captive ? 1 : 2;   // freed: the squad cut the trigger lead
+  g_fig_ent = -1;
+  g_fig_team = -1;
+  g_fig_ins = 0;
+  g_fig_var = 0;
+  g_fig_gear = -1;
+  scene_draw_figure(&A, pos, yaw, NULL, 0.0f, 0.0f, (v3){{1, 1, 1}}, 0, WPN_AR, gs);
+  g_fig_hos = 0;
+  g_fig_hos_hood = 0;
+  g_fig_hos_led = 0;
+  g_fig_bup[0] = g_fig_bup[1] = (v3){{0, 0, 0}};
+  if (captive) {   // the cable tie round both wrists
+    v3 c = v3_lerp(P.wri[0], P.wri[1], 0.5f);
+    v3 ax = v3_norm(v3_sub(P.wri[1], P.wri[0]));
+    v3 up = hfd(&f, chest, sp);
+    v3 bk = v3_norm(v3_cross(ax, up));
+    mat_set(0.6f, 0.0f);
+    scene_box(c, v3_scale(ax, 0.050f), v3_scale(up, 0.012f), v3_scale(bk, 0.034f),
+              rgb(0.05f, 0.05f, 0.05f));
   }
 }
 
-static void rescue_scene(float alpha) {
-  if (g_map_id != MAP_COMPOUND_ID) return;
-  if (g_resc.on) {
-    g_fig_k = 12;
-    for (int i = 0; i < RESC_HOSTAGES; i++) hostage_draw(&g_resc.h[i], i, alpha);
-  }
+// A helicopter's rotors over the PROP_HELI airframe parked at (hx, hz), nose
+// +x: blade angle a, spin 0 (at rest, drooping) .. 1 (at flight speed).
+static void heli_rotors(float hx, float hz, float a, float spin) {
   // The helicopter's rotors (prop_heli is the airframe): two broad main
   // blades on the hub, drooping a little at rest and flat at speed, and the
   // two-bladed tail rotor on the fin's left.
-  float a = g_resc.prev_rotor + (g_resc.rotor - g_resc.prev_rotor) * alpha;
-  float spin = f_clamp(g_resc.rotor_w / 30.0f, 0.0f, 1.0f);
   mat_set(0.55f, 0.2f);
   v3 rc = rgb(0.09f, 0.10f, 0.09f), tipc = rgb(0.80f, 0.74f, 0.20f);
-  v3 c = {{22.0f, 3.58f, -45.0f}};
+  v3 c = {{hx, 3.58f, hz}};
   for (int k = 0; k < 2; k++) {
     float b = a + (float)k * F_PI;
     v3 d = {{cosf(b), 0, sinf(b)}}, q = {{-sinf(b), 0, cosf(b)}};
@@ -146,13 +181,31 @@ static void rescue_scene(float alpha) {
     scene_box(v3_add(c, (v3){{0, 0.10f, 0}}), v3_scale(d, 1.1f), (v3){{0, 0.012f, 0}},
               (v3){{-sinf(b) * 0.02f, 0, cosf(b) * 0.02f}}, rgb(0.12f, 0.12f, 0.12f));
   }
-  v3 tc = {{22.0f - 10.72f, 3.42f, -45.0f - 0.24f}};
+  v3 tc = {{hx - 10.72f, 3.42f, hz - 0.24f}};
   float tb = a * 3.1f;
   for (int k = 0; k < 2; k++) {
     float t2 = tb + (float)k * F_PI;
     scene_box(v3_add(tc, (v3){{cosf(t2) * 0.62f, sinf(t2) * 0.62f, 0}}),
               (v3){{cosf(t2) * 0.62f, sinf(t2) * 0.62f, 0}}, (v3){{-sinf(t2) * 0.09f, cosf(t2) * 0.09f, 0}},
               (v3){{0, 0, 0.015f}}, rc);
+  }
+}
+
+static void rescue_scene(float alpha) {
+  if (g_map_id == MAP_COMPOUND_ID && g_resc.on) {
+    g_fig_k = 12;
+    for (int i = 0; i < RESC_HOSTAGES; i++) hostage_draw(&g_resc.h[i], i, alpha);
+  }
+  // The helicopters' rotors (prop_heli is the airframe): the Compound's LZ
+  // bird turns with the mission, every other parked one stands at rest.
+  // (0.8.9: the Outpost's helipad parked one with no rotor at all.)
+  for (int i = 0; i < g_nprops; i++) {
+    const prop_t *pr = &g_props[i];
+    if (pr->kind != PROP_HELI) continue;
+    int lz = g_map_id == MAP_COMPOUND_ID && fabsf(pr->x - 22.0f) < 0.1f && fabsf(pr->z + 45.0f) < 0.1f;
+    float a = lz ? g_resc.prev_rotor + (g_resc.rotor - g_resc.prev_rotor) * alpha : 0.6f + pr->x * 0.37f;
+    float spin = lz ? f_clamp(g_resc.rotor_w / 30.0f, 0.0f, 1.0f) : 0.0f;
+    heli_rotors(pr->x, pr->z, a, spin);
   }
 }
 

@@ -149,9 +149,9 @@ static config_t config_defaults(void) {
                 // is what carries the challenge now — see SP_BOTS_DEF.
                 .vol = VOL_DEF.def, .sp_bots = (int)SP_BOTS_DEF.def, .sp_diff = 2,
                 .sp_frag = (int)SP_FRAG_DEF.def, .name = "PLAYER",
-                .sp_mode = GM_DM, .sp_rounds = (int)SP_ROUNDS_DEF.def, .sp_map = 0,
+                .sp_mode = GM_DM, .sp_rounds = (int)SP_ROUNDS_DEF.def, .sp_map = MAP_ARENA_ID,
                 .sp_team_size = 5, .sp_team_fill = 1, .sp_team = 0, .sp_team_ff = 0,
-                .host_mode = GM_DM, .host_teams = 1, .host_map = 0, .host_bots = 3,
+                .host_mode = GM_DM, .host_teams = 1, .host_map = MAP_ARENA_ID, .host_bots = 3,
                 .host_team_size = 5, .host_team_fill = 1, .host_team_ff = 0,
                 .sp_squad = 3, .host_squad = 3,
                 // LINEAR (0), changed from STANDARD 2026-08-19. The power curve
@@ -218,8 +218,8 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "sp_mode %s\n%s %d\n", GM_KEYS[c->sp_mode >= 0 && c->sp_mode < GM_COUNT
                                              ? c->sp_mode : GM_DM],
           SP_ROUNDS_DEF.key, c->sp_rounds);
-  fprintf(f, "sp_teams %d\nsp_weapons %s\n", c->sp_teams,
-          WR_KEYS[c->sp_wrule >= 0 && c->sp_wrule < WR_COUNT ? c->sp_wrule : 0]);
+  char wk[12];
+  fprintf(f, "sp_teams %d\nsp_weapons %s\n", c->sp_teams, wr_key(c->sp_wrule, wk, sizeof wk));
   {
     char lad[GG_MAX * 6 + 1];
     gg_format(c->gg, c->gg_n, lad, sizeof lad);
@@ -230,8 +230,7 @@ static void config_emit(FILE *f, const config_t *c) {
   fprintf(f, "host_mode %s\nhost_map %s\nhost_bots %d\n",
           GM_KEYS[c->host_mode >= 0 && c->host_mode < GM_COUNT ? c->host_mode : GM_DM],
           map_pick_key(c->host_map), c->host_bots);
-  fprintf(f, "host_teams %d\nhost_weapons %s\n", c->host_teams,
-          WR_KEYS[c->host_wrule >= 0 && c->host_wrule < WR_COUNT ? c->host_wrule : 0]);
+  fprintf(f, "host_teams %d\nhost_weapons %s\n", c->host_teams, wr_key(c->host_wrule, wk, sizeof wk));
   fprintf(f, "host_team_size %d\nhost_team_fill %d\nhost_friendly_fire %d\n",
           c->host_team_size, c->host_team_fill, c->host_team_ff);
   fprintf(f, "sp_squad %d\nhost_squad %d\n", c->sp_squad, c->host_squad);

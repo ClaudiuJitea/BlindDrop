@@ -8,6 +8,10 @@
 // Grouped by what the hand does: movement (leaning is a movement, not a weapon
 // mode), then the weapon, then the meta keys. The KEYS tab lists them in this
 // order, so the enum IS the menu layout.
+// THE ARENA (0.8.9) is the handmade TRAINING ZONE, MAP_DEFS[MAP_ARENA_ID]. The
+// procedural arena it replaced is still map 0 ("proc"), hidden from the
+// menus and the rotation: the proof battery was measured on it and runs on it.
+#define MAP_ARENA_ID 8
 typedef enum {
   IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT, IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R,
   IN_FIRE, IN_ADS, IN_RELOAD, IN_ALTFIRE, IN_SWAP, IN_SWAP_PREV, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SLOT6, IN_SLOT7,
@@ -699,7 +703,7 @@ static struct {   // consumed by the Linux server half only
 // loopback CONNECTED probe plus the crash-loop gate that counts `exit rc=` lines
 // in game.log after it. A positional initializer over a struct whose field list
 // is edited is a silent trap, and this one only has to be sprung once.
-} g_srv = {.port = NET_PORT_DEF, .cap_bots = 2, .cap_public = 6,
+} g_srv = {.port = NET_PORT_DEF, .map = MAP_ARENA_ID, .cap_bots = 2, .cap_public = 6,
            .skill = 1, .fraglimit = 12, .lobbies = 1, .mode = 0, .rounds = 3,
            .ticks = 0, .team_size = 5, .team_fill = 1, .squad = 3};
 
@@ -779,9 +783,16 @@ static const char *const GM_KEYS[GM_COUNT] = {"dm", "gun", "elim", "rescue"};
 // The modes TEAMS and WEAPONS apply to.
 static int gm_has_rules(int m) { return m == GM_DM || m == GM_LMS; }
 static int gm_rounds(int m) { return m == GM_LMS; }   // ELIMINATION plays to rounds
-typedef enum { WR_ALL, WR_SNIPERS, WR_BLADES, WR_COUNT } wpn_rule_t;
-static const char *const WR_NAMES[WR_COUNT] = {"ALL", "SNIPERS ONLY", "KNIVES + NADES"};
-static const char *const WR_KEYS[WR_COUNT] = {"all", "snipers", "blades"};
+// THE WEAPONS RULE (0.8.9): ALL, or ONE GUN + NADES. A pick is any single gun of
+// the Armory (a slot and its variant, the GUN GAME rung code) plus the grenades,
+// with the knife always at the belt: "AK-47 + NADES", "AWP + NADES" (the old
+// SNIPERS ONLY), "KNIFE + NADES" (the old KNIVES + NADES, which keeps its frag
+// rules). Stored as 0 = ALL, else 1 + the rung code (one byte on the wire); the
+// key is "all" or the rung's ladder key ("ar1", "sr0", "kn0").
+#define WR_ALL 0
+#define WR_MAKE(slot, var) (1 + GG_RUNG(slot, var))
+#define WR_SNIPERS WR_MAKE(WPN_SR, 0)
+#define WR_BLADES  WR_MAKE(WPN_KN, 0)
 // TEAMS: two sides, ALPHA and BRAVO. A winner >= MAX_ENTS is a TEAM
 // (MAX_ENTS + team), which is how EV_END, NP_SCORES and the banner carry it;
 // in a team ELIMINATION a side's round is carried the same way in round_win.
@@ -836,6 +847,28 @@ static void gg_format(const uint8_t *r, int n, char *buf, size_t cap) {
                            GG_VAR(r[i]));
 }
 #define GG_RUNG_KILLS 2
+// THE WEAPONS RULE's helpers (the encoding is above, by WR_ALL).
+static int wr_valid(int w) {
+  return w == WR_ALL || (w > 0 && w <= 256 && gg_rung_valid(w - 1) && GG_SLOT(w - 1) != WPN_GR);
+}
+static int wr_slot(int w) { return GG_SLOT(w - 1); }
+static int wr_var(int w) { return GG_VAR(w - 1); }
+// "all", a ladder key ("ar1"), or the old keys "snipers" / "blades". -1 if bad.
+static int wr_parse(const char *s) {
+  if (!strcmp(s, "all")) return WR_ALL;
+  if (!strcmp(s, "snipers")) return WR_SNIPERS;
+  if (!strcmp(s, "blades")) return WR_BLADES;
+  uint8_t r[GG_MAX];
+  if (strchr(s, ',') || gg_parse(s, r) != 1) return -1;
+  int w = 1 + r[0];
+  return wr_valid(w) ? w : -1;
+}
+static const char *wr_key(int w, char *buf, size_t cap) {
+  if (!wr_valid(w) || w == WR_ALL) { snprintf(buf, cap, "all"); return buf; }
+  uint8_t r = (uint8_t)(w - 1);
+  gg_format(&r, 1, buf, cap);
+  return buf;
+}
 static int map_parse(const char *s);        // the MAP setting; both live with
 static const char *map_pick_key(int pick);  // MAP_DEFS, by map_generate
 static int gm_parse(const char *s) {
@@ -856,9 +889,5 @@ static int gm_parse_legacy(const char *s, int *teams, int *wrule) {
   if (m >= 0 && t >= 0 && teams) *teams = t;
   if (m >= 0 && w >= 0 && wrule) *wrule = w;
   return m;
-}
-static int wr_parse(const char *s) {
-  for (int i = 0; i < WR_COUNT; i++) if (!strcmp(s, WR_KEYS[i])) return i;
-  return -1;
 }
 

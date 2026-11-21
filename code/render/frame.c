@@ -126,49 +126,6 @@ static void preview_render(v3 main_eye, const mat4 *main_vp) {
   rt_bind(scene_target(), R.width, R.height);
 }
 
-// ONE BLOOD BLOT on the lens: a dark core, a wetter inner pool, ragged lobes,
-// flung droplets and drips that run with `age` (0 fresh .. 1 old). `drip`
-// scales how far the drips have run. Seeded, so a blot keeps its shape.
-// A blood disk, tessellated by size (a 2 px droplet does not need 32 segments,
-// and the lens can carry hundreds of them), flushing the batch before it fills.
-static void bdisk(float x, float y, float r, float cr, float cg, float cb, float a) {
-  if (g_ui_nverts > UI_MAX_VERTS - 600) { ui_flush(); g_ui_nverts = 0; }
-  ui_diskn(x, y, r, r < 2.5f ? 6 : r < 8.0f ? 10 : r < 20.0f ? 16 : 24, (float[4]){cr, cg, cb, a});
-}
-static void blood_blot(float x, float y, float r, float a, uint32_t seed, float age, float drip) {
-  uint32_t h = seed ? seed : 1u;
-  bdisk(x, y, r, 0.17f, 0.008f, 0.012f, a * 0.85f);
-  bdisk(x + (splat_rand(&h) - 0.5f) * r * 0.5f, y + (splat_rand(&h) - 0.5f) * r * 0.5f, r * 0.74f,
-          0.38f, 0.025f, 0.030f, a * 0.85f);
-  for (int k = 0; k < 6; k++) {
-    float an = splat_rand(&h) * 6.2832f, d = r * (0.50f + 0.40f * splat_rand(&h));
-    bdisk(x + cosf(an) * d, y + sinf(an) * d, r * (0.28f + 0.26f * splat_rand(&h)),
-            0.26f, 0.016f, 0.020f, a * 0.80f);
-  }
-  {                                     // a smear stroke dragged off the blot
-    float an = splat_rand(&h) * 6.2832f, cx = cosf(an), cy = sinf(an);
-    for (int k = 1; k <= 7; k++) {
-      float d = r * 0.42f * (float)k, rr = r * (0.62f - 0.07f * (float)k);
-      bdisk(x + cx * d, y + cy * d, rr, 0.24f, 0.014f, 0.018f, a * (0.70f - 0.06f * (float)k));
-    }
-  }
-  bdisk(x - r * 0.22f, y - r * 0.26f, r * 0.20f, 0.62f, 0.10f, 0.10f, a * 0.30f);   // wet highlight
-  int nd = 8 + (int)(splat_rand(&h) * 8.0f);
-  for (int k = 0; k < nd; k++) {
-    float an = splat_rand(&h) * 6.2832f, d = r * (1.10f + 1.6f * splat_rand(&h));
-    bdisk(x + cosf(an) * d, y + sinf(an) * d, r * (0.04f + 0.12f * splat_rand(&h)),
-            0.30f, 0.02f, 0.025f, a * 0.75f);
-  }
-  int ndr = 1 + (int)(splat_rand(&h) * 3.99f);
-  for (int k = 0; k < ndr; k++) {
-    float dx2 = (splat_rand(&h) - 0.5f) * r * 1.3f, wv = r * (0.06f + 0.06f * splat_rand(&h));
-    float len = r * drip * (0.3f + (0.8f + 1.8f * splat_rand(&h)) * fminf(1.0f, age * 2.2f));
-    float y0 = y + r * 0.2f;
-    ui_rect(x + dx2 - wv, y0, 2.0f * wv, len, 0.30f, 0.02f, 0.025f, a * 0.78f);
-    bdisk(x + dx2, y0 + len, wv * 1.5f, 0.30f, 0.02f, 0.025f, a * 0.78f);
-  }
-}
-
 static void render_frame(const player_t *p, float alpha, int fps,
                          const cam_override_t *ov) {
   atm_upload();
@@ -194,6 +151,21 @@ static void render_frame(const player_t *p, float alpha, int fps,
     g_hurt_u[0] = on ? g_hurt_kick : 0.0f;
     g_hurt_u[1] = on ? sv : 0.0f;
     g_hurt_u[2] = on ? hb : 0.0f;
+    // ...and where each live attacker is, as a screen-edge bearing for the
+    // composite's directional glow (front = up, right = right). Eased out so
+    // the glow lingers after the arc's first flash.
+    float mx = 0.0f;
+    for (int i = 0; i < 4; i++) {
+      g_dmg_u[i][0] = g_dmg_u[i][1] = g_dmg_u[i][2] = g_dmg_u[i][3] = 0.0f;
+      if (!on || i >= DMG_SLOTS || g_dmg[i].life <= 0) continue;
+      float dk = (float)g_dmg[i].life / (float)DMG_TICKS;
+      float rel = atan2f(g_dmg[i].from.x - p->pos.x, -(g_dmg[i].from.z - p->pos.z)) - p->yaw;
+      g_dmg_u[i][0] = sinf(rel);
+      g_dmg_u[i][1] = cosf(rel);
+      g_dmg_u[i][2] = 0.85f * sqrtf(dk);
+      mx = fmaxf(mx, g_dmg_u[i][2]);
+    }
+    g_hurt_u[3] = mx;
   }
   glBindFramebuffer(GL_FRAMEBUFFER, scene_target());
   v3 feet = v3_lerp(p->prev_pos, p->pos, alpha);
@@ -1097,79 +1069,8 @@ static void render_frame(const player_t *p, float alpha, int fps,
   ui_begin();
   perf_draw();
   if (!g_home) {
-    // BLOOD ON THE LENS, in two layers — drawn FIRST, so every readout stays on top.
-    // THE WOUND FRAME: how hurt you are, at a glance, without reading a number.
-    // A fixed set of smears round the border (re-rolled each life), each with
-    // the health below which it shows, so the frame closes in as the health
-    // runs out — a corner or two at 75, every edge crusted at 15 — and it
-    // breathes with the same heartbeat the composite pulses on.
-    if (!p->alive) memset(g_splat, 0, sizeof g_splat);
-    if (p->alive && !g_home) {
-      float hp01 = f_clamp((float)p->hp / PLAYER_HP, 0.0f, 1.0f);
-      float miss = 1.0f - hp01;
-      if (miss > 0.22f) {
-        uint32_t h = 0x9E3779B9u * (uint32_t)(g_cfg.st_deaths + 1) + 0x51u;
-        float beat = 0.86f + 0.14f * g_hurt_u[2];
-        const int NB = 30;
-        for (int k = 0; k < NB; k++) {
-          float thr = 0.22f + 0.70f * (float)k / (float)NB;     // health lost before it shows
-          float side = splat_rand(&h), along = splat_rand(&h), sz = splat_rand(&h);
-          float jit = splat_rand(&h);
-          uint32_t sseed = h;
-          (void)splat_rand(&h);
-          if (miss < thr) continue;
-          float grow = f_clamp((miss - thr) / 0.18f, 0.0f, 1.0f);
-          // corners first (the first few smears), then anywhere on the border
-          float x, y;
-          if (k < 6) {
-            x = (k & 1) ? g_ui_vw * (0.02f + 0.10f * along) : g_ui_vw * (0.98f - 0.10f * along);
-            y = (k & 2) ? g_ui_vh * (0.03f + 0.12f * jit) : g_ui_vh * (0.97f - 0.12f * jit);
-          } else if (side < 0.25f) { x = g_ui_vw * along; y = g_ui_vh * (0.01f + 0.05f * jit); }
-          else if (side < 0.50f) { x = g_ui_vw * along; y = g_ui_vh * (0.99f - 0.05f * jit); }
-          else if (side < 0.75f) { x = g_ui_vw * (0.01f + 0.04f * jit); y = g_ui_vh * along; }
-          else                   { x = g_ui_vw * (0.99f - 0.04f * jit); y = g_ui_vh * along; }
-          // keep the readouts clear: the health panel bottom-left, ammo bottom-right
-          if (y > g_ui_vh - 52.0f && (x < 130.0f || x > g_ui_vw - 150.0f)) y = g_ui_vh - 70.0f - 40.0f * jit;
-          float r = (14.0f + 30.0f * sz) * (0.45f + 0.55f * grow) * (0.9f + 0.5f * miss);
-          blood_blot(x, y, r * beat, (0.42f + 0.40f * miss) * (0.5f + 0.5f * grow), sseed,
-                     0.35f + 0.65f * grow, 0.55f);
-        }
-      }
-    }
-    // THE HIT SPLATS: each lands along the edge of the screen on the side the
-    // round came from — a blot, flung droplets, a spatter streak pointing back
-    // at the shooter and drips that run down while it fades.
-    for (int si = 0; si < SPLAT_N && p->alive; si++) {
-      typeof(g_splat[0]) *sp = &g_splat[si];
-      if (sp->life <= 0) continue;
-      uint32_t h = sp->seed;
-      if (!sp->placed) {
-        float ddx = sp->from.x - feet.x, ddz = sp->from.z - feet.z;
-        float rel = atan2f(ddx, -ddz) - yaw + (splat_rand(&h) - 0.5f) * 1.6f;
-        float dx = sinf(rel), dy = -cosf(rel);
-        float m = fmaxf(fabsf(dx) / (g_ui_vw * 0.5f), fabsf(dy) / (g_ui_vh * 0.5f));
-        float edge = 0.62f + 0.34f * splat_rand(&h);
-        sp->x = g_ui_vw * 0.5f + dx / m * edge;
-        sp->y = g_ui_vh * 0.5f + dy / m * edge;
-        sp->placed = 1;
-      }
-      float life01 = (float)sp->life / (float)sp->max, age = 1.0f - life01;
-      float a = fminf(1.0f, life01 * 2.5f) * 0.85f;
-      float r = sp->r * (0.70f + 0.30f * fminf(1.0f, age * 14.0f));
-      // the streak: droplets thrown inward, away from the edge it hit
-      float ix = g_ui_vw * 0.5f - sp->x, iy = g_ui_vh * 0.5f - sp->y, il = sqrtf(ix * ix + iy * iy);
-      if (il > 1.0f) {
-        ix /= il; iy /= il;
-        for (int k = 0; k < 7; k++) {
-          float d = r * (1.0f + 0.55f * (float)k) * (0.9f + 0.3f * splat_rand(&h));
-          float lat = (splat_rand(&h) - 0.5f) * r * 0.5f;
-          bdisk(sp->x + ix * d - iy * lat, sp->y + iy * d + ix * lat,
-                  r * (0.16f - 0.018f * (float)k) * (0.7f + 0.6f * splat_rand(&h)),
-                  0.34f, 0.02f, 0.025f, a * 0.8f);
-        }
-      }
-      blood_blot(sp->x, sp->y, r, a, sp->seed, age, 1.0f);
-    }
+    // (The blood-on-the-lens disks are gone: the wound now lives in the
+    // composite — post.c, uHurt / uDmg — as one organic edge treatment.)
     ui_flush(); g_ui_nverts = 0;
 
   }
@@ -1539,33 +1440,37 @@ static void render_frame(const player_t *p, float alpha, int fps,
       }
     }
 
-    // Incoming damage: a brief THREAT edge wash (gradients, not slabs) plus
-    // one ARC per live attacker — an arc IS a direction at a glance, and the
-    // chords fade toward the wedge ends so it has no hard corner.
-    if (g_dmg_t > 0 && p->alive) {
-      float k = (float)g_dmg_t / DMG_TICKS;
-      ui_vgrad(0, 0, g_ui_vw, 22, C4(C_THREAT, 0.22f * k), C4(C_THREAT, 0));
-      ui_vgrad(0, g_ui_vh - 22, g_ui_vw, 22, C4(C_THREAT, 0), C4(C_THREAT, 0.22f * k));
-      ui_hgrad(0, 0, 22, g_ui_vh, C4(C_THREAT, 0.22f * k), C4(C_THREAT, 0));
-      ui_hgrad(g_ui_vw - 22, 0, 22, g_ui_vh, C4(C_THREAT, 0), C4(C_THREAT, 0.22f * k));
-    }
+    // Incoming damage: one CRESCENT per live attacker round the crosshair,
+    // thick in the middle and tapering to points, with a small pointer at its
+    // apex — an arc IS a direction at a glance. It pops in a little wide and
+    // settles (the first 10% of its life), then fades. The screen-edge glow
+    // on the same bearing comes from the composite (uDmg).
     for (int di = 0; di < DMG_SLOTS && p->alive; di++) {
       if (g_dmg[di].life <= 0) continue;
       float dk = (float)g_dmg[di].life / DMG_TICKS;
       float ddx = g_dmg[di].from.x - feet.x, ddz = g_dmg[di].from.z - feet.z;
       float rel = atan2f(ddx, -ddz) - yaw;
-      const float R0 = 46.0f, HALF = 0.35f;      // 40 deg of arc
-      for (int seg = 0; seg < 8; seg++) {
-        float a0 = rel - HALF + (2.0f * HALF) * (float)seg / 8.0f;
-        float a1 = rel - HALF + (2.0f * HALF) * (float)(seg + 1) / 8.0f;
-        float m = 1.0f - fabsf((float)seg - 3.5f) / 4.6f;
-        ui_line(ccx + sinf(a0) * R0, ccy - cosf(a0) * R0,
-                ccx + sinf(a1) * R0, ccy - cosf(a1) * R0,
-                2.5f, 0.05f, 0.01f, 0.01f, 0.50f * dk * m);
-        ui_line(ccx + sinf(a0) * R0, ccy - cosf(a0) * R0,
-                ccx + sinf(a1) * R0, ccy - cosf(a1) * R0,
-                1.7f, C_THREAT, 0.95f * dk * m);
+      float pop = f_clamp((1.0f - dk) / 0.10f, 0.0f, 1.0f);
+      float a = fminf(1.0f, dk * 1.8f);
+      const float HALF = 0.42f, NS = 14;
+      float R0 = 64.0f + 10.0f * (1.0f - pop);
+      for (int seg = 0; seg < (int)NS; seg++) {
+        float t0 = (float)seg / NS, t1 = (float)(seg + 1) / NS;
+        float a0 = rel - HALF + 2.0f * HALF * t0, a1 = rel - HALF + 2.0f * HALF * t1;
+        float m = sinf(F_PI * 0.5f * (t0 + t1));          // 0 at the tips, 1 mid
+        float cw = 1.0f + 4.2f * m;
+        float x0 = ccx + sinf(a0) * R0, y0 = ccy - cosf(a0) * R0;
+        float x1 = ccx + sinf(a1) * R0, y1 = ccy - cosf(a1) * R0;
+        ui_capsule(x0, y0, x1, y1, cw * 0.5f + 1.2f, 0.06f, 0.0f, 0.0f, 0.35f * a * m);
+        ui_capsule(x0, y0, x1, y1, cw * 0.5f, 0.92f, 0.12f, 0.10f, 0.92f * a * (0.35f + 0.65f * m));
       }
+      // the pointer: a small chevron just outside the apex
+      float ax = sinf(rel), ay = -cosf(rel), tx = -ay, ty = ax;
+      float px = ccx + ax * (R0 + 9.0f), py = ccy + ay * (R0 + 9.0f);
+      ui_capsule(px - tx * 5.0f - ax * 3.0f, py - ty * 5.0f - ay * 3.0f, px, py, 1.3f,
+                 0.95f, 0.18f, 0.14f, 0.95f * a);
+      ui_capsule(px + tx * 5.0f - ax * 3.0f, py + ty * 5.0f - ay * 3.0f, px, py, 1.3f,
+                 0.95f, 0.18f, 0.14f, 0.95f * a);
     }
 
     // A SUPPLY PICKUP: what you just took, for two seconds under the crosshair.
@@ -1716,7 +1621,7 @@ static void render_frame(const player_t *p, float alpha, int fps,
       // The WEAPONS rule rides on the end of the line, or is the line.
       if (wr != WR_ALL) {
         size_t cl = strlen(cap);
-        snprintf(cap + cl, sizeof cap - cl, "%s%s", cl ? " \x05 " : "", WR_NAMES[wr]);
+        snprintf(cap + cl, sizeof cap - cl, "%s%s", cl ? " \x05 " : "", wr_name(wr));
       }
       if (cap[0] && tms)
         ui_text_sh(cap, ccx - ui_text_width_tr(cap, 0.7f, 1.2f) * 0.5f, 25, 0.7f,

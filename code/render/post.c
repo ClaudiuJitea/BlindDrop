@@ -235,7 +235,8 @@ static const char *POST_FS =
   "uniform vec2 uVmVel;\n"      // the weapon's own screen motion this frame
   "uniform vec3 uSunC;\n"
   "uniform mat4 uInvVP, uPrevVP;\n"
-  "uniform vec4 uHurt;\n"      // hit shock, severity, heartbeat, -
+  "uniform vec4 uHurt;\n"      // hit shock, severity, heartbeat, strongest hit direction
+  "uniform vec4 uDmg[4];\n"    // per attacker: screen direction (x right, y up), strength
   "out vec4 oCol;\n"
   GLSL_DISPLAY
   "void main(){\n"
@@ -345,15 +346,39 @@ static const char *POST_FS =
   // edge closes in blood-dark red (breathing with the heartbeat when it is
   // low), and a fresh hit flashes the same edge. Display-referred, after the
   // grade, so it reads the same under every sky.
-  "  if (uHurt.x + uHurt.y > 0.001) {\n"
+  // WOUNDED, v2 (0.8.9). The old wash was a clean ellipse and the blood was
+  // drawn on top as stacked translucent disks — a ring of red bubbles. Now it
+  // is ONE treatment, here: the colour drains with the missing health, and the
+  // frame closes in from an ORGANIC edge (three low harmonics of the angle, so
+  // the dark creeps in further at some bearings than others and drifts slowly),
+  // darkest at the rim, breathing with the heartbeat. Each live attacker adds
+  // a glow on the edge he is shooting from, which is the direction cue the
+  // eye takes without reading anything. A fresh hit flashes the whole rim.
+  "  if (uHurt.x + uHurt.y + uHurt.w > 0.001) {\n"
   "    vec2 hq = vUV - 0.5;\n"
-  "    float e = smoothstep(0.02, 0.55, dot(hq, hq) * (2.2 + 1.2 * uHurt.y));\n"
-  "    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+  "    vec2 ha = hq * vec2(uAspect, 1.0);\n"
+  "    float ang = atan(ha.y, ha.x);\n"
+  "    float wob = 0.55 * sin(ang * 3.0 + 1.3 + uTime * 0.07) + 0.30 * sin(ang * 7.0 - 0.6 - uTime * 0.11)\n"
+  "              + 0.15 * sin(ang * 13.0 + 2.1);\n"
+  "    float rr = length(hq) * 2.0;\n"   // 1 at the middle of an edge, 1.41 in a corner
   "    float sev = uHurt.y, hb = uHurt.z, k = uHurt.x;\n"
-  "    c = mix(c, vec3(l), sev * (0.30 + 0.40 * e));\n"
-  "    float w = clamp(e * (0.78 * sev * (0.70 + 0.30 * hb) + 0.90 * k) + 0.10 * k + 0.04 * sev, 0.0, 0.86);\n"
-  "    c = mix(c, vec3(0.32, 0.02, 0.025) * (0.35 + 0.9 * l), w);\n"
-  "    c *= 1.0 - 0.22 * sev * e * hb;\n"
+  "    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));\n"
+  "    float reach = 1.00 - 0.40 * sev - 0.05 * sev * hb + 0.05 * wob * (0.4 + sev);\n"
+  "    float e = smoothstep(reach, reach + 0.42, rr) * step(0.001, sev);\n"
+  "    c = mix(c, vec3(l), sev * (0.22 + 0.48 * e));\n"
+  "    vec3 blood = vec3(0.46, 0.022, 0.03) * (0.38 + 0.62 * l);\n"
+  "    blood *= mix(1.0, 0.62, smoothstep(reach + 0.20, reach + 0.70, rr));\n"
+  "    c = mix(c, blood, clamp(e * (0.25 + 0.75 * sev) * (0.82 + 0.18 * hb), 0.0, 0.80));\n"
+  "    vec2 nd = ha / max(length(ha), 1e-4);\n"
+  "    float dw = 0.0;\n"
+  "    for (int i = 0; i < 4; i++) {\n"
+  "      if (uDmg[i].z <= 0.0) continue;\n"
+  "      float lobe = smoothstep(0.30, 1.0, dot(nd, uDmg[i].xy));\n"
+  "      dw = max(dw, uDmg[i].z * lobe * lobe * smoothstep(0.30, 1.10, rr));\n"
+  "    }\n"
+  "    dw = max(dw, k * 0.45 * smoothstep(0.55, 1.30, rr));\n"
+  "    c = mix(c, vec3(0.62, 0.03, 0.04) * (0.45 + 0.65 * l) + vec3(0.06, 0.0, 0.0), clamp(dw, 0.0, 0.78));\n"
+  "    c *= 1.0 - 0.12 * sev * e * hb;\n"
   "  }\n"
   "  float dth = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));\n"
   "  oCol = vec4(c + (dth - 0.5) * 0.0039216, 1.0);\n"

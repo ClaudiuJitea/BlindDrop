@@ -489,6 +489,43 @@ static v3 swap_pole(v3 sho, v3 wr, v3 Rc, v3 spine, float side) {
                 v3_scale(cfw, 0.55f * h));
 }
 
+// A point on the procedural skull's surface (the seven rings scene_draw_figure
+// builds the head from), `x` across and `y` up the head frame, standing `lift`
+// out along the surface normal. Facial hair is laid with it, so a beard follows
+// the jaw instead of floating as a ring in front of it.
+static v3 head_surf(v3 hp, v3 hr, v3 hu, v3 hf, float x, float y, float lift) {
+  static const float ry_[7] = {-0.0880f, -0.0640f, -0.0400f, -0.0056f, 0.0372f, 0.0818f, 0.1116f};
+  static const float rc_[7] = {0.0210f, 0.0075f, -0.0035f, -0.0090f, -0.0110f, -0.0190f, -0.0250f};
+  static const float rx_[7] = {0.0505f, 0.0680f, 0.0752f, 0.0790f, 0.0780f, 0.0692f, 0.0480f};
+  static const float rz_[7] = {0.0570f, 0.0830f, 0.0930f, 0.0980f, 0.0965f, 0.0850f, 0.0605f};
+  int k = 0;
+  while (k < 5 && y > ry_[k + 1]) k++;
+  float u = f_clamp((y - ry_[k]) / (ry_[k + 1] - ry_[k]), 0.0f, 1.0f);
+  float c = rc_[k] + (rc_[k + 1] - rc_[k]) * u;
+  float rx = rx_[k] + (rx_[k + 1] - rx_[k]) * u, rz = rz_[k] + (rz_[k + 1] - rz_[k]) * u;
+  float xr = f_clamp(x / rx, -0.97f, 0.97f);
+  float zf = c + rz * sqrtf(1.0f - xr * xr);
+  float xs = xr * rx;
+  v3 n = v3_norm(v3_add(v3_scale(hr, xs / (rx * rx)), v3_scale(hf, (zf - c) / (rz * rz))));
+  v3 p = v3_add(hp, v3_add(v3_scale(hr, xs), v3_add(v3_scale(hu, y), v3_scale(hf, zf))));
+  return v3_add(p, v3_scale(n, lift));
+}
+// A run of facial hair over the face: each point (x, y, r) a round node of
+// radius r sunk 55% into the skin, so the strand reads as hair lying ON it.
+// Full value jitter: every band a shade of its own, the way hair catches light.
+static void face_hair(v3 hp, v3 hr, v3 hu, v3 hf, const float (*pt)[3], int n, v3 col) {
+  fnode_t nd[FIG_NMAX];
+  if (n > FIG_NMAX) n = FIG_NMAX;
+  for (int q = 0; q < n; q++) {
+    v3 c = q & 1 ? v3_scale(col, 0.90f) : col;
+    nd[q] = (fnode_t){head_surf(hp, hr, hu, hf, pt[q][0], pt[q][1], pt[q][2] * 0.45f),
+                      c, c, pt[q][2], pt[q][2], 0, 0.0f};
+  }
+  g_fig_jit = 1.0f;
+  probe("beard");
+  fig_chain(nd, n, 16, 1, 1, hf);
+}
+
 static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
                               const death_t *dth, float alpha,
                               float flash01, v3 flash_col, int palette, int wpn,
@@ -707,7 +744,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
   // the hips about the pelvis (positions only: the rifle keeps pointing where
   // the pose aimed it, the head keeps looking where it looked) and each foot
   // goes 30 mm further out, with the knee re-solved on its own bend.
-  if (living_pose && FIG_INS && A->slide_s < 0.01f) {
+  if (living_pose && FIG_INS && !g_fig_hos && A->slide_s < 0.01f) {
     v3 F = {{P.head_f.x, 0, P.head_f.z}};
     F = v3_dot(F, F) > 1e-6f ? v3_norm(F) : (v3){{sinf(yaw), 0, -cosf(yaw)}};
     v3 Rt = v3_cross(F, (v3){{0, 1, 0}});
@@ -805,8 +842,9 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     // is a light check), so wrap and face read as two windings of one cloth.
     // ...in the wrap's own two colours: the scarf is the check, the turban the
     // red, so the head reads as two windings and not as one red ball.
-    v3 face = ins ? v3_lerp(kt.wst, kt.helm, 0.25f) : kt.bala;
-    v3 slit = kt.bala;            // the eye line stays the dark cloth on both
+    v3 face = g_fig_hos ? kt.glove : ins ? v3_lerp(kt.wst, kt.helm, 0.25f) : kt.bala;
+    v3 slit = g_fig_hos ? kt.glove : kt.bala;   // the eye line stays the dark cloth on both
+    // (a hostage's face is bare skin: his eyes and brows are drawn on below)
     // v5: WHAT THE HEAD WEARS, decided once. `fg` is the face (the insurgent's
     // is always his wrap), `head` the headgear with the two NVG options folded
     // into the helmet they ride on. MASK x HEADGEAR, where a pair cannot work
@@ -869,6 +907,25 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
        v3_scale(face, 0.82f), 0.058f, 0.061f, 0, 0.62f}};
     probe("neck");
     fig_chain(nk, 5, 16, 1, 1, Rc);
+    if (g_fig_hos) {
+      // THE SHIRT COLLAR: a band round the back of the neck standing 12 mm
+      // off it, turning down at the front into two points either side of the
+      // throat — the one line that says "shirt" rather than "tunic".
+      v3 cfw_ = v3_norm(v3_cross(spine, Rc)), col = v3_scale(kt.olive, 0.97f);
+      for (int e = 0; e < 2; e++) {
+        float es = e ? 1.0f : -1.0f;
+        #define CP(r_, u_, f_) v3_add(P.chest, v3_add(v3_scale(Rc, es * (r_)), \
+                               v3_add(v3_scale(spine, (u_)), v3_scale(cfw_, (f_)))))
+        fnode_t cl[4] = {
+          {CP(0.000f, 0.112f, -0.086f), col, col, 0.016f, 0.005f, 0, 0.0f},
+          {CP(0.062f, 0.114f, -0.058f), col, col, 0.017f, 0.005f, 0, 0.0f},
+          {CP(0.086f, 0.108f, 0.020f), col, col, 0.017f, 0.005f, 0, 0.0f},
+          {CP(0.040f, 0.082f, 0.092f), col, col, 0.012f, 0.004f, 0, 0.0f}};
+        #undef CP
+        probe("collar");
+        fig_chain(cl, 4, 8, 1, 1, spine);
+      }
+    }
     // Seven rings up the skull. A head is not an egg: the jaw is narrower than
     // the cheekbones, the cheekbones are the widest point, and the cranium is
     // wider than it is... no — it is DEEPER than it is wide (rz > rx), which is
@@ -997,7 +1054,199 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
         fig_chain(pt, 2, 8, 1, 1, side);
       }
     }
-    if (head == HEAD_WRAP) {
+    if (g_fig_hos && g_fig_hos_hood) {
+      // THE SACK. Loose hessian over the whole head, gathered by a drawstring
+      // under the jaw: every ring 10-20 mm clear of the skull ring under it
+      // (looser than the wrap: it is a bag, not a winding), the bulk carried
+      // round the crown, the hem bunched below the chin over the collar.
+      g_fig_jit = 1.0f;
+      v3 sk = kt.helm, sw = kt.wst;
+      fnode_t sc[8] = {
+        {HP(0, -0.118f, 0.002f), sw, sw, 0.074f, 0.078f, 0, 0.60f},    // the bunched hem
+        {HP(0, -0.104f, 0.008f), sw, sw, 0.064f, 0.070f, 0, 0.0f},     // the drawstring
+        {HP(0, -0.082f, 0.012f), sk, sk, 0.072f, 0.084f, 0, 0.0f},
+        {HP(0, -0.050f, 0.004f), sk, sw, 0.090f, 0.106f, 0, 0.0f},
+        {HP(0, -0.008f, -0.008f), sw, sk, 0.096f, 0.114f, 0, 0.0f},
+        {HP(0, 0.040f, -0.012f), sk, sk, 0.096f, 0.113f, 0, 0.0f},
+        {HP(0, 0.090f, -0.020f), sk, sw, 0.082f, 0.098f, 0, 0.0f},
+        {HP(0, 0.132f, -0.026f), sw, sw, 0.046f, 0.056f, 0, 0.0f}};
+      probe("hood");
+      fig_chain(sc, 8, 20, 1, 1, hr);
+      // the drawstring's knot and its two tails under the chin
+      v3 cord = v3_scale(sw, 0.80f);
+      fnode_t kn[3] = {
+        {HP(0, -0.104f, 0.060f), cord, cord, 0.010f, 0.010f, 0, 0.0f},
+        {HP(0.008f, -0.140f, 0.066f), cord, cord, 0.005f, 0.005f, 0, 0.0f},
+        {HP(0.014f, -0.178f, 0.060f), cord, cord, 0.004f, 0.004f, 0, 0.0f}};
+      probe("hood");
+      fig_chain(kn, 3, 6, 1, 1, hr);
+      // ...the two sewn corners of the bag standing off the crown, which is
+      // what makes it a SACK pulled over a head and not a knitted cap,
+      fnode_t ea[2][3];
+      for (int e = 0; e < 2; e++) {
+        float es = e ? 1.0f : -1.0f;
+        ea[e][0] = (fnode_t){HP(es * 0.040f, 0.114f, -0.026f), sk, sk, 0.030f, 0.028f, 0, 0.0f};
+        ea[e][1] = (fnode_t){HP(es * 0.072f, 0.132f, -0.032f), sk, sw, 0.016f, 0.012f, 0, 0.0f};
+        ea[e][2] = (fnode_t){HP(es * 0.086f, 0.122f, -0.040f), sw, sw, 0.008f, 0.006f, 0, 0.0f};   // flops over
+        probe("hood");
+        fig_chain(ea[e], 3, 8, 1, 1, hf);
+      }
+      // ...and the rope wound twice round the neck over the hem.
+      v3 rope = {{0.300f, 0.250f, 0.170f}};
+      fnode_t rp[2] = {
+        {HP(0, -0.112f, 0.004f), rope, rope, 0.079f, 0.083f, 0, 0.0f},
+        {HP(0, -0.098f, 0.006f), rope, rope, 0.073f, 0.079f, 0, 0.0f}};
+      fig_chain(rp, 2, 16, 1, 1, hr);
+    } else if (g_fig_hos) {
+      // THE FREED HOSTAGE'S FACE: bare skin, so it gets what the balaclava never
+      // needed — hair, brows, eyes, a nose and a mouth. The hair rings sit
+      // further BACK than the skull's (their centre behind it), so they clear
+      // the back and sides by 7-18 mm and fall inside the forehead: a hairline.
+      // grey (him: receding, a beard, glasses), black (short, a moustache),
+      // auburn (her: full, a ponytail)
+      static const float HAIR[3][3] = {{0.560f, 0.550f, 0.530f}, {0.045f, 0.040f, 0.038f},
+                                       {0.520f, 0.340f, 0.170f}};
+      int hv = (g_fig_hos - 1) % 3;
+      v3 hc = {{HAIR[hv][0], HAIR[hv][1], HAIR[hv][2]}};
+      g_fig_jit = 0.50f;
+      if (hv == 0) {   // a fringe round the back and sides; the crown is bare
+        fnode_t hh[3] = {
+          {HP(0, -0.032f, -0.058f), hc, hc, 0.074f, 0.066f, 0, 0.45f},
+          {HP(0, 0.004f, -0.062f), hc, hc, 0.086f, 0.068f, 0, 0.0f},
+          {HP(0, 0.042f, -0.066f), hc, hc, 0.082f, 0.062f, 0, 0.0f}};   // all behind the temples
+        probe("hair");
+        fig_chain(hh, 3, 20, 1, 1, hr);
+        // the beard: rings centred FORWARD of the jaw's, so they stand off the
+        // chin and cheeks and sink into the neck behind
+        // THE BEARD, laid on the face (head_surf): a full band along the jaw
+        // from sideburn to sideburn, thickest and lowest at the chin; the
+        // cheeks filled above it up to the moustache, which joins them across
+        // the upper lip; the mouth left open between.
+        v3 bd = v3_scale(hc, 0.90f);
+        static const float JAW[9][3] = {
+          {-0.077f, 0.004f, 0.010f}, {-0.075f, -0.034f, 0.015f}, {-0.064f, -0.068f, 0.020f},
+          {-0.040f, -0.092f, 0.024f}, {0.000f, -0.104f, 0.028f}, {0.040f, -0.092f, 0.024f},
+          {0.064f, -0.068f, 0.020f}, {0.075f, -0.034f, 0.015f}, {0.077f, 0.004f, 0.010f}};
+        face_hair(P.head, hr, hu, hf, JAW, 9, bd);
+        for (int e = 0; e < 2; e++) {   // cheek fill: sideburn -> mouth corner
+          float es = e ? 1.0f : -1.0f;
+          const float CH[4][3] = {{es * 0.066f, -0.020f, 0.012f}, {es * 0.058f, -0.046f, 0.016f},
+                                  {es * 0.042f, -0.064f, 0.016f}, {es * 0.028f, -0.070f, 0.012f}};
+          face_hair(P.head, hr, hu, hf, CH, 4, bd);
+        }
+        static const float MO[5][3] = {   // the moustache, drooping at the corners
+          {-0.030f, -0.058f, 0.008f}, {-0.020f, -0.045f, 0.010f}, {0.000f, -0.041f, 0.010f},
+          {0.020f, -0.045f, 0.010f}, {0.030f, -0.058f, 0.008f}};
+        face_hair(P.head, hr, hu, hf, MO, 5, v3_scale(bd, 1.06f));
+        static const float CN[3][3] = {   // under the lower lip, down into the chin
+          {0.000f, -0.070f, 0.012f}, {0.000f, -0.084f, 0.020f}, {0.000f, -0.100f, 0.024f}};
+        face_hair(P.head, hr, hu, hf, CN, 3, bd);
+      } else {
+        float big = hv == 2 ? 1.06f : 1.0f;   // hers is fuller
+        fnode_t hh[5] = {
+          {HP(0, hv == 2 ? -0.070f : -0.030f, -0.052f), hc, hc, 0.074f * big, 0.074f * big, 0, 0.45f},
+          {HP(0, 0.004f, -0.044f), hc, hc, 0.087f * big, 0.084f * big, 0, 0.0f},
+          {HP(0, 0.050f, -0.030f), hc, hc, 0.087f * big, 0.096f * big, 0, 0.0f},
+          {HP(0, 0.088f, -0.024f), hc, hc, 0.077f * big, 0.094f * big, 0, 0.0f},
+          {HP(0, 0.120f, -0.027f), hc, hc, 0.050f * big, 0.064f * big, 0, 0.0f}};
+        probe("hair");
+        fig_chain(hh, 5, 20, 1, 1, hr);
+        if (hv == 2) {   // shoulder-length at the back, hanging behind the neck
+          fnode_t lg[3] = {
+            {HP(0, -0.040f, -0.058f), hc, hc, 0.084f, 0.074f, 0, 0.0f},
+            {HP(0, -0.110f, -0.062f), hc, hc, 0.088f, 0.066f, 0, 0.0f},
+            {HP(0, -0.160f, -0.066f), v3_scale(hc, 0.85f), hc, 0.080f, 0.054f, 0, 0.0f}};
+          probe("hair");
+          fig_chain(lg, 3, 16, 1, 1, hr);
+        }
+        if (hv == 2) {   // the ponytail, tied at the back of the head
+          fnode_t pt[5] = {
+            {HP(0, 0.040f, -0.100f), hc, hc, 0.026f, 0.026f, 0, 0.0f},
+            {HP(0, 0.030f, -0.128f), v3_scale(hc, 0.6f), hc, 0.020f, 0.020f, 0, 0.0f},   // the band
+            {HP(0, -0.010f, -0.142f), hc, hc, 0.026f, 0.024f, 0, 0.0f},
+            {HP(0, -0.080f, -0.146f), hc, hc, 0.022f, 0.020f, 0, 0.0f},
+            {HP(0, -0.140f, -0.136f), hc, hc, 0.010f, 0.010f, 0, 0.0f}};
+          probe("ponytail");
+          fig_chain(pt, 5, 12, 1, 1, hr);
+        }
+        if (hv == 1) {   // a trimmed moustache and a goatee, laid on the face
+          static const float MO[5][3] = {
+            {-0.028f, -0.050f, 0.006f}, {-0.018f, -0.044f, 0.008f}, {0.000f, -0.041f, 0.008f},
+            {0.018f, -0.044f, 0.008f}, {0.028f, -0.050f, 0.006f}};
+          face_hair(P.head, hr, hu, hf, MO, 5, hc);
+          for (int e = 0; e < 2; e++) {   // the corners run down to the chin
+            float es = e ? 1.0f : -1.0f;
+            const float SD[3][3] = {{es * 0.028f, -0.050f, 0.006f}, {es * 0.026f, -0.070f, 0.007f},
+                                    {es * 0.016f, -0.090f, 0.010f}};
+            face_hair(P.head, hr, hu, hf, SD, 3, hc);
+          }
+          static const float GT[3][3] = {
+            {-0.016f, -0.090f, 0.010f}, {0.000f, -0.098f, 0.014f}, {0.016f, -0.090f, 0.010f}};
+          face_hair(P.head, hr, hu, hf, GT, 3, hc);
+          static const float SP[2][3] = {{0.000f, -0.068f, 0.006f}, {0.000f, -0.080f, 0.008f}};
+          face_hair(P.head, hr, hu, hf, SP, 2, hc);   // the soul patch
+        }
+      }
+      g_fig_jit = 1.0f;
+      if (g_fig_k >= 8) {
+        // Features ON the face: (x, y) in the head frame, laid on the skull
+        // ellipse there the way the skull print is, as 2-node discs.
+        const float ry_[5] = {-0.0880f, -0.0640f, -0.0400f, -0.0056f, 0.0372f};
+        const float rc_[5] = {0.0210f, 0.0075f, -0.0035f, -0.0090f, -0.0110f};
+        const float rx_[5] = {0.0505f, 0.0680f, 0.0752f, 0.0790f, 0.0780f};
+        const float rz_[5] = {0.0570f, 0.0830f, 0.0930f, 0.0980f, 0.0965f};
+        v3 lip = hv == 2 ? (v3){{0.520f, 0.180f, 0.170f}} : v3_scale(face, 0.72f);
+        // x, y, half-width, half-height, colour 0 dark (eyes) 1 hair (brows) 2 lip
+        static const float FT[][5] = {
+          {-0.030f, 0.010f, 0.0095f, 0.0042f, 0}, {0.030f, 0.010f, 0.0095f, 0.0042f, 0},
+          {-0.031f, 0.026f, 0.0140f, 0.0030f, 1}, {0.031f, 0.026f, 0.0140f, 0.0030f, 1},
+          {0.000f, -0.054f, 0.0185f, 0.0032f, 2}};
+        for (int q = 0; q < 5; q++) {
+          float x = FT[q][0], y = FT[q][1];
+          int k = 0;
+          while (k < 3 && y > ry_[k + 1]) k++;
+          float u = f_clamp((y - ry_[k]) / (ry_[k + 1] - ry_[k]), 0.0f, 1.0f);
+          float c = rc_[k] + (rc_[k + 1] - rc_[k]) * u;
+          float rx = rx_[k] + (rx_[k + 1] - rx_[k]) * u, rz = rz_[k] + (rz_[k + 1] - rz_[k]) * u;
+          float xr = f_clamp(x / rx, -0.97f, 0.97f);
+          float zf = c + rz * sqrtf(1.0f - xr * xr);
+          v3 n = v3_norm(v3_add(v3_scale(hr, x / (rx * rx)), v3_scale(hf, (zf - c) / (rz * rz))));
+          v3 sp = HP(x, y, zf);
+          v3 side = v3_norm(v3_cross(hu, n));
+          v3 pc = FT[q][4] < 0.5f ? kt.bala : FT[q][4] < 1.5f ? hc : lip;
+          fnode_t pt[2] = {
+            {v3_sub(sp, v3_scale(n, 0.0015f)), pc, pc, FT[q][2], FT[q][3], 0, 0.0f},
+            {v3_add(sp, v3_scale(n, 0.0022f)), pc, pc, FT[q][2], FT[q][3], 0, 0.0f}};
+          probe("face");
+          fig_chain(pt, 2, 8, 1, 1, side);
+        }
+        // the nose: a wedge out of the face between the eyes and the mouth
+        fnode_t ns[3] = {
+          {HP(0, 0.008f, 0.078f), face, face, 0.008f, 0.007f, 0, 0.0f},
+          {HP(0, -0.020f, 0.098f), face, face, 0.011f, 0.010f, 0, 0.0f},
+          {HP(0, -0.033f, 0.093f), face, face, 0.012f, 0.009f, 0, 0.0f}};
+        probe("nose");
+        fig_chain(ns, 3, 8, 1, 1, hr);
+        if (hv == 0) {   // his glasses: two tinted lenses on a dark frame, a bridge, the arms
+          v3 fr = {{0.060f, 0.050f, 0.045f}}, gl = {{0.150f, 0.165f, 0.180f}};
+          mat_set(MAT_GLASS_R, 0.0f);
+          for (int e = 0; e < 2; e++) {
+            float es = e ? 1.0f : -1.0f;
+            fnode_t ln[2] = {{HP(es * 0.030f, 0.011f, 0.083f), fr, fr, 0.0125f, 0.0095f, 0, 0.0f},
+                             {HP(es * 0.030f, 0.011f, 0.086f), gl, fr, 0.0115f, 0.0085f, 0, 0.0f}};
+            probe("glasses");
+            fig_chain(ln, 2, 12, 1, 1, hr);
+            fnode_t am[2] = {{HP(es * 0.042f, 0.013f, 0.078f), fr, fr, 0.0025f, 0.0025f, 0, 0.0f},
+                             {HP(es * 0.084f, 0.012f, -0.010f), fr, fr, 0.003f, 0.003f, 0, 0.0f}};
+            fig_chain(am, 2, 6, 1, 1, hu);
+          }
+          fnode_t bg[2] = {{HP(-0.018f, 0.014f, 0.088f), fr, fr, 0.0025f, 0.0025f, 0, 0.0f},
+                           {HP(0.018f, 0.014f, 0.088f), fr, fr, 0.0025f, 0.0025f, 0, 0.0f}};
+          fig_chain(bg, 2, 6, 1, 1, hu);
+          mat_set(MAT_CLOTH_R, 0.0f);
+        }
+      }
+    } else if (head == HEAD_WRAP) {
       // THE HEAD WRAP. Five rings over the crown, each 9-15 mm clear of the
       // skull station under it and on the skull's own fore/aft centre line, so
       // the two surfaces never run parallel; the bottom cap meets the skull at
@@ -1570,7 +1819,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     // sized to swallow exactly that, and moving it would re-open a z-race that
     // cost a round to close.
     th[nth++] = (fnode_t){P.hip[i], kt.pants, kt.pants, 0.0900f, 0.1079f, 0, 0.0f};
-    if (i == 1) {
+    if (i == 1 && !g_fig_hos) {   // (no drop-leg rig on a hostage)
       // The drop-leg rig's LEG STRAP, as two fat nodes OF THIS CHAIN rather than
       // a band wrapped round it. A nested strap has to cross the thigh's surface
       // to bury its own edges, and two surfaces that cross while nearly PARALLEL
@@ -1685,7 +1934,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
         g_fig_soft = 0;
       }
     }
-    if (i == 1 || fig_dual) {  // Drop-leg rig on the strong-side thigh (both, for the Berettas). A loaded soldier's
+    if ((i == 1 || fig_dual) && !g_fig_hos) {  // Drop-leg rig on the strong-side thigh (both, for the Berettas). A loaded soldier's
       // widest point below the chest is his belt kit, and with nothing on the
       // thigh the legs taper straight out of the hips like a diver's.
       //
@@ -1819,6 +2068,8 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     // Boot: swept along the actual foot axis (which carries the toe pitch), so
     // the sole stays flat on the ground and lifts with the step.
     v3 fF = v3_sub(P.toe[i], P.ankle[i]);
+    // (a hostage kneeling has his feet instep-down behind him: g_fig_bup)
+    v3 bsp = g_fig_hos && v3_dot(g_fig_bup[i], g_fig_bup[i]) > 0.5f ? g_fig_bup[i] : spine;
     if (v3_dot(fF, fF) > 1e-6f) {
       fF = v3_norm(fF);
       // Node heights are chosen so every sole vertex lands ~2 mm above the
@@ -1861,7 +2112,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // invariant) and starts measuring the FOOT CONTROLLER, which is the thing
       // that can actually be wrong.
       float sole_dip = fminf(fminf(fF.y * -0.086f, fF.y * 0.194f), 0.0f);
-      v3 av = v3_add(P.ankle[i], v3_scale(spine, -0.028f - sole_dip));
+      v3 av = v3_add(P.ankle[i], v3_scale(bsp, -0.028f - sole_dip));
       // A BOOT IS THREE PIECES, and building it as one wedge with a strip under
       // it is why it read as a moccasin however its outline was shaped. What the
       // eye actually uses to recognise a combat boot is a stack of three
@@ -1925,7 +2176,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // 16 mm of rubber under it.
       const float UPPR_H = 0.031f;    // leather floor, well inside the slab
       #define SOLEN(H, T, RX, RZ, C, BC) {                                  \
-        v3_add(v3_add(av, v3_scale(fF, (T))), v3_scale(spine, (RX) - (H))), \
+        v3_add(v3_add(av, v3_scale(fF, (T))), v3_scale(bsp, (RX) - (H))), \
         C, BC, (RX), (RZ), 0, 0.0f}
       // ANSUR foot length is 271 mm p50 and a combat boot's exterior is ~290;
       // this runs -0.086 to +0.194, i.e. 280 mm heel to toe with the ankle at
@@ -1972,7 +2223,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // to the heel cap, which is one of the few end caps on this figure the
       // player actually sees.
       g_fig_jit = 0.5f;
-      fig_chain(so, 7, 6, 1, 1, spine);
+      fig_chain(so, 7, 6, 1, 1, bsp);
       g_fig_jit = 1.0f;
       // v5: ROUGH-OUT suede, the modern combat boot, at the cloth roughness.
       // As 0.50 leather its up-facing vamp caught the armory's fill and the sky
@@ -2021,7 +2272,7 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
       // Soft box: the leather keeps its flat floor (buried in the outsole) and
       // flat sides, with rolled edges where the octagon had arrises.
       g_fig_soft = 1;
-      fig_chain(bt, 7, 16, 1, 1, spine);  // sole down: rx is the boot height
+      fig_chain(bt, 7, 16, 1, 1, bsp);  // sole down: rx is the boot height
       g_fig_soft = 0;
       #undef SOLEN
       // Cuff: the shaft up the shin, decisively WIDER than the trouser it
@@ -2148,6 +2399,29 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
                        v3_add(v3_scale(spine, 0.30f), v3_scale(aim, -0.35f))), gs.eu);
     P.elb[0] = ik_solve(P.sho[0], P.wri[0], ANIM_UARM, ANIM_FARM, p0);
     P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, p1);
+  }
+  // THE TRIGGER WRIST GOES BEHIND THE GRIP, NOT UNDER IT. The pose solves
+  // the rifle hold with the wrist 75 mm under the bore and 100 mm back, which
+  // is the BOTTOM of the pistol grip: the forearm then ran straight up the
+  // grip's own axis (measured: forearm . grip axis = 0.93) and fig_hand,
+  // wrapping the fingers round from the wrist, folded the hand 82-92 degrees
+  // forward over the receiver — a hand bent down at the wrist and sunk into
+  // the stock. A real hand sits BEHIND the grip with the forearm running back
+  // along the stock, so the wrist is placed exactly as the pistol's is: off the
+  // grip cylinder, against the bore, and the elbow re-solved on the side the
+  // pose already put it.
+  if (living_pose && !g_fig_hos && (wpn == WPN_AR || wpn == WPN_SR)) {
+    v3 gc1, ga1; float gr1;
+    gun_hold(wpn, GH_GRIP, g_org, g_rt, g_up, g_fw, &gc1, &ga1, &gr1);
+    v3 br1 = v3_sub(v3_scale(g_fw, -1.0f), v3_scale(ga1, -v3_dot(g_fw, ga1)));
+    br1 = v3_norm(br1);
+    P.wri[1] = v3_add(gc1, v3_add(v3_scale(ga1, -0.046f * GUN_GIRTH_3P), v3_scale(br1, gr1 + 0.066f)));
+    v3 aw = v3_sub(P.wri[1], P.sho[1]);
+    float awl = v3_len(aw), amax = (ANIM_UARM + ANIM_FARM) * 0.96f;
+    if (awl > amax) P.wri[1] = v3_add(P.sho[1], v3_scale(aw, amax / awl));
+    v3 pl = v3_sub(P.elb[1], v3_lerp(P.sho[1], P.wri[1], 0.5f));
+    if (v3_dot(pl, pl) < 1e-8f) pl = v3_add(v3_scale(Rc, 0.7f), v3_scale(spine, -0.8f));
+    P.elb[1] = ik_solve(P.sho[1], P.wri[1], ANIM_UARM, ANIM_FARM, v3_norm(pl));
   }
   // THE BODY RELOADS TOO. Filmed from outside at five stations, an AR magazine
   // change was a man standing perfectly still holding a rifle for 1.27 seconds
@@ -2314,7 +2588,8 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     }
   }
   if (hold != wpn) { mag01 = 0.0f; trig01 = 0.0f; }
-  {
+  if (g_fig_hos) g_fig_free = 3;   // a hostage holds nothing: both hands close empty
+  else {
     probe("gun");
     int gv0 = g_scene_floats;
     g_gun_ak = kt.ins;   // the insurgent's rifle wears the AK's dress (looks only)

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="media/hero.jpg" alt="The BlindDrop main menu over a sunlit arena, an operator in a plate carrier holding an assault rifle" width="832">
+  <img src="media/hero.jpg" alt="The BlindDrop main menu over the Arena training zone, an assault rifle in the foreground" width="832">
 </p>
 
 <h1 align="center">BlindDrop</h1>
@@ -11,33 +11,51 @@
 </p>
 
 <p align="center">
-  <img src="media/foundry.jpg" alt="Foundry: the steelworks yard with a railed walkway, a crane gantry and the blast furnace, AK-47 in hand" width="49%">
-  <img src="media/citadel.jpg" alt="Citadel: a sunlit old-town street with the minaret at its end, an AWP in hand" width="49%">
-  <img src="media/bazaar_arcade.jpg" alt="Bazaar: the covered souk hallway, paper lanterns on timber beams over shop counters, an assault rifle in hand" width="49%">
-  <img src="media/refinery.jpg" alt="Refinery: a road under coloured pipe racks on a clear morning" width="49%">
+  <img src="media/arena_walk.jpg" alt="Arena, now a military training zone: the yellow-railed catwalk over the concrete shoot house, containers and the HQ block beyond" width="49%">
+  <img src="media/harbor_dock.jpg" alt="Harbor: the quay under a gantry crane between stacked containers, a sniper rifle in hand" width="49%">
+  <img src="media/refinery_lpg.jpg" alt="Refinery: two white LPG spheres on their legs beside the corrugated tank wall, an assault rifle in hand" width="49%">
+  <img src="media/citadel_wall.jpg" alt="Citadel: the walkway along the top of the new rampart, crenellations on one side and the old town below, a sniper rifle in hand" width="49%">
 </p>
 
-## New in 0.8.7 and 0.8.8
+## New in 0.8.9
 
-- **A much bigger Bazaar:** the market square is now the heart of an 84 m market quarter. Passages
-  lead into a roofed souk hallway with paper lanterns, shop blocks split by narrow alleys, a market
-  street under striped canopies and a ring of tall houses.
-- **Stairs and towers:** stone stairs climb to six roof terraces, a lantern tower stands in each
-  corner, and two pagoda towers look out over the souk.
-- **New outfits:** Sahara, Viper, Nightshade and Abyss join Slate, Arctic and Reaper.
-- **A readable compass:** the forearm compass shows your heading in big digits over a scrolling
-  N / E / S / W strip.
-- **Calmer weapon swaps:** the new weapon comes up in 0.55 s instead of 0.30 s.
-- **0.8.8:** a cleaner third-person seat on light outfits: one trouser surface under the belt.
+- **Arena is a military training zone:** an 88 m camp with a concrete shoot house and a catwalk
+  over it, a six-lane firing range with pop-up targets, an obstacle course, a range control tower
+  and a container village.
+- **Six maps grew:** Harbor, Refinery, Citadel, Foundry and Compound now span 140 m, and Outpost
+  80 m:
+  - **Harbor:** a moored cargo ship you can board.
+  - **Refinery:** LPG spheres and a tanker loading rack.
+  - **Citadel:** a rampart you can walk along, bastions with cannons and a lower town.
+  - **Foundry:** a rail yard and a coil warehouse.
+  - **Compound:** anti-aircraft guns and a ruined village.
+  - **Outpost:** a whole camp with a helipad, a motor pool, a fuel point and a satellite dish.
+- **Climbing fixed:** ladders no longer knock you off at the top. All Outpost towers can be
+  climbed, the Refinery tower stairs have headroom, and bots can now reach the Bazaar souk.
+- **Pick one gun:** the Weapons setting is now ALL or any single gun + nades, such as AK-47 + NADES
+  or DESERT EAGLE + NADES. Everyone, bots too, spawns with it.
+- **Rebuilt guns:** a real banana magazine on the AK-47, and new R8 Revolver and Nova models.
+- **Real hostages:** the three hostages are built like the operators: an older man, a young man
+  and a woman, each in their own clothes. They wear bomb vests with a blinking detonator and kneel
+  hooded with their hands tied. Once you cut them loose, the lamp turns green and they follow you.
+- **Clearer wounds:** a dark red edge closes in as your health drops, the screen edge facing the
+  shooter glows, and the hit marker points to them for a second.
+- **More natural hands:** reshaped shoulders, a firing hand that sits behind the grip, and every
+  finger on the grenade.
 
-0.8.7 and 0.8.8 use network protocol 24, so they can't play with older versions.
+0.8.9 uses network protocol 25, so it can't play with older versions.
 
 <p align="center">
-  <img src="media/bazaar_aerial.jpg" alt="The new Bazaar from above: the market square, the ring of souk buildings, a pagoda tower and a lantern tower" width="100%">
-  <img src="media/bazaar_street.jpg" alt="The Bazaar market street under red, blue and orange canopies with hanging lanterns and spice counters, a pistol in hand" width="49%">
-  <img src="media/bazaar_roof.jpg" alt="A Bazaar roof terrace in golden light, the pagoda tower beyond, a sniper rifle in hand" width="49%">
-  <img src="media/outfits.jpg" alt="The seven outfits: Slate, Sahara, Viper, Nightshade, Arctic, Reaper and Abyss" width="100%">
-  <img src="media/compass.jpg" alt="The new forearm compass reading 357 north, 085 east and 228 south-west" width="100%">
+  <img src="media/arena_range.jpg" alt="The Arena firing range: concrete lane walls and silhouette targets under a white range roof" width="49%">
+  <img src="media/arena_house.jpg" alt="The Arena shoot house: roofless concrete rooms, a blue zone sign and the range control tower" width="49%">
+  <img src="media/harbor_ship.jpg" alt="Harbor from the cargo ship: its white superstructure and the container port beyond" width="49%">
+  <img src="media/outpost_heli.jpg" alt="The Outpost helipad: a green helicopter with its rotors on the pad inside the HESCO walls, a pistol in hand" width="49%">
+  <img src="media/outpost_fuel.jpg" alt="The Outpost motor pool from a tower: the green fuel tank on its saddles, trucks and the camp walls" width="49%">
+  <img src="media/foundry_rail.jpg" alt="The Foundry rail yard: a flatcar carrying steel coils on the siding, a pistol in hand" width="49%">
+  <img src="media/compound_village.jpg" alt="The Compound's ruined mud-brick village with its well, an assault rifle in hand" width="49%">
+  <img src="media/citadel_garden.jpg" alt="The Citadel garden under the rampart: a palm and a street lamp along the wall, a pistol in hand" width="49%">
+  <img src="media/hostages.jpg" alt="The hostages: kneeling hooded with hands tied, the bomb vest with its red lamp, freed and walking with the lamp green, and the three faces: an older man with glasses and a beard, a young man with a goatee and a woman with long hair" width="100%">
+  <img src="media/wound.jpg" alt="The wound screen at low health: a dark red edge closing in on a Citadel street" width="100%">
 </p>
 
 ## The game
@@ -49,7 +67,7 @@
 - **Your operator:** outfit, headgear, vest and pack under **Armory**. `V` toggles third person.
 - **Forearm display:** kills this life, health and ammo bars, a radar or a compass, picked under
   **Settings > HUD** or **Armory > Gear**.
-- **Modes:** four modes plus **Teams** and **Weapons** (all, snipers only, knives + nades) as
+- **Modes:** four modes plus **Teams** and **Weapons** (all, or any one gun + nades) as
   settings, and a Gun Game ladder you build yourself.
 - **No engine, no asset files:** maps are generated in code, and the models and sounds are built
   into the one binary.
@@ -61,14 +79,13 @@
 | **Gun Game** | A kill moves you up your own ladder of guns, and a kill with the last one wins. |
 | **Hostage Rescue** | A stealth mission for a squad of one to three: free three hostages and reach the helicopter. |
 
-**Maps:** Arena (new layout every match), Foundry, Bazaar (now an 84 m market quarter), Outpost, Citadel, Harbor, Refinery and
-Compound. **Rotate** changes map each match.
+**Maps:** Arena (a military training zone), Foundry, Bazaar (an 84 m market quarter), Outpost,
+Citadel, Harbor, Refinery and Compound. **Rotate** changes map each match.
 
 <p align="center">
-  <img src="media/elimination.jpg" alt="Team Elimination with snipers only on Citadel: the round caption reads ROUND 1, 3 V 3, FIRST TO 3, SNIPERS ONLY" width="32%">
-  <img src="media/gungame.jpg" alt="Gun Game on Foundry: the HUD shows the AK-47 on rung 1 of 8" width="32%">
-  <img src="media/rescue.jpg" alt="Hostage Rescue on Compound: a guard in the sniper scope at dusk" width="32%">
-  <img src="media/modes.jpg" alt="The Singleplayer page with Deathmatch, Teams on and Snipers only; the same page in Gun Game with an 8-gun ladder; and the Gun Game Ladder page listing AK-47 to Knife" width="100%">
+  <img src="media/bazaar_arcade.jpg" alt="Bazaar: the covered souk hallway, paper lanterns on timber beams over shop counters, an assault rifle in hand" width="49%">
+  <img src="media/gungame.jpg" alt="Gun Game on Foundry: the HUD shows the AK-47 on rung 1 of 8" width="49%">
+  <img src="media/outfits.jpg" alt="The seven outfits: Slate, Sahara, Viper, Nightshade, Arctic, Reaper and Abyss" width="100%">
   <img src="media/wrist.jpg" alt="The four forearm displays: a kills counter, health and ammo bars, a radar and the heading compass" width="100%">
 </p>
 
@@ -93,15 +110,15 @@ and **Join by address** takes `host:port` (forward UDP 31415 for internet play).
 arena, with bots filling the empty places.
 
 ```sh
-./blinddrop-linux-amd64 --server --mode elim --teams 1 --weapons snipers --team-size 5
+./blinddrop-linux-amd64 --server --mode elim --teams 1 --weapons sr0 --team-size 5
 ./blinddrop-linux-amd64 --server --mode gun --ladder ar1,ar15,pt2,sr2,kn0
 ./blinddrop-linux-amd64 --connect 192.168.1.50
 ```
 
-Modes: `dm elim gun rescue`. Weapons: `all snipers blades`. Maps: `arena foundry bazaar outpost
-citadel harbor refinery compound rotate`. A `--ladder` rung is a slot (`ar` primary, `pt` pistol,
-`sr` sniper, `gr` grenade, `kn` knife) plus its place in the Armory list, counting from 0. The
-menu is easier.
+Modes: `dm elim gun rescue`. Maps: `arena foundry bazaar outpost citadel harbor refinery compound
+rotate`. A gun key, used by `--weapons` (one gun + nades, or `all`) and by each `--ladder` rung, is a
+slot (`ar` primary, `pt` pistol, `sr` sniper, `gr` grenade, `kn` knife) plus its place in the Armory
+list, counting from 0: `sr0` is the AWP. The menu is easier.
 
 ## Privacy
 

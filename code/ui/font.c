@@ -666,7 +666,9 @@ static float ground_skirt_ao(float x, float z) {
 #define DECOR_MAX_VERTS 524288
 // 524288 since adding the Blender-built industrial genset, forklift, and solar heater
 // alongside the vehicles and town props, matching SCENE_MAX_VERTS.
-#define PROPS_MAX_VERTS 524288  // detailed vehicles, street furniture, lanterns
+// 786432 since the 0.8.9 map sets (Refinery's spheres and pumps, the Harbor's
+// bollards and boats, each grown map's own props) with SCENE_MAX_VERTS.
+#define PROPS_MAX_VERTS 786432  // detailed vehicles, street furniture, lanterns
 static float g_mesh[(MAX_SOLIDS * 36 + GROUND_VERTS + DECOR_MAX_VERTS + PROPS_MAX_VERTS) * VERT_FLOATS];
 static int   g_mesh_floats;
 static long  g_mesh_drops;

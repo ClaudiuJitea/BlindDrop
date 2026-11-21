@@ -36,7 +36,10 @@
 // shipping holes in a figure. Re-measure with `budget` over SEVERAL seeds and
 // several frames after anything that adds figure geometry; one seed is not a
 // measurement, and the frame has to be RENDERED first or the peak reads 0.
-#define SCENE_MAX_VERTS 524288
+// 0.8.9: 786432 (37.7 MB), because the prop meshes are staged here too and the
+// grown maps (Harbor, Refinery, Citadel, Compound at half 70) carry their own
+// prop sets: PROPS_MAX_VERTS cannot exceed this buffer.
+#define SCENE_MAX_VERTS 786432
 static float g_scene[SCENE_MAX_VERTS * VERT_FLOATS];
 static long g_scene_drops;
 static int   g_scene_floats;

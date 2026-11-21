@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
     else if (arg && !strcmp(a, "--teams"))      g_srv.teams = atoi(argv[++i]) ? 1 : 0;
     else if (arg && !strcmp(a, "--weapons")) {
       int wr = wr_parse(argv[++i]);
-      if (wr < 0) { fprintf(stderr, "unknown --weapons '%s' (all|snipers|blades)\n", argv[i]); return 1; }
+      if (wr < 0) { fprintf(stderr, "unknown --weapons '%s' (all, or one gun: ar0..ar%d, sr0..sr%d, pt0..pt%d, kn0)\n", argv[i], RV_N - 1, SV_N - 1, PV_N - 1); return 1; }
       g_srv.wrule = wr;
     }
     else if (arg && !strcmp(a, "--ladder")) {

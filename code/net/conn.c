@@ -478,8 +478,9 @@ static void net_srv_scan_reply(uint32_t ip, uint16_t port) {
   np_w32(&w, g_srv_uid);
   np_w8(&w, (uint8_t)humans);
   np_w8(&w, (uint8_t)(g_srv.cap_public * g_srv.lobbies));
-  // The mode byte: bits 0-1 the mode, 2-3 the WEAPONS rule, 4 TEAMS.
-  np_w8(&w, (uint8_t)((g_srv.mode & 3) | (g_srv.wrule & 3) << 2 | (g_srv.teams ? 16 : 0)));
+  // The mode byte: bits 0-1 the mode, 4 TEAMS (2-3 carried the old three-way
+  // WEAPONS rule; the card never showed it, and a gun pick needs a byte).
+  np_w8(&w, (uint8_t)((g_srv.mode & 3) | (g_srv.teams ? 16 : 0)));
   np_w8(&w, (uint8_t)map);
   for (int i = 0; i < 24; i++) np_w8(&w, (uint8_t)g_srv.name[i]);
   net_udp_send(g_srv_fd, ip, port, out, NET_HERE_LEN);
@@ -1436,7 +1437,7 @@ static int net_cl_poll(void) {
         // FIRST WORD OF A TEAM GAME: the player picks a side. The server has
         // already put us on one (team_auto), so this is a choice, not a gate.
         g_match.teams = nm.rules & 1;
-        g_match.wrule = (nm.rules >> 1) % WR_COUNT;
+        g_match.wrule = nm.wrule;
         g_match.gg_n = nm.gg_n;
         memcpy(g_match.gg, nm.gg, sizeof g_match.gg);
         if (g_match.teams && gm_has_rules(nm.mode) && !g_cl_team_asked) { g_cl_team_asked = 1; g_ui_team_prompt = 1; }

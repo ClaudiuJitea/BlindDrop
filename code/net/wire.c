@@ -44,7 +44,9 @@
 // its three weapon bits — a 16 peer would read the sniper bit as a button or drop it.
 // The same release also rebuilds the Citadel's street (pickups, bins, motorbikes,
 // cafe tables, tyre stacks, roof tanks — all solid): a 16 peer would fail the hash.
-#define NET_PROTO 24   // 24: THE BAZAAR SOUK (an 84 m map, STEP_H 0.45, routed) and a
+#define NET_PROTO 25   // 25: THE WEAPONS RULE is ALL or ONE GUN + NADES (its own byte
+                       //     in NP_SCORES: 0 = ALL, else 1 + the rung code)
+                       // 24: THE BAZAAR SOUK (an 84 m map, STEP_H 0.45, routed) and a
                        //     0.55 s weapon raise (GUN_SWITCH_TICKS 66, predicted)
                        // 23: TEAM LAST MAN STANDING (mode 7 in NP_SCORES; a side as
                        //     round_win, MAX_ENTS + team)
@@ -556,6 +558,14 @@ static void move_axis(v3 *pos, v3 *vel, int *grounded, int axis,
     if (!(mx.x > s->min.x && mn.x < s->max.x &&
           mx.y > s->min.y && mn.y < s->max.y &&
           mx.z > s->min.z && mn.z < s->max.z)) continue;
+    // A SIDE CONTACT IS NOT A CEILING (0.8.9). The x and z passes leave the
+    // body flush with what stopped it, and float rounding can leave a hair of
+    // overlap; the vertical pass then took that wall for a roof or a floor
+    // and set the feet from its underside — a climber pressed to the face
+    // was dropped to the ground from the top of a ladder. Grazes under
+    // 0.1 mm on a horizontal axis are not vertical contacts.
+    if (axis == 1 && (fminf(mx.x, s->max.x) - fmaxf(mn.x, s->min.x) < 1e-4f ||
+                      fminf(mx.z, s->max.z) - fmaxf(mn.z, s->min.z) < 1e-4f)) continue;
     // Step up a low edge on a horizontal move, if the body fits on top of it.
     // aabb_fits tests the whole set at the raised position, so a step under a
     // low ceiling, or into a wall, still blocks. Off (STEP_H 0) on the legacy

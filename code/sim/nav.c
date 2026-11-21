@@ -17,7 +17,7 @@
 // distance field from a goal cell is walked downhill, string-pulled to the
 // farthest cell the body can reach in a straight line.
 // ---------------------------------------------------------------------------
-#define NAV_MAX 112                       // cells per side, 1 m: up to a 112 m map
+#define NAV_MAX 144                       // cells per side, 1 m: up to a 144 m map
 #define NAV_MIN_LEAD 1.1f                 // > the investigation's 0.9 m arrival
 #define NAV_DROP 2.6f                     // a ledge a body will step off
 typedef struct {
@@ -50,9 +50,15 @@ static void nav_ready(void) {
       // Stepped map, floor blocked: the lowest box top under the centre that
       // a body fits on is the cell's level.
       float best = 1e9f;
-      BP_BOX(k, c.x, c.z, c.x, c.z) {
+      // Every top under the BODY's footprint, not only under the cell's
+      // centre (0.8.9): a 1 cm paving film ending 4 cm past the centre made
+      // the body test fail at the ground and offered no floor to stand on,
+      // so the cell was a wall — and the Bazaar's souk, paved that way,
+      // was sealed off from every bot since 0.8.7.
+      BP_BOX(k, c.x - 0.45f, c.z - 0.45f, c.x + 0.45f, c.z + 0.45f) {
         const solid_t *sd = &g_solids[k];
-        if (c.x < sd->min.x || c.x > sd->max.x || c.z < sd->min.z || c.z > sd->max.z) continue;
+        if (c.x + 0.45f < sd->min.x || c.x - 0.45f > sd->max.x || c.z + 0.45f < sd->min.z ||
+            c.z - 0.45f > sd->max.z) continue;
         float y = sd->max.y;
         if (y >= best || y > (g_map_id == MAP_COMPOUND_ID ? 7.0f : 6.0f)) continue;
         if (aabb_fits((v3){{c.x, y + 0.001f, c.z}}, 0.45f, HEIGHT_STAND)) best = y;

@@ -674,7 +674,7 @@ typedef struct { uint8_t id; uint16_t kills, deaths, shots, hits; uint8_t ping, 
 // between-rounds state for its HUD. round_win 0xFF = nobody.
 typedef struct { uint8_t mode, round_secs, round_win, rounds, round_no;
                  uint8_t team_size, team_fill; uint16_t tscore[2];
-                 uint8_t rules, gg_n, gg[GG_MAX]; } net_mode_t;   // rules: teams | wrule << 1
+                 uint8_t rules, wrule, gg_n, gg[GG_MAX]; } net_mode_t;   // rules: teams; wrule: the WEAPONS rule
 static size_t net_scores_build(unsigned char *buf, size_t cap,
                                const uint8_t ping[MAX_ENTS]) {
   np_wr w = {buf, cap, 0, 0};
@@ -694,7 +694,8 @@ static size_t net_scores_build(unsigned char *buf, size_t cap,
   np_w16(&w, (uint16_t)g_team_score[1]);
   // The match's rules and GUN GAME's ladder: a client predicts the weapon gate
   // from them, and its HUD names the rung's gun.
-  np_w8(&w, (uint8_t)((g_match.teams ? 1 : 0) | (g_match.wrule & 3) << 1));
+  np_w8(&w, (uint8_t)(g_match.teams ? 1 : 0));
+  np_w8(&w, (uint8_t)(wr_valid(g_match.wrule) ? g_match.wrule : WR_ALL));
   np_w8(&w, (uint8_t)g_match.gg_n);
   for (int i = 0; i < g_match.gg_n && i < GG_MAX; i++) np_w8(&w, g_match.gg[i]);
   size_t cnt_at = w.at;
@@ -757,6 +758,8 @@ static int net_scores_read(const unsigned char *buf, size_t len,
   md.team_size = np_r8(&r); md.team_fill = np_r8(&r) & 3;
   md.tscore[0] = np_r16(&r); md.tscore[1] = np_r16(&r);
   md.rules = np_r8(&r);
+  md.wrule = np_r8(&r);
+  if (!wr_valid(md.wrule)) return -1;        // hostile rule: refuse the packet
   md.gg_n = np_r8(&r);
   if (md.gg_n > GG_MAX) return -1;           // hostile ladder: refuse the packet
   for (int i = 0; i < md.gg_n; i++) {
@@ -1018,6 +1021,7 @@ static v3 spawn_spot(int self) {
     v3 c = {{rng_rangef(&g_rng_bot, -ARENA_HALF + 2, ARENA_HALF - 2), 0,
              rng_rangef(&g_rng_bot, -ARENA_HALF + 2, ARENA_HALF - 2)}};
     if (!aabb_fits(c, PLAYER_RADIUS, HEIGHT_STAND)) continue;
+    if (map_backdrop_at(c.x, c.z)) continue;   // the scenery behind a grown map's grid
     float d = 1e9f;
     int seen = 0;
     v3 head = {{c.x, c.y + 1.5f, c.z}};

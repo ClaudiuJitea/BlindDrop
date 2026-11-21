@@ -1958,10 +1958,10 @@ static void run_script(char *script, sim_ctx_t *s) {
       net_score_t rows[MAX_ENTS]; net_name_t nms[MAX_HUMANS]; int nn = 0;
       int nr = net_scores_read(pk, pn, &ov, &wi, &fr, &md, rows, MAX_ENTS, nms, MAX_HUMANS, &nn);
       printf("netrules rows=%d mode=%s teams=%d wrule=%s gg_n=%d ladder=", nr, GM_KEYS[md.mode % GM_COUNT],
-             md.rules & 1, WR_KEYS[(md.rules >> 1) % WR_COUNT], md.gg_n);
+             md.rules & 1, wr_key(md.wrule, (char[12]){0}, 12), md.gg_n);
       for (int i = 0; i < md.gg_n; i++) printf("%s%s", i ? "," : "", gg_rung_name(md.gg[i]));
       int same = md.gg_n == g_match.gg_n && !memcmp(md.gg, g_match.gg, (size_t)md.gg_n) &&
-                 (md.rules & 1) == g_match.teams && (md.rules >> 1) == g_match.wrule;
+                 (md.rules & 1) == g_match.teams && md.wrule == g_match.wrule;
       printf(" match=%s\n", same ? "yes" : "NO");
     } else if (!strcmp(t, "teamsize")) {        // TEAM DEATHMATCH settings, like the
       g_cfg.sp_team_size = (int)next_n();       // MATCH page: next `restart`/tick
@@ -1974,6 +1974,11 @@ static void run_script(char *script, sim_ctx_t *s) {
       g_cfg.sp_squad = n < 1 ? 1 : n > RESC_SQUAD_MAX ? RESC_SQUAD_MAX : (int)n;
     } else if (!strcmp(t, "team")) {            // the local player's side (0/1)
       g_cfg.sp_team = next_n() ? 1 : 0;
+    } else if (!strcmp(t, "weapons")) {        // the WEAPONS rule, as --weapons: next `restart`
+      const char *k = next_tok();
+      int w = wr_parse(k);
+      if (w < 0) { fprintf(stderr, "script: weapons all|ar0..|sr0..|pt0..|kn0, got '%s'\n", k); exit(1); }
+      g_cfg.sp_wrule = w;
     } else if (!strcmp(t, "teams")) {
       // Each side: its members (h = human), alive count, score; then whether
       // any two teammates have ever damaged each other (ffhits must be 0).
@@ -2277,6 +2282,115 @@ static void run_script(char *script, sim_ctx_t *s) {
       // `svdbg N`: paint the baked sky visibility (render/skyvis.c) instead of
       // the lit colour — 1 diffuse (by the normal), 2 specular (by R), 0 off.
       g_sv_dbg = (int)next_n();
+    } else if (!strcmp(t, "ladders")) {        // every ladder: foot, facing, climb height
+      for (int l = 0; l < g_nladders; l++)
+        printf("ladder %d at (%.2f %.2f) n=(%.0f %.0f) top=%.2f\n", l, (double)g_ladders[l].x,
+               (double)g_ladders[l].z, (double)g_ladders[l].nx, (double)g_ladders[l].nz, (double)g_ladders[l].top);
+      printf("ladders n=%d\n", g_nladders);
+    } else if (!strcmp(t, "solidsat")) {       // solidsat X Z R: every solid within R (xz) up to 2 m
+      float px = next_f(), pz = next_f(), pr = next_f();
+      for (int i = 0; i < g_num_solids; i++) {
+        const solid_t *b = &g_solids[i];
+        if (b->min.y > 3.0f || b->max.x < px - pr || b->min.x > px + pr || b->max.z < pz - pr || b->min.z > pz + pr) continue;
+        printf("solid %d (%.2f %.2f %.2f)-(%.2f %.2f %.2f) hide=%d\n", i, (double)b->min.x, (double)b->min.y,
+               (double)b->min.z, (double)b->max.x, (double)b->max.y, (double)b->max.z, g_solid_hide[i]);
+      }
+    } else if (!strcmp(t, "navcell")) {        // navcell X Z: the nav cell's walk and level
+      float px = next_f(), pz = next_f();
+      nav_ready();
+      int i = nav_cell(pz) * g_nav.n + nav_cell(px);
+      printf("navcell (%.2f %.2f) -> (%.1f %.1f) walk=%d lvl=%.3f\n", (double)px, (double)pz,
+             (double)nav_centre(i % g_nav.n), (double)nav_centre(i / g_nav.n), g_nav.walk[i], (double)g_nav.lvl[i]);
+    } else if (!strcmp(t, "reach")) {
+      // reach X Z: the bots' nav grid flooded from (X, Z). Every patch of
+      // open GROUND (6+ cells of 1 m) a body fits on but cannot walk to from
+      // there is listed with its box: a sealed yard, a blocked gate, a room
+      // with no door. (Roofs reached by ladder are not ground: not listed.)
+      float rx = next_f(), rz = next_f();
+      nav_ready();
+      int n = g_nav.n, goal = nav_snap((v3){{rx, 0.0f, rz}});
+      static uint16_t dist[NAV_MAX * NAV_MAX];
+      static int seen[NAV_MAX * NAV_MAX], q[NAV_MAX * NAV_MAX];
+      if (goal < 0) { printf("reach: no ground at the start\n"); continue; }
+      nav_field(goal, dist);
+      { int got = 0; for (int i = 0; i < n * n; i++) got += dist[i] != 0xFFFF;
+        printf("reach from (%.1f %.1f) lvl %.2f: %d cells reached of n=%d\n", (double)nav_centre(goal % n),
+               (double)nav_centre(goal / n), (double)g_nav.lvl[goal], got, n); }
+      if (getenv("REACH_DUMP"))                // the grid as text: # blocked, . reached, o not, ^ raised
+        for (int z = 0; z < n; z++) {
+          char row[NAV_MAX + 1];
+          for (int x = 0; x < n; x++) {
+            int i = z * n + x;
+            row[x] = !g_nav.walk[i] ? '#' : dist[i] != 0xFFFF ? (g_nav.lvl[i] > 0.5f ? '^' : '.') : 'o';
+          }
+          row[n] = 0;
+          printf("navrow %s\n", row);
+        }
+      memset(seen, 0, sizeof seen);
+      int patches = 0, cells = 0;
+      for (int i = 0; i < n * n; i++) {
+        if (!g_nav.walk[i] || dist[i] != 0xFFFF || seen[i] || g_nav.lvl[i] > 0.5f) continue;
+        int h = 0, tl = 0, x0 = n, x1 = -1, z0 = n, z1 = -1;
+        q[tl++] = i; seen[i] = 1;
+        while (h < tl) {
+          int c = q[h++], cx = c % n, cz = c / n;
+          x0 = cx < x0 ? cx : x0; x1 = cx > x1 ? cx : x1; z0 = cz < z0 ? cz : z0; z1 = cz > z1 ? cz : z1;
+          static const int D[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+          for (int k = 0; k < 4; k++) {
+            int x = cx + D[k][0], z = cz + D[k][1];
+            if (x < 0 || z < 0 || x >= n || z >= n) continue;
+            int nb = z * n + x;
+            if (seen[nb] || !g_nav.walk[nb] || dist[nb] != 0xFFFF || g_nav.lvl[nb] > 0.5f) continue;
+            seen[nb] = 1; q[tl++] = nb;
+          }
+        }
+        if (tl < 6) continue;
+        patches++; cells += tl;
+        for (int k = 0; k < tl; k++) {          // one border with reached ground: why no step?
+          int c = q[k], cx = c % n, cz = c / n, hit = 0;
+          static const int D2[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+          for (int d = 0; d < 4 && !hit; d++) {
+            int x = cx + D2[d][0], z = cz + D2[d][1];
+            if (x < 0 || z < 0 || x >= n || z >= n) continue;
+            int nb = z * n + x;
+            if (g_nav.walk[nb] && dist[nb] != 0xFFFF) {
+              printf("reach   border (%.1f %.1f) lvl %.3f | reached (%.1f %.1f) lvl %.3f\n",
+                     (double)nav_centre(cx), (double)nav_centre(cz), (double)g_nav.lvl[c],
+                     (double)nav_centre(x), (double)nav_centre(z), (double)g_nav.lvl[nb]);
+              hit = 1;
+            }
+          }
+          if (hit) break;
+        }
+        printf("reach unreached %d cells x %.1f..%.1f z %.1f..%.1f\n", tl, (double)nav_centre(x0),
+               (double)nav_centre(x1), (double)nav_centre(z0), (double)nav_centre(z1));
+      }
+      printf("reach patches=%d cells=%d\n", patches, cells);
+    } else if (!strcmp(t, "headroom")) {
+      // headroom X0 Z0 X1 Z1: every box top in the rect that a body could stand
+      // on (both sides >= 0.4 m) with another solid's underside 0.05-1.85 m above
+      // it over a 0.25 m patch: a stair or a deck with its head room stolen.
+      float hx0 = next_f(), hz0 = next_f(), hx1 = next_f(), hz1 = next_f();
+      int bad = 0;
+      for (int i = 0; i < g_num_solids; i++) {
+        const solid_t *A = &g_solids[i];
+        if (A->max.x < hx0 || A->min.x > hx1 || A->max.z < hz0 || A->min.z > hz1) continue;
+        if (A->max.x - A->min.x < 0.4f || A->max.z - A->min.z < 0.4f) continue;
+        for (int j = 0; j < g_num_solids; j++) {
+          if (j == i) continue;
+          const solid_t *B = &g_solids[j];
+          float gap = B->min.y - A->max.y;
+          if (gap < 0.05f || gap > 1.85f) continue;
+          float ox = fminf(A->max.x, B->max.x) - fmaxf(A->min.x, B->min.x);
+          float oz = fminf(A->max.z, B->max.z) - fmaxf(A->min.z, B->min.z);
+          if (ox > 0.25f && oz > 0.25f) {
+            if (bad < 20) printf("headroom %d top %.2f at (%.2f %.2f) under %d gap %.2f\n", i, (double)A->max.y,
+                                 (double)((A->min.x + A->max.x) * 0.5f), (double)((A->min.z + A->max.z) * 0.5f), j, (double)gap);
+            bad++;
+          }
+        }
+      }
+      printf("headroom bad=%d\n", bad);
     } else if (!strcmp(t, "svdump")) {
       // `svdump PATH`: the baked sky-visibility atlas as a PNG (six height
       // layers across; bottom row +x -x +z -z in RGBA, top row up-facing in R).

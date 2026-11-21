@@ -268,10 +268,12 @@ static const float GUN_HOLD[WPN_COUNT][4][7] = {
     { 0.0f, -0.0500f,  -0.0078f, 0.0130f,  0.0f, 0.921f,  0.386f } },
   // The hand closes round the grenade's own body, seated forward of the handle
   // station by that body's radius.
-  { { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },   // GR body
-    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },
-    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f },
-    { 0.0f, -0.0643f,   0.0263f, 0.0300f,  0.0f, 0.921f,  0.386f } },
+  // (0.8.9: radius = GR_EGG_R, the belly of the shell gun_build draws
+  // round this same centre — see GR_EGG)
+  { { 0.0f, -0.0643f,   0.0263f, GR_EGG_R,  0.0f, 0.921f,  0.386f },   // GR body
+    { 0.0f, -0.0643f,   0.0263f, GR_EGG_R,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0643f,   0.0263f, GR_EGG_R,  0.0f, 0.921f,  0.386f },
+    { 0.0f, -0.0643f,   0.0263f, GR_EGG_R,  0.0f, 0.921f,  0.386f } },
 };
 // The magazine's reload travel (down, camera-side) per weapon, published ONCE
 // beside the grip surfaces for the same reason they are: the model (gun_build),
@@ -1602,16 +1604,22 @@ static v3 gun_build(int cur, v3 org, v3 gx, v3 gy, v3 gz, float md01,
            .rx = 0.011f * gk, .rz = 0.011f * gk}};
         fig_chain(sn, 5, 12, 1, 1, gx);
       } else {
-      fnode_t nd[] = {
-        {.p = v3_sub(gc0, v3_scale(ka, 0.034f * gk)), .col = olive, .bcol = olive,
-         .rx = 0.014f * gk, .rz = 0.014f * gk},
-        {.p = v3_sub(gc0, v3_scale(ka, 0.016f * gk)), .col = olive, .bcol = olive,
-         .rx = 0.030f * gk, .rz = 0.030f * gk},
-        {.p = v3_add(gc0, v3_scale(ka, 0.014f * gk)), .col = olive, .bcol = olive,
-         .rx = 0.030f * gk, .rz = 0.030f * gk},
-        {.p = v3_add(gc0, v3_scale(ka, 0.046f * gk)), .col = upper, .bcol = upper,
-         .rx = 0.011f * gk, .rz = 0.011f * gk}};
-      fig_chain(nd, 4, 12, 1, 1, gx);
+      // 0.8.9: THE EGG, from GR_EGG — the shell the hand closes on, round the
+      // grip centre itself. It was four rings (a 30 mm drum narrowing straight
+      // to the fuze) coloured so the whole top half was the fuze's grey: from
+      // the shoulder camera a dark cone in the fist. Now: a rounded base, a
+      // full belly, a shoulder, and a short dark fuze on top.
+      v3 hc0 = GUNP(0, -0.0643f, 0.0263f);
+      fnode_t nd[GR_EGG_N + 2];
+      for (int q = 0; q < GR_EGG_N; q++)
+        nd[q] = (fnode_t){.p = v3_add(hc0, v3_scale(ka, GR_EGG[q][0] * gg)), .col = olive,
+                          .bcol = olive, .rx = GR_EGG[q][1] * gg, .rz = GR_EGG[q][1] * gg};
+      nd[GR_EGG_N] = (fnode_t){.p = v3_add(hc0, v3_scale(ka, 0.047f * gg)), .col = upper,
+                               .bcol = upper, .rx = 0.0120f * gg, .rz = 0.0120f * gg};
+      nd[GR_EGG_N + 1] = (fnode_t){.p = v3_add(hc0, v3_scale(ka, 0.062f * gg)), .col = upper,
+                                   .bcol = upper, .rx = 0.0105f * gg, .rz = 0.0105f * gg};
+      (void)gc0; (void)gk;
+      fig_chain(nd, GR_EGG_N + 2, 12, 1, 1, gx);
       }
     }
     g_gun_trig_p = GUNP(0, -0.0300f, 0.0450f);
