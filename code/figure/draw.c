@@ -2763,7 +2763,8 @@ static void scene_draw_figure(const anim_t *A, v3 pos, float yaw,
     }
   }
   if (hold != wpn) { mag01 = 0.0f; trig01 = 0.0f; }
-  if (g_fig_hos) g_fig_free = 3;   // a hostage holds nothing: both hands close empty
+  if (g_fig_hos || g_fig_bare) g_fig_free = 3;   // a hostage holds nothing, nor a body
+                                                 // whose gun fell: both hands close empty
   else {
     probe("gun");
     int gv0 = g_scene_floats;
@@ -2850,8 +2851,10 @@ static void scene_draw_bot(const bot_t *b, float alpha) {
               g_fig_op_ent != 999;   // harness `figop 999`: every bot an operator (a squad)
   g_fig_ent = (int)(b - g_bots) + 1;
   g_fig_nade_kind = b->wp.gr_kind;
+  g_fig_bare = !b->alive && wpn_gone(&b->wp, b->wp.cur);
   scene_draw_figure(&b->anim, pos, yaw, &dth, alpha, flash01, fc, 0, b->wp.cur,
                     gun_anim(&b->wp, alpha));
+  g_fig_bare = 0;
   g_fig_ent = -1;
   g_fig_var = 0;
   g_fig_team = -1;

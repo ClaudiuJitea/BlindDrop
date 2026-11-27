@@ -131,6 +131,10 @@ static void run_script(char *script, sim_ctx_t *s) {
       // screenshot. Park it offscreen — `cursor X Y` places it deliberately.
       if (!g_menu_open) g_ui_cx = g_ui_cy = -40.0f;
       ui_on_escape();  // same semantics as ESC in the game
+    } else if (!strcmp(t, "page")) {
+      // Straight to a menu page by its UI_PAGE_* number (open the menu first):
+      // the KEYS page is how a new bind row is checked for fit.
+      ui_route((int)next_n());
     } else if (!strcmp(t, "cursor")) {
       g_ui_cx = next_f();
       g_ui_cy = next_f();
@@ -362,6 +366,7 @@ static void run_script(char *script, sim_ctx_t *s) {
         nade_t nades[MAX_NADES];
         smoke_t smokes[MAX_SMOKES];
         inferno_t infernos[MAX_INFERNOS];
+        drop_t drops[MAX_DROPS];   // ...and the guns on the floor (sim/drops.c)
       } sv;
       memcpy(sv.players, g_players, sizeof g_players);
       memcpy(sv.bots, g_bots, sizeof g_bots);
@@ -375,6 +380,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       memcpy(sv.nades, g_nades, sizeof g_nades);
       memcpy(sv.smokes, g_smokes, sizeof g_smokes);
       memcpy(sv.infernos, g_infernos, sizeof g_infernos);
+      memcpy(sv.drops, g_drops, sizeof g_drops);
       static uint32_t ha[4096], hb[4096];
       #define NL_HASH(dst) do {                                             \
         uint32_t fh = 2166136261u;                                          \
@@ -385,6 +391,8 @@ static void run_script(char *script, sim_ctx_t *s) {
         for (size_t z = 0; z < sizeof g_bots; z++) fh = (fh ^ pp[z]) * 16777619u;    \
         pp = (const unsigned char *)&g_match;                               \
         for (size_t z = 0; z < sizeof g_match; z++) fh = (fh ^ pp[z]) * 16777619u;   \
+        pp = (const unsigned char *)g_drops;                                \
+        for (size_t z = 0; z < sizeof g_drops; z++) fh = (fh ^ pp[z]) * 16777619u;   \
         (dst) = fh;                                                         \
       } while (0)
       for (long i = 0; i < n; i++) { sim_advance(s); NL_HASH(ha[i]); }
@@ -404,6 +412,7 @@ static void run_script(char *script, sim_ctx_t *s) {
       memcpy(g_nades, sv.nades, sizeof g_nades);
       memcpy(g_smokes, sv.smokes, sizeof g_smokes);
       memcpy(g_infernos, sv.infernos, sizeof g_infernos);
+      memcpy(g_drops, sv.drops, sizeof g_drops);
       g_num_events = 0;
       for (long i = 0; i < n; i++) { server_tick_once(s->held); NL_HASH(hb[i]); }
       #undef NL_HASH
@@ -2566,6 +2575,20 @@ static void run_script(char *script, sim_ctx_t *s) {
         }
       }
       printf("propcheck merges=%d\n", bad);
+    } else if (!strcmp(t, "drops")) {
+      // Every gun on the floor (sim/drops.c), the player's empty slots, and what
+      // DROP / PICK UP would take from where the player stands and looks.
+      int n = 0;
+      for (int i = 0; i < MAX_DROPS; i++) {
+        const drop_t *d = &g_drops[i];
+        if (d->life <= 0) continue;
+        n++;
+        printf("drop %d %s ammo=%d at=(%.2f %.2f %.2f) roll=%.2f rest=%d life=%d owner=%s\n", i,
+               wvar_name(d->slot, d->var), d->ammo, (double)d->pos.x, (double)d->pos.y,
+               (double)d->pos.z, (double)d->roll, d->rest, d->life, ent_name(d->owner));
+      }
+      printf("drops n=%d gone=%d cur=%s target=%d\n", n, s->p->wp.gone, WPN_DEF[s->p->wp.cur].prefix,
+             drop_target(g_local_ent, player_eye_pos(s->p), s->p->yaw, s->p->pitch));
     } else if (!strcmp(t, "supplies")) {
       // Every supply station on this map: where, which way it faces, and
       // whether it is stocked (ready) or how long until it restocks.

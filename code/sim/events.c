@@ -38,8 +38,15 @@ typedef enum {
   EV_SMOKE,          // a smoke canister came to rest and popped: a = where
   EV_FLAME,          // an incendiary went off: a = where, k = 1 the fire caught,
                      // 0 it burst in the air and is wasted
-  EV_PICKUP          // a supply station was used: a = the station, k = its index,
+  EV_PICKUP,         // a supply station was used: a = the station, k = its index,
                      // i = SUP_HEALTH / SUP_NADES, src = who took it
+  EV_WDROP,          // a gun went down (sim/drops.c). k = 0 it left a hand: a =
+                     // where, b = its velocity, wpn = slot, i = ammo * 16 + the
+                     // drop's index, g = its variant / 32, src = who let go.
+                     // k = 1 it struck the floor: a = where, f = impact speed.
+  EV_WTAKE           // a gun came up: wpn = slot, i = ammo * 16 + index, g =
+                     // variant / 32, a = where, src = who took it, f = 1 it
+                     // went straight into the hands
 } ev_type_t;
 
 // AI hearing is simulation state, deliberately separate from g_events: events
@@ -243,6 +250,15 @@ static void ev_push(event_t e) {
   case EV_PICKUP:  printf("pickup t=%ld src=%s station=%d kind=%d\n", g_tick, ent_name(e.src), e.k, e.i); break;
   case EV_FLAME:   printf("flame t=%ld src=%s k=%d at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), e.k, (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
   case EV_SMOKE:   printf("smoke t=%ld src=%s at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src), (double)e.a.x, (double)e.a.y, (double)e.a.z); break;
+  case EV_WDROP:
+    if (e.k) break;   // a bounce
+    printf("wdrop t=%ld src=%s slot=%d var=%d ammo=%d idx=%d at=(%.2f %.2f %.2f)\n", g_tick, ent_name(e.src),
+           e.wpn, (int)lrintf(e.g * 32.0f), e.i >> 4, e.i & 15, (double)e.a.x, (double)e.a.y, (double)e.a.z);
+    break;
+  case EV_WTAKE:
+    printf("wtake t=%ld src=%s slot=%d var=%d ammo=%d idx=%d hands=%d\n", g_tick, ent_name(e.src),
+           e.wpn, (int)lrintf(e.g * 32.0f), e.i >> 4, e.i & 15, e.f > 0.5f);
+    break;
   }
 #endif
 }

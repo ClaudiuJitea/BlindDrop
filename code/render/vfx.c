@@ -1019,6 +1019,10 @@ static void vfx_on_event(const event_t *e) {
   case EV_PICKUP:
     supply_on_event(e);
     break;
+  case EV_WDROP:
+  case EV_WTAKE:
+    drop_on_event(e);
+    break;
   case EV_FIRE: {
     if (e->src == g_local_ent) g_vfx_wpn = e->wpn;   // the hitmarker's arming delay
     if (e->src >= 0 && e->src < MAX_ENTS) g_ent_shot_t[e->src] = fmaxf(g_ui_time, 1e-3f);

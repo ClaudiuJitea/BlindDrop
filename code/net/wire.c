@@ -44,7 +44,10 @@
 // its three weapon bits — a 16 peer would read the sniper bit as a button or drop it.
 // The same release also rebuilds the Citadel's street (pickups, bins, motorbikes,
 // cafe tables, tyre stacks, roof tanks — all solid): a 16 peer would fail the hash.
-#define NET_PROTO 26   // 26: THE LEAN lunges the hips into the peek (LEAN_HIP/DROP,
+#define NET_PROTO 27   // 27: DROPPED GUNS (EV_WDROP / EV_WTAKE, IN_USE) and the
+                       //     entity record's loadout carries the empty slots in
+                       //     bits 11-13 (GONE_BITS)
+                       // 26: THE LEAN lunges the hips into the peek (LEAN_HIP/DROP,
                        //     a 17 deg bend: the eye and hit boxes move) and the
                        //     Compound's walls, gatehouse and rocks are new solids
                        // 25: THE WEAPONS RULE is ALL or ONE GUN + NADES (its own byte
@@ -215,7 +218,8 @@ typedef struct {
   uint8_t  id, flags;      // flags bit0 alive, bit1 grounded, bit2 crouched,
                            // bit3 sliding, bit4 knife guard up
   uint8_t  hp, weapon;     // weapon: 3 bits used
-  uint16_t loadout;        // loadout_pack's ten bits (primary, pistol, sniper)
+  uint16_t loadout;        // loadout_wire: loadout_pack's eleven bits (primary,
+                           // pistol, sniper) and above them the empty slots
   uint8_t  spawn_seq;
   uint8_t  melee;          // swing for remote figures: variant << 6 | ticks / 2
   uint8_t  nade;           // the grenade slot (nade_pack): bits0-1 the kind in
@@ -285,7 +289,7 @@ static float   net_dq_vel(int16_t q){ return (float)q * 0.01f; }
 static void net_ent_encode(np_wr *w, const net_ent_t *e) {
   np_w8(w, e->id); np_w8(w, e->flags);
   np_w8(w, e->hp); np_w8(w, (uint8_t)(e->weapon & 7));
-  np_w16(w, (uint16_t)(e->loadout & ((1u << LOADOUT_BITS) - 1u)));
+  np_w16(w, (uint16_t)(e->loadout & ((1u << (LOADOUT_BITS + GONE_BITS)) - 1u)));
   np_w8(w, e->spawn_seq);
   np_w8(w, e->melee);
   np_w8(w, e->mag);
@@ -330,7 +334,7 @@ static void net_ev_from_live(net_ev_t *n, const event_t *e, uint32_t id) {
 }
 static void net_ev_to_live(event_t *e, const net_ev_t *n) {
   *e = (event_t){0};
-  e->type = (ev_type_t)(n->type > EV_PICKUP ? EV_IMPACT : n->type);
+  e->type = (ev_type_t)(n->type > EV_WTAKE ? EV_IMPACT : n->type);
   // src/dst/wpn are ARRAY INDICES in every consumer (g_player_anim via
   // human_of_ent, WPN_DEF, g_bots) — a hostile server's 254 walked straight
   // into g_player_anim[234]. Out-of-range ids neutralize to -1 (no owner),
@@ -361,7 +365,8 @@ static int net_ent_decode(np_rd *r, net_ent_t *e) {
   // old `& 3` let a hostile server hand out weapon 2 and 3 against a
   // WPN_COUNT of 2, i.e. an out-of-bounds read per snapshot record.
   return !r->bad && e->id < MAX_ENTS && e->weapon < WPN_COUNT &&
-         loadout_valid(e->loadout);
+         loadout_valid(e->loadout & ((1 << LOADOUT_BITS) - 1)) &&
+         e->loadout < (1u << (LOADOUT_BITS + GONE_BITS));
 }
 
 // FNV-1a over the generated solids: map_generate has NO transcendental

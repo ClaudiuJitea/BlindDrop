@@ -29,6 +29,7 @@
 // shirts differ). Built on the insurgent's frame (no pads, no pack, the long
 // shirt), never armed. Set by rescue_world.c around its scene_draw_figure.
 static int g_fig_hos;
+static int g_fig_bare;        // a body whose gun went down with it: empty hands (sim/drops.c)
 static int g_fig_hos_hood;    // the sack is over the head (captive)
 static int g_fig_hos_led;     // the vest's lamp: 0 off, 1 armed (red, blinking), 2 safe (green)
 // The boot's "up" when it is not the spine's (a kneeler's feet lie instep-down

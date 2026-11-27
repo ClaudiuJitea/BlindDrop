@@ -1492,6 +1492,39 @@ static void render_frame(const player_t *p, float alpha, int fps,
         ui_text_sh(msg, ccx - tw * 0.5f, ccy + 34.0f, 0.8f, TXT_BOLD, 1.0f, C4(r_, g_, b_, a * 0.95f));
       }
     }
+    // THE GUNS ON THE FLOOR (sim/drops.c): what DROP / PICK UP will do now —
+    // take the gun under the crosshair (and what of yours goes down for it), or
+    // throw the one in the hands — and, for two seconds, what was just taken.
+    if (p->alive && mode_drops() && !g_match.over && !g_menu_open) {
+      char key[16];
+      const char *bt = g_cfg.bind[IN_USE];
+      int kn = 0;
+      for (; bt[kn] && kn < 15; kn++) key[kn] = (char)(bt[kn] >= 'a' && bt[kn] <= 'z' ? bt[kn] - 32 : bt[kn]);
+      key[kn] = 0;
+      int t = drop_target(g_local_ent, player_eye_pos(p), p->yaw, p->pitch);
+      char msg[64];
+      msg[0] = 0;
+      if (t >= 0) {
+        const drop_t *d = &g_drops[t];
+        if (wpn_gone(&p->wp, d->slot))
+          snprintf(msg, sizeof msg, "[%s] TAKE %s", key, wvar_name(d->slot, d->var));
+        else
+          snprintf(msg, sizeof msg, "[%s] SWAP %s FOR %s", key, wvar_name(d->slot, p->wp.var[d->slot]),
+                   wvar_name(d->slot, d->var));
+      }
+      long age = g_tick - g_drop_msg_t;
+      if (age >= 0 && age < 2 * TICK_HZ) {
+        float a = age < TICK_HZ ? 1.0f : 1.0f - (float)(age - TICK_HZ) / (float)TICK_HZ;
+        char got[48];
+        snprintf(got, sizeof got, "+ %s", wvar_name(g_drop_msg_slot, g_drop_msg_var));
+        float tw = ui_text_width_tr(got, 0.8f, 1.0f);
+        ui_text_sh(got, ccx - tw * 0.5f, ccy + 46.0f, 0.8f, TXT_BOLD, 1.0f, C4(1.0f, 0.86f, 0.45f, a * 0.95f));
+      }
+      if (msg[0] && strcmp(bt, "none")) {
+        float tw = ui_text_width_tr(msg, 0.75f, 1.0f);
+        ui_text_sh(msg, ccx - tw * 0.5f, ccy + 22.0f, 0.75f, TXT_BOLD, 1.0f, C4(C_BONE, 0.92f));
+      }
+    }
     // Just joined a team game: offer the side choice once.
     if (g_ui_team_prompt && g_online && teams_on()) {
       g_ui_team_prompt = 0;

@@ -151,6 +151,12 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   // A press during a raise is TAKEN (the new raise restarts), so two quick
   // notches of the wheel are two steps, not one step and one lost press.
   mode_nade_refill(ent, w);
+  // DROP / PICK UP (sim/drops.c): before the selection, so a gun thrown this
+  // tick is already swapped out by the mode's gate below.
+  if (held[IN_USE] && !p->prev_held[IN_USE]) {
+    drop_use(p, ent);
+    def = wdef(w, w->cur);
+  }
   int nade_idle = w->gr_cook == 0 && w->gr_t == 0;
   int sel = -1;
   if (held[IN_SWAP] && !p->prev_held[IN_SWAP]) sel = sel_step(ent, w, sel_of(w), 1);
@@ -184,7 +190,9 @@ static void weapon_tick(player_t *p, int ent, const int held[IN_COUNT]) {
   }
   // THE MODE'S WEAPON GATE: a weapon in the hands that the mode no longer
   // allows — a GUN GAME promotion, a respawn preference — is swapped out.
-  if (want < 0 && !mode_allowed(ent, w->cur)) want = mode_primary(ent);
+  // Not while dead: the gun a death let go of stays the one the body was
+  // holding (its corpse draws empty hands), and the spawn picks the next.
+  if (want < 0 && p->alive && !mode_allowed(ent, w->cur)) want = mode_primary(ent);
   // The kind in the slot spent but another left: it comes forward.
   if (want == WPN_GR && w->ammo[WPN_GR] <= 0 && nade_others(w) > 0 && nade_idle) nade_swap(w);
   // No grenades left: nothing to draw.

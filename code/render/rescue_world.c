@@ -235,10 +235,73 @@ static void supply_draw(void) {
   }
 }
 
+// THE GUNS ON THE FLOOR (sim/drops.c): each its own variant, at the figure's
+// third-person girth, lying on its side along the heading it was thrown on and
+// tumbling about the bore while it flies. A loadout variant is its low-poly
+// mesh, the base gun of each slot the builder's — the same pair a figure's hands
+// hold. The last DROP_DISS of a gun's life it comes apart on the dissolve hash.
+static const mdl_ref_t *drop_mdl(int slot, int var) {
+  int row = wpn_var_row(slot);
+  if (row < 0 || var <= 0 || var >= wpn_var_n(slot) || !TP_VAR_MODELS[row][var].v) return NULL;
+  return &TP_VAR_MODELS[row][var];
+}
+// The gun's box in its own frame, at the girth it is drawn at.
+static void drop_box(int slot, int var, v3 *mn, v3 *mx) {
+  const mdl_ref_t *m = drop_mdl(slot, var);
+  if (!m) { gun_box(slot, mn, mx); return; }
+  static v3 bmn[3][WPN_VARS], bmx[3][WPN_VARS];
+  static unsigned char have[3][WPN_VARS];
+  int row = wpn_var_row(slot);
+  if (!have[row][var]) {
+    v3 lo = {{1e9f, 1e9f, 1e9f}}, hi = {{-1e9f, -1e9f, -1e9f}};
+    for (int i = 0; i < m->np; i++)
+      for (int k = m->p[i].start; k < m->p[i].start + m->p[i].count; k++)
+        for (int c = 0; c < 3; c++) {
+          float v = (float)m->v[k][c] * MODEL_SCALE * GUN_GIRTH_3P;
+          if (v < lo.e[c]) lo.e[c] = v;
+          if (v > hi.e[c]) hi.e[c] = v;
+        }
+    bmn[row][var] = lo; bmx[row][var] = hi; have[row][var] = 1;
+  }
+  *mn = bmn[row][var]; *mx = bmx[row][var];
+}
+static void drops_draw(float alpha) {
+  for (int i = 0; i < MAX_DROPS; i++) {
+    const drop_t *d = &g_drops[i];
+    if (d->life <= 0) continue;
+    v3 at = v3_lerp(d->prev_pos, d->pos, alpha);
+    if (v3_len(v3_sub(at, g_cam_eye)) > 60.0f) continue;   // a gun is a few pixels long out there
+    float r = d->prev_roll + (d->roll - d->prev_roll) * alpha;
+    v3 fw = {{sinf(d->yaw), 0.0f, -cosf(d->yaw)}}, side = {{cosf(d->yaw), 0.0f, sinf(d->yaw)}};
+    v3 up = v3_add(v3_scale((v3){{0, 1, 0}}, cosf(r)), v3_scale(side, sinf(r)));
+    v3 rt = v3_norm(v3_cross(fw, up));
+    v3 mn, mx;
+    drop_box(d->slot, d->var, &mn, &mx);
+    if (mx.x < mn.x) continue;
+    v3 bc = v3_scale(v3_add(mn, mx), 0.5f), hx = v3_scale(v3_sub(mx, mn), 0.5f);
+    // Resting ON the floor: the box's own vertical half-extent above the floor
+    // the collider stopped DROP_R over.
+    float vh = fabsf(rt.y) * hx.x + fabsf(up.y) * hx.y;
+    v3 c = {{at.x, at.y - DROP_R + vh + 0.004f, at.z}};
+    v3 o = v3_sub(c, v3_add(v3_scale(rt, bc.x), v3_add(v3_scale(up, bc.y), v3_scale(fw, bc.z))));
+    g_fig_diss = d->life < DROP_DISS ? sqrtf(1.0f - (float)d->life / (float)DROP_DISS) : 0.0f;
+    g_fig_diss_o = c;
+    g_fig_diss_seed = d->seed;
+    float gg = g_gun_girth;
+    g_gun_girth = GUN_GIRTH_3P;
+    const mdl_ref_t *m = drop_mdl(d->slot, d->var);
+    if (m) gun_tp_draw(m, d->slot, o, rt, up, fw, 0.0f);
+    else gun_build(d->slot, o, rt, up, fw, 0.0f, 0.0f, 0.0f);
+    g_gun_girth = gg;
+  }
+  g_fig_diss = 0.0f;
+}
+
 static void scene_build(const player_t *p, float alpha, int show_player) {
   (void)p;   // the roster below covers human 0; parameter kept for callers
   scene_reset();
   supply_draw();
+  drops_draw(alpha);
   // Live grenades, tumbling. What flies is the body alone: spoon and pin are gone.
   for (int i = 0; i < MAX_NADES; i++)
     if (g_nades[i].fuse > 0) {
@@ -365,8 +428,10 @@ static void scene_build(const player_t *p, float alpha, int show_player) {
                ? armory_idx(g_cfg.gear_theme, GEAR_THEME_COUNT) : -1;
     fig_own_pieces(g_fig_gear >= 0);
     g_tp_theme = g_fig_gear >= 0 ? (armory_theme()->pat > 0.0f ? armory_theme() : NULL) : NULL;
+    g_fig_bare = cp->bare;
     scene_draw_figure(&cp->anim, cpos, cp->yaw, &dth, alpha, 0.0f,
                       (v3){{1, 1, 1}}, cp->pal, cp->wpn, cp->gs);
+    g_fig_bare = 0;
     g_fig_var = 0;
     g_fig_team = -1;
     g_fig_ins = 0;

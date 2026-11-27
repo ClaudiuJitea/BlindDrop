@@ -144,6 +144,10 @@ typedef struct {
   // burst in flight; cock_t how long the R8's hammer has been coming back
   // (it fires at R8_COCK_T); dual_side the Beretta that fires next.
   int   alt[WPN_COUNT], burst_n, cock_t, dual_side;
+  // THE GUNS THIS LIFE HAS LET GO OF (sim/drops.c): bit `slot` set = that slot
+  // is empty — thrown down or swapped away and not taken back. Only AR, SR and
+  // PT can be (DROP_SLOTS); a spawn clears it. On the wire above the loadout.
+  int   gone;
   int   fresh;           // nothing fired or reloaded since the spawn: a loadout
                          // change may still be taken without waiting a life
   // PER WEAPON, like ammo: the cooldown is the weapon's mechanism cycling (the
@@ -261,6 +265,32 @@ static void loadout_apply(weapon_t *w, int lo) {
   w->var[WPN_PT] = armory_idx(lo >> 5 & 15, PV_N);
   w->var[WPN_SR] = armory_idx(lo >> 9 & 3, SV_N);
 }
+// THE SLOTS A GUN CAN BE DROPPED FROM: the three with variants. The knife stays
+// at the belt and the grenades are thrown, not handed over.
+#define DROP_SLOTS ((1 << WPN_AR) | (1 << WPN_SR) | (1 << WPN_PT))
+#define GONE_BITS 3   // on the wire: AR, SR, PT in that order above the loadout
+static int wpn_gone(const weapon_t *w, int s) {
+  return s >= 0 && s < WPN_COUNT && (DROP_SLOTS >> s & 1) && (w->gone >> s & 1);
+}
+// The entity record's u16: the loadout's eleven bits and, above them, which of
+// the three droppable slots are empty.
+static int gone_pack(int gone) {
+  return (gone >> WPN_AR & 1) | (gone >> WPN_SR & 1) << 1 | (gone >> WPN_PT & 1) << 2;
+}
+static int gone_unpack(int b) {
+  return (b & 1) << WPN_AR | (b >> 1 & 1) << WPN_SR | (b >> 2 & 1) << WPN_PT;
+}
+// THE ENTITY RECORD'S LOADOUT: what this shooter carries now (variants and the
+// empty slots), and its inverse. The input's loadout is the menu's and never
+// carries the empty slots.
+static int loadout_wire(const weapon_t *w) {
+  return loadout_pack(w->var[WPN_AR], w->var[WPN_PT], w->var[WPN_SR]) |
+         gone_pack(w->gone) << LOADOUT_BITS;
+}
+static void loadout_apply_wire(weapon_t *w, int lo) {
+  loadout_apply(w, lo & ((1 << LOADOUT_BITS) - 1));
+  w->gone = gone_unpack(lo >> LOADOUT_BITS & 7);
+}
 // This shooter's variant row for slot `id` (NULL for a slot without variants).
 static const wpn_var_t *wvrow(const weapon_t *w, int id) {
   int row = wpn_var_row(id);
@@ -271,6 +301,7 @@ static int loadout_cfg(void) {
   return loadout_pack(g_cfg.rifle_var, g_cfg.pistol_var, g_cfg.sniper_var);
 }
 static void wpn_fill_mags(weapon_t *w) {
+  w->gone = 0;                            // a fresh life carries every gun again
   for (int i = 0; i < WPN_COUNT; i++) w->ammo[i] = wdef(w, i)->mag;
   w->gr_kind = NADE_FRAG;                 // a fresh life holds the frags first...
   w->gr_bag[NADE_FRAG] = 0;

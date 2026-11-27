@@ -150,8 +150,9 @@ static void mode_gg_var(int ent, weapon_t *w) {
   w->ammo[s] = wdef(w, s)->mag;
 }
 
-// May `ent` hold weapon `wpn` in this mode?
-static int mode_allowed(int ent, int wpn) {
+// May `ent` hold weapon `wpn` in this mode? (The RULE alone; mode_allowed below
+// also asks whether the gun is still carried.)
+static int mode_rule_allows(int ent, int wpn) {
   switch (game_mode()) {
     case GM_GUN:    return wpn == gg_slot(gg_level(ent));
     // The operator carries the suppressed sniper, a sidearm and the knife.
@@ -162,14 +163,38 @@ static int mode_allowed(int ent, int wpn) {
   }
 }
 
+// ...and does `ent` actually have it: the rule allows it and the gun has not
+// been dropped (sim/drops.c). Every weapon gate — the selection, the HUD's
+// carousel, the slung guns on a figure's back — asks this one.
+static weapon_t *ent_weapon(int e);
+static int mode_allowed(int ent, int wpn) {
+  if (!mode_rule_allows(ent, wpn)) return 0;
+  const weapon_t *w = ent >= 0 && ent < MAX_ENTS ? ent_weapon(ent) : NULL;
+  return !w || !wpn_gone(w, wpn);
+}
+// GUNS GO DOWN AND COME UP everywhere but GUN GAME, whose ladder names the gun
+// in your hands (a dropped rung would strand you), and the menu's backdrop.
+static int mode_drops(void) { return !g_home && game_mode() != GM_GUN; }
+
 // The weapon a spawn starts on, and what a disallowed weapon is swapped for.
-static int mode_primary(int ent) {
+static int mode_primary_rule(int ent) {
   switch (game_mode()) {
     case GM_GUN:    return gg_slot(gg_level(ent));
     case GM_RESCUE: return resc_is_squad(ent) ? WPN_SR : WPN_AR;
     default:
       return mode_wrule() == WR_ALL ? WPN_AR : wr_slot(mode_wrule());
   }
+}
+
+// ...and when that gun is on the floor, the next one still carried: rifle,
+// sniper, pistol, the knife that never leaves.
+static int mode_primary(int ent) {
+  int p = mode_primary_rule(ent);
+  if (mode_allowed(ent, p)) return p;
+  static const int NEXT[] = {WPN_AR, WPN_SR, WPN_PT, WPN_KN};
+  for (int i = 0; i < 4; i++)
+    if (mode_allowed(ent, NEXT[i])) return NEXT[i];
+  return p;
 }
 
 // LAST MAN STANDING's rounds to win: the server's on a client, ours otherwise.

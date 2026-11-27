@@ -15,7 +15,7 @@
 typedef enum {
   IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT, IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R,
   IN_FIRE, IN_ADS, IN_RELOAD, IN_ALTFIRE, IN_SWAP, IN_SWAP_PREV, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SLOT6, IN_SLOT7,
-  IN_SCORE, IN_VIEW, IN_INSPECT,
+  IN_SCORE, IN_VIEW, IN_INSPECT, IN_USE,
   IN_COUNT
 } action_t;
 
@@ -69,6 +69,10 @@ static const action_def_t ACTION_DEF[IN_COUNT] = {
   [IN_VIEW]    = {"bind_view",       "v",      "VIEW 1ST/3RD",     "view",       "pad_down"},
   // Presentation only: the viewmodel turns the knife or pistol over for a look.
   [IN_INSPECT] = {"bind_inspect",    "f",      "INSPECT WEAPON",   "inspect",    "pad_up"},
+  // THE DROPPED GUNS (sim/drops.c): with a gun on the floor under the crosshair
+  // and within reach, take it (yours of the same slot goes down in its place);
+  // with none, throw the gun in your hands. The HUD says which it will be.
+  [IN_USE]     = {"bind_use",        "g",      "DROP / PICK UP",   "use",        "none"},
 };
 
 // Tunable movement parameters — every value the in-game MOVEMENT panel

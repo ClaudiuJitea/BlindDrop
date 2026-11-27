@@ -486,7 +486,7 @@ static void net_ent_from_live(net_ent_t *e, int ent) {
   e->weapon = (uint8_t)(wpn & 7);
   {
     const weapon_t *lw = h >= 0 ? &g_players[h].wp : &g_bots[ent - 1].wp;
-    e->loadout = (uint16_t)loadout_pack(lw->var[WPN_AR], lw->var[WPN_PT], lw->var[WPN_SR]);
+    e->loadout = (uint16_t)loadout_wire(lw);   // ...and the slots left empty
   }
   e->spawn_seq = g_spawn_seq[ent];
   {
@@ -1607,7 +1607,9 @@ static void match_end(int winner) {
 }
 
 static void rescue_on_kill(int src, int dst, int hs);
+static void drop_on_death(int ent);   // sim/drops.c
 static void match_on_kill(int src, int dst, int hs) {
+  drop_on_death(dst);   // the gun in the hands goes down with him
   // Blowing yourself up is a death, not a frag.
   if (src != dst) g_match.kills[src]++;
   g_match.deaths[dst]++;

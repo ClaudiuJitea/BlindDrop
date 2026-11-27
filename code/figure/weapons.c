@@ -871,6 +871,18 @@ static void model_draw(const int16_t (*V)[7], const model_part_t *P, int np, int
     mat_set(P[i].rough, mtl);
     for (int k = P[i].start; k < P[i].start + P[i].count; k++) {
       int t = (k - P[i].start) % 3;
+      // A DISSOLVING MESH loses whole triangles on the figure's spatial hash
+      // (fig_diss_cut): a corpse's gun, and a gun on the floor whose time is up
+      // (sim/drops.c), break apart with the body instead of outliving it.
+      if (g_fig_diss > 0.0f && t == 0 && k + 2 < P[i].start + P[i].count) {
+        v3 cq = {{0, 0, 0}};
+        for (int j = 0; j < 3; j++) cq = v3_add(cq, (v3){{(float)V[k + j][0], (float)V[k + j][1], (float)V[k + j][2]}});
+        cq = v3_scale(cq, MODEL_SCALE * g_md_scale / 3.0f);
+        if (fig_diss_cut(v3_add(o, v3_add(v3_scale(ax, cq.x), v3_add(v3_scale(ay, cq.y), v3_scale(az, cq.z)))))) {
+          k += 2;
+          continue;
+        }
+      }
       const int16_t *q = V[flip && t ? k + (t == 1 ? 1 : -1) : k];
       v3 lq = v3_add(v3_scale(ax, q[0] * MODEL_SCALE),
               v3_add(v3_scale(ay, q[1] * MODEL_SCALE), v3_scale(az, q[2] * MODEL_SCALE)));

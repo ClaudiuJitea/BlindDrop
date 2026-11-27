@@ -699,6 +699,28 @@ static void audio_on_event(const event_t *e) {
     }
     break;
   }
+  case EV_WDROP:
+  case EV_WTAKE: {
+    // A GUN ON THE FLOOR (sim/drops.c): steel and polymer clattering down — a
+    // metal step's clank and the casing's clink, by how hard it struck — and a
+    // hand slapping onto the one taken up.
+    int mine = e->src == g_local_ent;
+    if (e->type == EV_WDROP && !e->k) break;   // leaving the hand is silent; the landing is not
+    float dist = 0.0f, pan = mine && e->type == EV_WTAKE ? 0.0f : audio_place(e->a, &dist);
+    float att = f_clamp(1.0f / (1.0f + dist * dist * 0.04f), 0.0f, 0.8f);
+    if (e->type == EV_WTAKE) {
+      if (mine) att = 0.8f;
+      if (att < 0.02f) break;
+      audio_play(SFX_SLAP, att * 0.7f, rng_rangef(&g_rng_audio, 0.95f, 1.05f), pan, 0.0f);
+      audio_play(SFX_CLINK, att * 0.45f, 0.80f, pan, 0.07f);
+      break;
+    }
+    float k = f_clamp(e->f / 5.0f, 0.2f, 1.0f);
+    if (att * k < 0.02f) break;
+    audio_play(SFX_STEP_METAL1, att * k, rng_rangef(&g_rng_audio, 1.15f, 1.35f), pan, dist / 343.0f);
+    audio_play(SFX_CLINK, att * k * 0.5f, rng_rangef(&g_rng_audio, 0.70f, 0.85f), pan, dist / 343.0f + 0.03f);
+    break;
+  }
   case EV_FLAME: {
 #define FIRE_BURN_TAKES ((int)(FIRE_LIFE / 1.8f + 0.5f))
     // THE INCENDIARY: the whoomp as it catches, then the crackle for the life

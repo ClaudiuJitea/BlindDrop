@@ -960,7 +960,7 @@ static void ui_menu(void) {
       static const int PAD_ROW[IN_COUNT] = {
         IN_JUMP, IN_CROUCH, IN_LEAN_L, IN_LEAN_R, IN_FIRE, IN_ADS, IN_RELOAD, IN_ALTFIRE,
         IN_SWAP, IN_SWAP_PREV, IN_SLOT1, IN_SLOT2, IN_SLOT3, IN_SLOT4, IN_SLOT5, IN_SLOT6, IN_SLOT7, IN_SCORE, IN_VIEW,
-        IN_INSPECT, IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT,
+        IN_INSPECT, IN_USE, IN_FWD, IN_BACK, IN_LEFT, IN_RIGHT,
       };
       // The pad status belongs on THIS page too — a player arming a PRESS BTN
       // capture that can never complete while Steam holds the pad deserves to

@@ -657,6 +657,18 @@ static int net_cl_hist_ok(uint32_t t) {
          (int32_t)(g_cl.seq - t) >= 0 && g_cl.seq - t < NET_HIST;
 }
 
+// A GUN THIS CLIENT TOOK (EV_WTAKE, sim/drops.c): into the live predicted weapon
+// and into every recorded one, because a rollback restores a recorded weapon
+// and only the CURRENT magazine is reconciled from the snapshot — a gun taken
+// into a holstered slot would otherwise come back as the old one's magazine.
+// The recorded `cur` is left alone: a rollback takes the server's.
+static void net_cl_on_take(int slot, int var, int ammo, int hands) {
+  int h = human_of_ent(g_local_ent);
+  if (h < 0) return;
+  drop_apply(&g_players[h].wp, slot, var, ammo, hands);
+  for (int k = 0; k < NET_HIST; k++) drop_apply(&g_cl_pred[k].wp, slot, var, ammo, 0);
+}
+
 // Restore the recorded derived state at input `li` before a rollback replay.
 static void net_cl_restore_pred(player_t *p, int h, uint32_t li) {
   if (!net_cl_hist_ok(li)) return;
@@ -801,7 +813,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     p->crouched = (e->flags >> 2) & 1; p->sliding = (e->flags >> 3) & 1;
     p->hp = e->hp; p->wp.cur = e->weapon;
     p->wp.gr_kind = nade_kind_of(e->nade);   // a remote hand: frag, smoke or fire
-    loadout_apply(&p->wp, e->loadout);
+    loadout_apply_wire(&p->wp, e->loadout);
     net_melee_apply(&p->wp, e);
     if (!g_humans_on[h]) { g_humans_on[h] = 1; anim_reset(&g_player_anim[h], pos, p->yaw); }
     else if (tele) anim_reset(&g_player_anim[h], pos, p->yaw);
@@ -834,7 +846,7 @@ static void net_cl_apply_ent(const net_ent_t *e) {
     b->crouch = (e->flags >> 2) & 1; b->sliding = (e->flags >> 3) & 1;
     b->hp = e->hp; b->wp.cur = e->weapon; b->active = 1;
     b->wp.gr_kind = nade_kind_of(e->nade);
-    loadout_apply(&b->wp, e->loadout);
+    loadout_apply_wire(&b->wp, e->loadout);
     net_melee_apply(&b->wp, e);
     if (tele) anim_reset(&b->anim, pos, b->yaw);
     if (e->id > g_match.nbots) g_match.nbots = e->id;   // grow the roster to fit
@@ -1098,7 +1110,7 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
       // replay below re-runs the same prediction it replaces.
       if (respawned) {
         memset(&p->wp, 0, sizeof p->wp);
-        loadout_apply(&p->wp, es[i].loadout);    // the server's, not the menu's
+        loadout_apply_wire(&p->wp, es[i].loadout);    // the server's, not the menu's
         wpn_fill_mags(&p->wp);
       } else if (alive) {
         net_cl_restore_pred(p, h, li);
@@ -1189,7 +1201,7 @@ static void net_cl_snapshot(const unsigned char *b, int n) {
       net_cl_depenetrate(p);
     }
     p->hp = es[i].hp; p->alive = alive;
-    loadout_apply(&p->wp, es[i].loadout);   // never predicted: server truth
+    loadout_apply_wire(&p->wp, es[i].loadout);   // never predicted: server truth
   }
   // EVENTS LAST, and only once the entities are current: vfx_on_event anchors
   // tracers and flashes on the shooter, and the killfeed names entities that

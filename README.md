@@ -17,25 +17,17 @@
   <img src="media/citadel_wall.jpg" alt="Citadel: the walkway along the top of the new rampart, crenellations on one side and the old town below, a sniper rifle in hand" width="49%">
 </p>
 
-## New in 0.9
+## New in 0.9.1
 
-- **Power slides:** a slide now hits the ground with a dust burst, drags a dust wake and gravel
-  behind the boot and knee, and throws sparks off the glove. The camera banks into the carve, the
-  gun cants in at the hip, and a fast slide streaks wind past the edges of the screen.
-- **A natural lean:** the hips shift into the peek over the loaded knee and the upper body bends
-  about 17 degrees instead of snapping over 31, so the view rolls about 11 degrees. The peek
-  reaches as far as before.
-- **Smoother weapon swaps:** each gun is drawn on a curve from the holster or sling and settles
-  with a little weight. The support hand comes up to catch it, and in third person the shoulders
-  and torso turn into the reach.
-- **Real magazine changes:** every magazine slides out along its own magwell and the hand stays on
-  it. Pistols swap magazines at the belt pouch, and the tactical reload moves without pausing.
-- **Proper grips on the MP9 and MP7:** the support hand closes round the vertical foregrip.
-- **Dual Berettas:** the slides are whole again, with the open-top slot of a real 92.
-- **Compound:** stone-capped perimeter walls with buttresses and wire, a fortified gatehouse,
-  sandbag emplacements, sandstone outcrops, roads and a helipad.
+- **Dropped guns:** press **G** (DROP / PICK UP, rebindable) to throw the gun in your hands, or
+  to take the one under your crosshair. It goes into its own slot and your gun from that slot
+  drops where the other one was, so an AWP replaces your sniper and an AK-47 replaces your rifle.
+  Anyone who dies drops the gun they were holding. Walk over a gun to pick it up when that slot is
+  empty. Guns clatter as they land, stay on the floor for 30 seconds and then fade away. The HUD
+  shows what G will do. Rifles, snipers and pistols can be dropped; the knife and grenades can't.
+  Gun Game has no drops.
 
-0.9 uses network protocol 26, so it can't play with older versions.
+0.9.1 uses network protocol 27, so it can't play with older versions.
 
 <p align="center">
   <img src="media/arena_range.jpg" alt="The Arena firing range: concrete lane walls and silhouette targets under a white range roof" width="49%">

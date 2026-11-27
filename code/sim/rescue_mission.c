@@ -457,6 +457,7 @@ static void match_tick(void) {
   lms_tick();
   rescue_tick();
   supply_tick();
+  drop_tick(1);
 }
 
 static void match_init(void) {

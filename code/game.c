@@ -167,6 +167,7 @@ static void fatal(const char *msg) {
 #include "sim/nav.c"
 #include "sim/rescue_guard.c"
 #include "sim/supply.c"
+#include "sim/drops.c"
 #include "sim/rescue_mission.c"
 #include "sim/weapon.c"
 #include "net/conn.c"

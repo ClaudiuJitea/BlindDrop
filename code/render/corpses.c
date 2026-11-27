@@ -74,6 +74,8 @@ typedef struct {
                     // vfx_tick, got zero steps instead: one event, two
                     // integration counts.
   int      wpn, pal, life, used;
+  int      bare;    // the gun it held went down with it (sim/drops.c): the
+                    // hands are empty, the gun is on the floor beside it
   int      owner;   // entity id the body was (0 = player, 1.. = bots): the
                     // `rag`/`ragx` proofs follow ONE body across the handover,
                     // and without ownership any other kill landing in their
@@ -102,7 +104,9 @@ static void corpse_add(const anim_t *A, v3 pos, v3 prev_pos, rag_t rag,
                                fx_hash((uint32_t)g_tick * 2654435761u +
                                        (uint32_t)slot * 40503u),
                                (int)g_tick, wpn, pal,
-                               CORPSE_TICKS + CORPSE_DISS, 1, owner};
+                               CORPSE_TICKS + CORPSE_DISS, 1, 0, owner};
+  const weapon_t *ow = owner >= 0 && owner < MAX_ENTS ? ent_weapon(owner) : NULL;
+  g_corpses[slot].bare = ow && wpn_gone(ow, wpn);
 }
 
 // Live particles at the worst tick, and how many of them were in the RESERVED
@@ -347,6 +351,7 @@ static void vfx_tick(void) {
       if (q->pos.y < q->r0) q->pos.y = q->r0;
     }
   if (g_online) nade_tick(0);
+  if (g_online) drop_tick(0);
   // A burning pool sends up a column of dark smoke: a few puffs a tick from
   // random burning cells, rising on the heat and drifting with the wind.
   for (int i = 0; i < MAX_INFERNOS; i++) {
@@ -621,6 +626,26 @@ static void vfx_tick(void) {
                                    .life = 16, .life0 = 16, .kind = 2};
     }
   }
+  // A GUN ON THE FLOOR GOING (sim/drops.c): the body's one-shot spray, small —
+  // a gun is a twentieth of a body.
+  for (int i = 0; i < MAX_DROPS; i++) {
+    const drop_t *d = &g_drops[i];
+    if (d->life != DROP_DISS) continue;
+    uint32_t h = (uint32_t)g_tick * 2654435761u + (uint32_t)i * 7919u;
+    v3 fw = {{sinf(d->yaw), 0.0f, -cosf(d->yaw)}};
+    for (int e = 0; e < 12; e++) {
+      int slot = -1;
+      for (int k = PARTS_SKID_LO; k < MAX_PARTICLES; k++)
+        if (g_parts[k].life <= 0) { slot = k; break; }
+      if (slot < 0) break;
+      v3 pj = v3_add(d->pos, v3_add(v3_scale(fw, skid_r(&h, -0.40f, 0.40f)),
+                                    (v3){{skid_r(&h, -0.05f, 0.05f), skid_r(&h, 0.0f, 0.08f),
+                                          skid_r(&h, -0.05f, 0.05f)}}));
+      v3 v = {{skid_r(&h, -2.5f, 2.5f), skid_r(&h, 1.0f, 3.0f), skid_r(&h, -2.5f, 2.5f)}};
+      g_parts[slot] = (particle_t){.pos = pj, .vel = v, .y0 = d->pos.y - DROP_R,
+                                   .sz = skid_r(&h, 0.6f, 1.1f), .life = 14, .life0 = 14, .kind = 2};
+    }
+  }
   if (g_muzzle_t > 0) g_muzzle_t--;
   if (g_hitmark_arm > 0 && --g_hitmark_arm == 0) {
     g_hitmark_kind = g_hitmark_pend;
@@ -667,6 +692,7 @@ static void vfx_match_reset(void) {
   memset(g_shock, 0, sizeof g_shock);
   memset(g_brands, 0, sizeof g_brands);
   memset(g_nades, 0, sizeof g_nades);
+  drops_reset();
   smoke_reset();
   inferno_reset();
   g_shake = g_blast_light = 0.0f;
